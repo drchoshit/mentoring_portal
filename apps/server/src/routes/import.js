@@ -251,9 +251,25 @@ export default function importRoutes(db) {
           null
       });
     };
+    const getPenaltyArray = (obj) => {
+      if (!obj || typeof obj !== 'object') return [];
+      const direct = [
+        obj.penalties,
+        obj.items,
+        obj.records,
+        obj.entries,
+        obj.history,
+        obj.list,
+        obj.rows
+      ];
+      for (const arr of direct) {
+        if (Array.isArray(arr) && arr.length) return arr;
+      }
+      return [];
+    };
     const flattenStudentBlock = (block) => {
       if (!block) return false;
-      const arr = Array.isArray(block?.penalties) ? block.penalties : [];
+      const arr = getPenaltyArray(block);
       if (!arr.length) return false;
       for (const p of arr) pushPenalty(p, block?.student || block);
       return true;
@@ -272,10 +288,22 @@ export default function importRoutes(db) {
       for (const block of payload.items) {
         if (!flattenStudentBlock(block)) pushPenalty(block, block?.student || null);
       }
+    } else if (Array.isArray(payload?.records)) {
+      for (const block of payload.records) {
+        if (!flattenStudentBlock(block)) pushPenalty(block, block?.student || null);
+      }
+    } else if (Array.isArray(payload?.rows)) {
+      for (const block of payload.rows) {
+        if (!flattenStudentBlock(block)) pushPenalty(block, block?.student || null);
+      }
+    } else if (Array.isArray(payload?.list)) {
+      for (const block of payload.list) {
+        if (!flattenStudentBlock(block)) pushPenalty(block, block?.student || null);
+      }
     } else if (Array.isArray(payload?.students)) {
       for (const s of payload.students) flattenStudentBlock(s);
     } else if (Array.isArray(payload?.data)) {
-      const asStudentBlocks = payload.data.some((row) => Array.isArray(row?.penalties));
+      const asStudentBlocks = payload.data.some((row) => getPenaltyArray(row).length > 0);
       if (asStudentBlocks) {
         for (const block of payload.data) flattenStudentBlock(block);
       } else {
@@ -283,7 +311,12 @@ export default function importRoutes(db) {
       }
     }
 
-    if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Expected array' });
+    if (!Array.isArray(items) || !items.length) {
+      const topKeys = payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? Object.keys(payload).slice(0, 20)
+        : [];
+      return res.status(400).json({ error: 'Expected array', keys: topKeys });
+    }
 
     const findStudentByExternal = db.prepare('SELECT id FROM students WHERE external_id=?');
     const findStudentByName = db.prepare('SELECT id FROM students WHERE name=?');
