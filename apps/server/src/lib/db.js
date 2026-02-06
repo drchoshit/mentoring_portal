@@ -136,6 +136,31 @@ function ensureStudentsColumns() {
 }
 
 function ensureWeekRecordsColumns() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS week_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL,
+      week_id INTEGER NOT NULL,
+      b_daily_tasks TEXT,
+      b_lead_daily_feedback TEXT,
+      c_lead_weekly_feedback TEXT,
+      c_director_commentary TEXT,
+      scores_json TEXT,
+      shared_with_parent INTEGER NOT NULL DEFAULT 0,
+      shared_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by INTEGER,
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+      FOREIGN KEY(week_id) REFERENCES weeks(id) ON DELETE CASCADE,
+      FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL,
+      UNIQUE(student_id, week_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_week_records_student_week
+      ON week_records(student_id, week_id);
+  `);
+
   const cols = columnMap('week_records');
 
   if (!cols.has('b_daily_tasks')) db.exec(`ALTER TABLE week_records ADD COLUMN b_daily_tasks TEXT;`);
@@ -164,6 +189,159 @@ function ensureWeekRecordsColumns() {
     UPDATE week_records
     SET shared_at = COALESCE(NULLIF(shared_at,''), updated_at)
     WHERE shared_with_parent = 1 AND (shared_at IS NULL OR shared_at = '');
+  `);
+}
+
+function ensureMentoringTables() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mentoring_subjects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mentoring_subjects_student_name
+      ON mentoring_subjects(student_id, name);
+
+    CREATE TABLE IF NOT EXISTS subject_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL,
+      week_id INTEGER NOT NULL,
+      subject_id INTEGER NOT NULL,
+      a_curriculum TEXT,
+      a_last_hw TEXT,
+      a_hw_exec TEXT,
+      a_progress TEXT,
+      a_this_hw TEXT,
+      a_comment TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by INTEGER,
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+      FOREIGN KEY(week_id) REFERENCES weeks(id) ON DELETE CASCADE,
+      FOREIGN KEY(subject_id) REFERENCES mentoring_subjects(id) ON DELETE CASCADE,
+      FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL,
+      UNIQUE(student_id, week_id, subject_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_subject_records_student_week
+      ON subject_records(student_id, week_id);
+  `);
+}
+
+function ensureMessagingTables() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS feeds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_user_id INTEGER NOT NULL,
+      to_user_id INTEGER NOT NULL,
+      student_id INTEGER,
+      target_field TEXT,
+      title TEXT,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at TEXT,
+      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_feeds_student_id ON feeds(student_id);
+    CREATE INDEX IF NOT EXISTS idx_feeds_to_user_id ON feeds(to_user_id);
+    CREATE INDEX IF NOT EXISTS idx_feeds_from_user_id ON feeds(from_user_id);
+
+    CREATE TABLE IF NOT EXISTS feed_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feed_id INTEGER NOT NULL,
+      from_user_id INTEGER NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE CASCADE,
+      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_feed_comments_feed_id ON feed_comments(feed_id);
+  `);
+}
+
+function ensurePermissionAndConfigTables() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS field_permissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      field_key TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      roles_view_json TEXT NOT NULL DEFAULT '[]',
+      roles_edit_json TEXT NOT NULL DEFAULT '[]',
+      parent_visible INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS print_config (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      field_key TEXT NOT NULL UNIQUE,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  const defaults = [
+    { key: 'a_curriculum', label: '학습 커리큘럼', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
+    { key: 'a_last_hw', label: '지난주 과제', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
+    { key: 'a_hw_exec', label: '과제 이행도', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
+    { key: 'a_progress', label: '진행상황 피드백', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
+    { key: 'a_this_hw', label: '이번주 과제', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
+    { key: 'a_comment', label: '과목 별 코멘트', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
+    { key: 'b_daily_tasks', label: '일일 학습 과제', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
+    { key: 'b_lead_daily_feedback', label: '요일 별 총괄멘토 피드백', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
+    { key: 'c_lead_weekly_feedback', label: '주간 총괄멘토 피드백', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
+    { key: 'c_director_commentary', label: '원장 코멘터리', view: ['director', 'lead', 'admin'], edit: ['director'], parent: 0 },
+    { key: 'scores_json', label: '점수/성적', view: ['director', 'lead', 'mentor', 'admin'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 0 }
+  ];
+
+  const upsert = db.prepare(`
+    INSERT OR IGNORE INTO field_permissions
+      (field_key, label, roles_view_json, roles_edit_json, parent_visible, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `);
+  for (const row of defaults) {
+    upsert.run(row.key, row.label, JSON.stringify(row.view), JSON.stringify(row.edit), row.parent ? 1 : 0);
+  }
+}
+
+function ensureSystemTables() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS parent_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      parent_user_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(parent_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+      UNIQUE(parent_user_id, student_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      action TEXT NOT NULL,
+      entity TEXT,
+      entity_id INTEGER,
+      details_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 }
 
@@ -240,6 +418,10 @@ function bootstrap() {
   `);
 
   // students 컬럼 보강(profile_json 등)
+  ensureMentoringTables();
+  ensureMessagingTables();
+  ensurePermissionAndConfigTables();
+  ensureSystemTables();
   ensureStudentsColumns();
   ensureWeekRecordsColumns();
   ensureParentLegacyImagesTable();
