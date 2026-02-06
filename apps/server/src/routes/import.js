@@ -10,7 +10,7 @@ const upload = multer({
 
 function parseJsonFile(req) {
   if (!req.file) throw new Error('Missing file');
-  const txt = req.file.buffer.toString('utf-8');
+  const txt = req.file.buffer.toString('utf-8').replace(/^\uFEFF/, '');
   return JSON.parse(txt);
 }
 
@@ -228,33 +228,58 @@ export default function importRoutes(db) {
     }
 
     const items = [];
+    const pushPenalty = (p, baseStudent = null) => {
+      if (!p) return;
+      const nestedStudent = p?.student || null;
+      items.push({
+        ...(p || {}),
+        student_id:
+          p?.student_id ||
+          p?.studentId ||
+          p?.student_external_id ||
+          p?.external_id ||
+          nestedStudent?.id ||
+          nestedStudent?.external_id ||
+          baseStudent?.id ||
+          baseStudent?.external_id ||
+          null,
+        student_name:
+          p?.student_name ||
+          p?.studentName ||
+          nestedStudent?.name ||
+          baseStudent?.name ||
+          null
+      });
+    };
+    const flattenStudentBlock = (block) => {
+      if (!block) return false;
+      const arr = Array.isArray(block?.penalties) ? block.penalties : [];
+      if (!arr.length) return false;
+      for (const p of arr) pushPenalty(p, block?.student || block);
+      return true;
+    };
+
     if (Array.isArray(payload)) {
-      items.push(...payload);
+      const asStudentBlocks = payload.some((row) => Array.isArray(row?.penalties));
+      if (asStudentBlocks) {
+        for (const block of payload) flattenStudentBlock(block);
+      } else {
+        for (const p of payload) pushPenalty(p, null);
+      }
     } else if (Array.isArray(payload?.penalties)) {
-      items.push(...payload.penalties);
+      for (const p of payload.penalties) pushPenalty(p, payload?.student || null);
     } else if (Array.isArray(payload?.items)) {
       for (const block of payload.items) {
-        if (!block) continue;
-        const baseStudent = block?.student || null;
-        const arr = Array.isArray(block?.penalties) ? block.penalties : [];
-        for (const p of arr) {
-          items.push({
-            ...(p || {}),
-            student_id: p?.student_id || baseStudent?.id || baseStudent?.external_id || null,
-            student_name: p?.student_name || baseStudent?.name || null
-          });
-        }
+        if (!flattenStudentBlock(block)) pushPenalty(block, block?.student || null);
       }
     } else if (Array.isArray(payload?.students)) {
-      for (const s of payload.students) {
-        const arr = Array.isArray(s?.penalties) ? s.penalties : [];
-        for (const p of arr) {
-          items.push({
-            ...(p || {}),
-            student_id: p?.student_id || s?.id || s?.external_id || null,
-            student_name: p?.student_name || s?.name || null
-          });
-        }
+      for (const s of payload.students) flattenStudentBlock(s);
+    } else if (Array.isArray(payload?.data)) {
+      const asStudentBlocks = payload.data.some((row) => Array.isArray(row?.penalties));
+      if (asStudentBlocks) {
+        for (const block of payload.data) flattenStudentBlock(block);
+      } else {
+        for (const p of payload.data) pushPenalty(p, null);
       }
     }
 
@@ -276,30 +301,34 @@ export default function importRoutes(db) {
     const hasWeekId = hasColumn(db, 'penalties', 'week_id');
     const weekRequired = hasWeekId && !columnAllowsNull(db, 'penalties', 'week_id');
 
+    let replaced = 0;
     let inserted = 0;
     let skippedNoStudent = 0;
     let skippedNoWeek = 0;
     let usedFallbackWeek = 0;
     const tx = db.transaction(() => {
+      // Import semantics: replace existing penalties with uploaded file data.
+      db.prepare('DELETE FROM penalties').run();
+
       for (const p of items) {
         const rawDate = String(p.date || p.day || p.occurred_on || p.occurredOn || p.created_at || p.createdAt || '').trim();
         const date = rawDate ? rawDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
-        const points = Number(p.points ?? p.point ?? p.amount ?? 0);
-        const ruleTitle = String(p.rule_title || p.ruleTitle || '').trim();
-        const memo = String(p.memo || p.note || p.reason || '').trim();
+        const points = Number(p.points ?? p.point ?? p.amount ?? p.score ?? p.value ?? p.penalty_points ?? p.penaltyPoint ?? 0);
+        const ruleTitle = String(p.rule_title || p.ruleTitle || p.title || '').trim();
+        const memo = String(p.memo || p.note || p.reason || p.description || p.desc || p.content || '').trim();
         const reason = [ruleTitle, memo].filter(Boolean).join(' - ').trim();
         if (!reason) continue;
 
         let studentId = null;
-        if (p.student_external_id || p.external_id || p.studentId || p.student_id) {
-          const ext = String(p.student_external_id || p.external_id || p.studentId || p.student_id).trim();
+        if (p.student_external_id || p.external_id || p.studentId || p.student_id || p?.student?.id || p?.student?.external_id) {
+          const ext = String(p.student_external_id || p.external_id || p.studentId || p.student_id || p?.student?.id || p?.student?.external_id).trim();
           studentId = findStudentByExternal.get(ext)?.id ?? null;
           if (!studentId && /^\d+$/.test(ext)) {
             studentId = findStudentById.get(Number(ext))?.id ?? null;
           }
         }
-        if (!studentId && p.student_name) {
-          studentId = findStudentByName.get(String(p.student_name))?.id ?? null;
+        if (!studentId && (p.student_name || p.studentName || p?.student?.name)) {
+          studentId = findStudentByName.get(String(p.student_name || p.studentName || p?.student?.name))?.id ?? null;
         }
         if (!studentId && p.student_id) {
           const name = studentNameById.get(String(p.student_id).trim());
@@ -361,9 +390,10 @@ export default function importRoutes(db) {
       }
     });
     tx();
+    replaced = inserted;
 
-    writeAudit(db, { user_id: req.user.id, action: 'import', entity: 'penalties', details: { inserted, skippedNoStudent, skippedNoWeek, usedFallbackWeek } });
-    return res.json({ inserted, skippedNoStudent, skippedNoWeek, usedFallbackWeek });
+    writeAudit(db, { user_id: req.user.id, action: 'import', entity: 'penalties', details: { replaced, inserted, skippedNoStudent, skippedNoWeek, usedFallbackWeek } });
+    return res.json({ replaced, inserted, skippedNoStudent, skippedNoWeek, usedFallbackWeek });
   });
 
   // 신규: 일정 백업 업로드 (학생 정보는 유지, 캘린더(schedule_json)만 갱신)

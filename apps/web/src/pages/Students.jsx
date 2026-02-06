@@ -542,7 +542,10 @@ export default function Students() {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      await api(endpoint, { method: 'POST', body: fd });
+      const result = await api(endpoint, { method: 'POST', body: fd });
+      if (endpoint === '/api/import/penalties' && Number(result?.inserted || 0) === 0) {
+        setError('벌점 반영 건수가 0건입니다. 파일 형식(학생ID/이름, 사유, 점수)을 확인해주세요.');
+      }
       await load();
     } catch (e) {
       setError(e.message);
@@ -619,6 +622,10 @@ export default function Students() {
     }
   }
 
+  function confirmImportAction(label) {
+    return confirm(`${label}\n\n진행할까요? 기존 데이터가 업데이트될 수 있습니다.`);
+  }
+
   const getMentorInfo = (student) => {
     if (!student) return null;
     const keys = [];
@@ -686,7 +693,10 @@ export default function Students() {
               <button
                 className="btn-primary whitespace-nowrap"
                 disabled={busyImport}
-                onClick={() => uploadFile('/api/import/students', studentInfoFile)}
+                onClick={() => {
+                  if (!confirmImportAction('학생 정보 불러오기')) return;
+                  uploadFile('/api/import/students', studentInfoFile);
+                }}
               >
                 불러오기
               </button>
@@ -705,7 +715,10 @@ export default function Students() {
               <button
                 className="btn-primary whitespace-nowrap"
                 disabled={busyImport}
-                onClick={() => uploadFile('/api/import/schedule-backup', scheduleFile)}
+                onClick={() => {
+                  if (!confirmImportAction('학생 일정 불러오기')) return;
+                  uploadFile('/api/import/schedule-backup', scheduleFile);
+                }}
               >
                 불러오기
               </button>
@@ -725,9 +738,12 @@ export default function Students() {
               <button
                 className="btn-primary whitespace-nowrap"
                 disabled={busyImport}
-                onClick={() => uploadFile('/api/import/penalties', penaltyFile)}
+                onClick={() => {
+                  if (!confirmImportAction('벌점 정보 불러오기')) return;
+                  uploadFile('/api/import/penalties', penaltyFile);
+                }}
               >
-                업로드
+                불러오기
               </button>
             </div>
           </div>
@@ -745,7 +761,10 @@ export default function Students() {
               <button
                 className="btn-primary whitespace-nowrap"
                 disabled={busyImport}
-                onClick={() => importMentorFile(mentorFile)}
+                onClick={() => {
+                  if (!confirmImportAction('학생 별 멘토 파일 불러오기')) return;
+                  importMentorFile(mentorFile);
+                }}
               >
                 불러오기
               </button>

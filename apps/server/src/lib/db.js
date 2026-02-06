@@ -289,6 +289,30 @@ function ensurePermissionAndConfigTables() {
     );
   `);
 
+  // Legacy DB compatibility: older tables may miss audit timestamp columns.
+  {
+    const fpCols = new Set(db.prepare(`PRAGMA table_info(field_permissions)`).all().map((r) => r.name));
+    if (!fpCols.has('created_at')) db.exec(`ALTER TABLE field_permissions ADD COLUMN created_at TEXT;`);
+    if (!fpCols.has('updated_at')) db.exec(`ALTER TABLE field_permissions ADD COLUMN updated_at TEXT;`);
+    db.exec(`
+      UPDATE field_permissions
+      SET created_at = COALESCE(NULLIF(created_at,''), datetime('now')),
+          updated_at = COALESCE(NULLIF(updated_at,''), datetime('now'))
+      WHERE created_at IS NULL OR created_at='' OR updated_at IS NULL OR updated_at='';
+    `);
+  }
+  {
+    const pcCols = new Set(db.prepare(`PRAGMA table_info(print_config)`).all().map((r) => r.name));
+    if (!pcCols.has('created_at')) db.exec(`ALTER TABLE print_config ADD COLUMN created_at TEXT;`);
+    if (!pcCols.has('updated_at')) db.exec(`ALTER TABLE print_config ADD COLUMN updated_at TEXT;`);
+    db.exec(`
+      UPDATE print_config
+      SET created_at = COALESCE(NULLIF(created_at,''), datetime('now')),
+          updated_at = COALESCE(NULLIF(updated_at,''), datetime('now'))
+      WHERE created_at IS NULL OR created_at='' OR updated_at IS NULL OR updated_at='';
+    `);
+  }
+
   const defaults = [
     { key: 'a_curriculum', label: '학습 커리큘럼', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
     { key: 'a_last_hw', label: '지난주 과제', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
@@ -305,8 +329,8 @@ function ensurePermissionAndConfigTables() {
 
   const upsert = db.prepare(`
     INSERT OR IGNORE INTO field_permissions
-      (field_key, label, roles_view_json, roles_edit_json, parent_visible, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      (field_key, label, roles_view_json, roles_edit_json, parent_visible)
+    VALUES (?, ?, ?, ?, ?)
   `);
   for (const row of defaults) {
     upsert.run(row.key, row.label, JSON.stringify(row.view), JSON.stringify(row.edit), row.parent ? 1 : 0);
