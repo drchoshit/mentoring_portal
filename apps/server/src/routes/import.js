@@ -315,7 +315,8 @@ export default function importRoutes(db) {
       const topKeys = payload && typeof payload === 'object' && !Array.isArray(payload)
         ? Object.keys(payload).slice(0, 20)
         : [];
-      return res.status(400).json({ error: 'Expected array', keys: topKeys });
+      const keyHint = topKeys.length ? ` (top-level keys: ${topKeys.join(', ')})` : '';
+      return res.status(400).json({ error: `Expected array${keyHint}` });
     }
 
     const findStudentByExternal = db.prepare('SELECT id FROM students WHERE external_id=?');

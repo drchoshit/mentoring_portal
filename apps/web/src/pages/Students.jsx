@@ -543,10 +543,15 @@ export default function Students() {
       const fd = new FormData();
       fd.append('file', file);
       const result = await api(endpoint, { method: 'POST', body: fd });
-      if (endpoint === '/api/import/penalties' && Number(result?.inserted || 0) === 0) {
-        setError('벌점 반영 건수가 0건입니다. 파일 형식(학생ID/이름, 사유, 점수)을 확인해주세요.');
-      }
       await load();
+      if (endpoint === '/api/import/penalties') {
+        const inserted = Number(result?.inserted || 0);
+        const skippedNoStudent = Number(result?.skippedNoStudent || 0);
+        const skippedNoWeek = Number(result?.skippedNoWeek || 0);
+        if (inserted === 0) {
+          setError(`벌점 반영 0건 (학생 매칭 실패 ${skippedNoStudent}건, 주차 매칭 실패 ${skippedNoWeek}건). 파일의 학생 ID/이름이 현재 학생 목록과 같은지 확인해주세요.`);
+        }
+      }
     } catch (e) {
       setError(e.message);
     } finally {
