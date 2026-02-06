@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-top: #fbf8ef;
+  --bg-bottom: #f7f3ea;
+  --surface: #ffffff;
+  --border-soft: #ddd6c7;
+  --border-strong: #cdbfa6;
+  --text-main: #2a2b2d;
+  --focus-ring: rgba(116, 125, 107, 0.24);
+  --primary: #3f5a4b;
+  --primary-hover: #31463a;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  color: var(--text-main);
+  background: linear-gradient(165deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+}
+
+.card {
+  @apply rounded-2xl border bg-white/90 shadow-sm backdrop-blur;
+  border-color: var(--border-soft);
+  box-shadow: 0 10px 24px rgba(58, 46, 31, 0.05);
+}
+
+.btn {
+  @apply inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition;
+}
+
+.btn-primary {
+  @apply btn text-white shadow-sm;
+  background: linear-gradient(180deg, #4d6a59 0%, var(--primary) 100%);
+  border: 1px solid #425947;
+}
+
+.btn-ghost {
+  @apply btn text-slate-700;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--border-soft);
+}
+
+.btn-primary:hover {
+  background: linear-gradient(180deg, #3e594a 0%, var(--primary-hover) 100%);
+}
+
+.btn-ghost:hover {
+  background: #ffffff;
+  border-color: var(--border-strong);
+}
+
+.input {
+  @apply w-full rounded-xl bg-white px-3 py-2 text-sm outline-none focus:ring-2;
+  border: 1px solid var(--border-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.input:focus {
+  border-color: #8ea78f;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.textarea {
+  @apply w-full rounded-xl bg-white px-3 py-2 text-sm outline-none focus:ring-2 min-h-[96px];
+  border: 1px solid var(--border-soft);
+}
+
+.textarea:focus {
+  border-color: #8ea78f;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
