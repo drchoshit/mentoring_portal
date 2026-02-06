@@ -220,6 +220,11 @@ function DayNote({ label, value }) {
   );
 }
 
+function BlockedSection({ blocked, children }) {
+  if (!blocked) return <>{children}</>;
+  return <div className="pointer-events-none select-none blur-[3px]">{children}</div>;
+}
+
 export default function Parent() {
   const [loading, setLoading] = useState(true);
   const [recordLoading, setRecordLoading] = useState(false);
@@ -254,9 +259,7 @@ export default function Parent() {
       const list = Array.isArray(r?.weeks) ? r.weeks : [];
       list.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
       setAllWeeks(list);
-      if (!selectedWeekId && list[0]?.id) {
-        setSelectedWeekId(String(list[0].id));
-      }
+      if (!selectedWeekId && list[0]?.id) setSelectedWeekId(String(list[0].id));
     } catch (e) {
       setError(e.message);
     }
@@ -301,10 +304,18 @@ export default function Parent() {
   }, []);
 
   useEffect(() => {
-    if (selectedStudentId && selectedWeekId) {
-      loadRecord(selectedStudentId, selectedWeekId);
+    if (!selectedStudentId || !selectedWeekId) {
+      setRecord(null);
+      return;
     }
-  }, [selectedStudentId, selectedWeekId]);
+    const selectedItem = items.find((x) => String(x.student.id) === String(selectedStudentId));
+    const isShared = (selectedItem?.weeks || []).some((w) => String(w.id) === String(selectedWeekId));
+    if (!isShared) {
+      setRecord(null);
+      return;
+    }
+    loadRecord(selectedStudentId, selectedWeekId);
+  }, [items, selectedStudentId, selectedWeekId]);
 
   const selected = useMemo(
     () => items.find((x) => String(x.student.id) === String(selectedStudentId)),
@@ -312,10 +323,14 @@ export default function Parent() {
   );
   const sharedWeeks = selected?.weeks || [];
   const sharedWeekIds = useMemo(() => new Set(sharedWeeks.map((w) => String(w.id))), [sharedWeeks]);
+  const isSelectedWeekShared = useMemo(() => sharedWeekIds.has(String(selectedWeekId)), [sharedWeekIds, selectedWeekId]);
+  const isLockedWeek = !isSelectedWeekShared;
+
   const selectedWeek = useMemo(
     () => allWeeks.find((w) => String(w.id) === String(selectedWeekId)),
     [allWeeks, selectedWeekId]
   );
+
   const schedule = selected?.student?.schedule || {};
   const mentorAssignment = selected?.mentor_assignment || null;
   const mentorName = String(mentorAssignment?.mentor || '').trim();
@@ -324,7 +339,6 @@ export default function Parent() {
 
   const subjectRecords = useMemo(() => (record?.subject_records || []), [record]);
   const weekRecord = useMemo(() => (record?.week_record || {}), [record]);
-
   const dailyTasks = useMemo(() => safeJson(weekRecord?.b_daily_tasks, {}), [weekRecord]);
   const scores = useMemo(() => safeJson(weekRecord?.scores_json, []), [weekRecord]);
 
@@ -346,16 +360,13 @@ export default function Parent() {
   if (!items.length) {
     return (
       <div className="card p-5">
-        <div className="text-sm text-slate-600">
-          본인 학생 정보가 없습니다. (아이디가 학생 코드(external_id)와 동일해야 합니다.)
-        </div>
+        <div className="text-sm text-slate-600">본인 학생 정보가 없습니다.</div>
         {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
       </div>
     );
   }
 
-  const weekRange =
-    selectedWeek?.start_date && selectedWeek?.end_date ? `${selectedWeek.start_date} ~ ${selectedWeek.end_date}` : '';
+  const weekRange = selectedWeek?.start_date && selectedWeek?.end_date ? `${selectedWeek.start_date} ~ ${selectedWeek.end_date}` : '';
   const sharedWeek = sharedWeeks.find((w) => String(w.id) === String(selectedWeekId));
   const recordUpdated = sharedWeek?.updated_at || '';
 
@@ -370,19 +381,9 @@ export default function Parent() {
           <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
             <div>
               <div className="text-xs text-slate-500">학생</div>
-              <select
-                className="input"
-                value={selectedStudentId}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setSelectedStudentId(v);
-                  if (!selectedWeekId && allWeeks[0]?.id) setSelectedWeekId(String(allWeeks[0].id));
-                }}
-              >
+              <select className="input" value={selectedStudentId} onChange={(e) => setSelectedStudentId(e.target.value)}>
                 {items.map((x) => (
-                  <option key={x.student.id} value={String(x.student.id)}>
-                    {x.student.name} {x.student.grade ? `(${x.student.grade})` : ''}
-                  </option>
+                  <option key={x.student.id} value={String(x.student.id)}>{x.student.name} {x.student.grade ? `(${x.student.grade})` : ''}</option>
                 ))}
               </select>
             </div>
@@ -391,8 +392,7 @@ export default function Parent() {
               <select className="input" value={selectedWeekId} onChange={(e) => setSelectedWeekId(e.target.value)}>
                 {allWeeks.map((w) => (
                   <option key={w.id} value={String(w.id)}>
-                    {w.label} {w.start_date && w.end_date ? `(${w.start_date}~${w.end_date})` : ''}{' '}
-                    {sharedWeekIds.has(String(w.id)) ? '· 공유됨' : '· 미공유'}
+                    {w.label} {w.start_date && w.end_date ? `(${w.start_date}~${w.end_date})` : ''} {sharedWeekIds.has(String(w.id)) ? '· 공유됨' : '· 미공유'}
                   </option>
                 ))}
               </select>
@@ -407,19 +407,27 @@ export default function Parent() {
           {recordUpdated ? <InfoPill label="기록 업데이트" value={recordUpdated} /> : null}
         </div>
 
+        {isLockedWeek ? (
+          <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+            아직 멘토링 기록의 작성/검수가 끝나지 않았습니다. 보통 멘토링한 24시간 이내 공유됩니다.
+          </div>
+        ) : null}
+
         {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
       </div>
 
-      <div className={['card p-5', SECTION_TONES.calendar].join(' ')}>
-        <SectionTitle title="주간 일정 캘린더" right={weekRange || '주차 선택'} />
-        <WeeklyCalendar schedule={schedule} weekStart={selectedWeek?.start_date} />
-      </div>
+      <BlockedSection blocked={isLockedWeek}>
+        <div className={['card p-5', SECTION_TONES.calendar].join(' ')}>
+          <SectionTitle title="주간 일정 캘린더" right={weekRange || '주차 선택'} />
+          <WeeklyCalendar schedule={schedule} weekStart={selectedWeek?.start_date} />
+        </div>
+      </BlockedSection>
 
-      <div className={['card p-5', SECTION_TONES.penalties].join(' ')}>
-        <SectionTitle title="벌점 내역" right={`총 ${totalPenaltyPoints}점 · ${penaltyItems.length}건`} />
-        <div className="mt-3 space-y-2 max-h-[420px] overflow-auto pr-1">
-          {penaltyItems.length ? (
-            penaltyItems.slice(0, 20).map((p) => (
+      <BlockedSection blocked={isLockedWeek}>
+        <div className={['card p-5', SECTION_TONES.penalties].join(' ')}>
+          <SectionTitle title="벌점 내역" right={`총 ${totalPenaltyPoints}점 · ${penaltyItems.length}건`} />
+          <div className="mt-3 space-y-2 max-h-[420px] overflow-auto pr-1">
+            {penaltyItems.length ? penaltyItems.slice(0, 20).map((p) => (
               <div key={p.id} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white/60 p-3">
                 <div>
                   <div className="text-sm text-slate-800">{p.reason}</div>
@@ -427,38 +435,36 @@ export default function Parent() {
                 </div>
                 <Badge>{p.points > 0 ? `+${p.points}` : p.points}</Badge>
               </div>
-            ))
-          ) : (
-            <div className="text-sm text-slate-400">벌점 내역 없음</div>
-          )}
-        </div>
-
-        {Array.isArray(scores) && scores.length ? (
-          <div className="mt-6 border-t border-slate-200/70 pt-4">
-            <SectionTitle title="성적 / 진단" right={`총 ${scores.length}건`} />
-            <div className="mt-3 overflow-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-slate-500">
-                    <th className="py-2 pr-3">구분</th>
-                    <th className="py-2 pr-3">과목</th>
-                    <th className="py-2 pr-3">내용</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {scores.map((r, idx) => (
-                    <tr key={idx} className="border-t border-slate-200">
-                      <td className="py-2 pr-3">{r.label || ''}</td>
-                      <td className="py-2 pr-3">{r.subject || ''}</td>
-                      <td className="py-2 pr-3 whitespace-pre-wrap">{r.note || ''}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            )) : <div className="text-sm text-slate-400">벌점 내역 없음</div>}
           </div>
-        ) : null}
-      </div>
+
+          {Array.isArray(scores) && scores.length ? (
+            <div className="mt-6 border-t border-slate-200/70 pt-4">
+              <SectionTitle title="성적 / 진단" right={`총 ${scores.length}건`} />
+              <div className="mt-3 overflow-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-slate-500">
+                      <th className="py-2 pr-3">구분</th>
+                      <th className="py-2 pr-3">과목</th>
+                      <th className="py-2 pr-3">내용</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scores.map((r, idx) => (
+                      <tr key={idx} className="border-t border-slate-200">
+                        <td className="py-2 pr-3">{r.label || ''}</td>
+                        <td className="py-2 pr-3">{r.subject || ''}</td>
+                        <td className="py-2 pr-3 whitespace-pre-wrap">{r.note || ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </BlockedSection>
 
       <div className={['card p-5', SECTION_TONES.mentor].join(' ')}>
         <SectionTitle title="이번주 멘토 안내" right={selectedWeek?.label ? `${selectedWeek.label}` : ''} />
@@ -466,62 +472,39 @@ export default function Parent() {
           <InfoPill label="이번주 멘토" value={mentorName || '-'} />
           <InfoPill label="멘토링 진행 요일" value={mentorDays.length ? mentorDays.join(', ') : '-'} />
         </div>
-        <div className="mt-2 text-xs text-slate-600">
-          {mentorNoticeText}
-        </div>
+        <div className="mt-2 text-xs text-slate-600">{mentorNoticeText}</div>
       </div>
 
-      <div className={['card p-5', SECTION_TONES.curriculum].join(' ')}>
-        <SectionTitle title="학습 커리큘럼" right={selectedWeek?.label ? `${selectedWeek.label}` : ''} />
-        {recordLoading ? (
-          <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div>
-        ) : record ? (
-          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {subjectRecords.length ? (
-              subjectRecords.map((sr, idx) => (
+      <BlockedSection blocked={isLockedWeek}>
+        <div className={['card p-5', SECTION_TONES.curriculum].join(' ')}>
+          <SectionTitle title="학습 커리큘럼" right={selectedWeek?.label ? `${selectedWeek.label}` : ''} />
+          {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {subjectRecords.length ? subjectRecords.map((sr, idx) => (
                 <div key={sr.id} className={['rounded-2xl border p-4 shadow-sm', SUBJECT_TONES[idx % SUBJECT_TONES.length]].join(' ')}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold text-brand-900">{sr.subject_name}</div>
                     <div className="text-xs text-slate-500">{sr.updated_at ? `업데이트: ${sr.updated_at}` : ''}</div>
                   </div>
-                  {sr.a_curriculum ? (
-                    <div className="mt-2 whitespace-pre-wrap text-sm text-slate-800">{sr.a_curriculum}</div>
-                  ) : (
-                    <div className="mt-2 text-sm text-slate-400">커리큘럼 없음</div>
-                  )}
+                  {sr.a_curriculum ? <div className="mt-2 whitespace-pre-wrap text-sm text-slate-800">{sr.a_curriculum}</div> : <div className="mt-2 text-sm text-slate-400">커리큘럼 없음</div>}
                 </div>
-              ))
-            ) : (
-              <div className="text-sm text-slate-400">과목 기록 없음</div>
-            )}
-          </div>
-        ) : (
-          <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>
-        )}
-      </div>
+              )) : <div className="text-sm text-slate-400">과목 기록 없음</div>}
+            </div>
+          ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
+        </div>
+      </BlockedSection>
 
-      <div className={['card p-5', SECTION_TONES.subjects].join(' ')}>
-        <SectionTitle title="과목별 기록" right={selectedWeek?.label ? `${selectedWeek.label}` : ''} />
-        {recordLoading ? (
-          <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div>
-        ) : record ? (
-          <div className="mt-3 space-y-4">
-            {subjectRecords.length ? (
-              subjectRecords.map((sr, idx) => {
-                const lastHwBlock = { key: 'a_last_hw', label: '지난주 과제', value: renderLastHw(sr.a_last_hw) };
-                const thisHwBlock = {
-                  key: 'a_this_hw',
-                  label: '이번주 과제',
-                  value: renderLastHw(sr.a_this_hw),
-                  tone: 'border-amber-200/60 bg-amber-50/70'
-                };
-                const commentBlock = {
-                  key: 'a_comment',
-                  label: '과목 별 코멘트',
-                  value: sr.a_comment,
-                  tone: 'border-amber-200/60 bg-amber-50/70'
-                };
-                const blocks = [lastHwBlock, thisHwBlock, commentBlock].filter((b) => b.value);
+      <BlockedSection blocked={isLockedWeek}>
+        <div className={['card p-5', SECTION_TONES.subjects].join(' ')}>
+          <SectionTitle title="과목별 기록" right={selectedWeek?.label ? `${selectedWeek.label}` : ''} />
+          {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
+            <div className="mt-3 space-y-4">
+              {subjectRecords.length ? subjectRecords.map((sr, idx) => {
+                const blocks = [
+                  { key: 'a_last_hw', label: '지난주 과제', value: renderLastHw(sr.a_last_hw) },
+                  { key: 'a_this_hw', label: '이번주 과제', value: renderLastHw(sr.a_this_hw), tone: 'border-amber-200/60 bg-amber-50/70' },
+                  { key: 'a_comment', label: '과목 별 코멘트', value: sr.a_comment, tone: 'border-amber-200/60 bg-amber-50/70' }
+                ].filter((b) => b.value);
                 return (
                   <div key={sr.id} className={['rounded-2xl border p-4 shadow-sm', SUBJECT_TONES[idx % SUBJECT_TONES.length]].join(' ')}>
                     <div className="flex items-center justify-between gap-2">
@@ -529,68 +512,52 @@ export default function Parent() {
                       <div className="text-xs text-slate-500">{sr.updated_at ? `업데이트: ${sr.updated_at}` : ''}</div>
                     </div>
                     <div className="mt-3 space-y-3">
-                      {blocks.length ? (
-                        blocks.map((b) => <RecordBox key={b.key} title={b.label} value={b.value} tone={b.tone} />)
-                      ) : (
-                        <div className="text-sm text-slate-400">공유된 기록이 아직 없습니다.</div>
-                      )}
+                      {blocks.length ? blocks.map((b) => <RecordBox key={b.key} title={b.label} value={b.value} tone={b.tone} />) : <div className="text-sm text-slate-400">공유된 기록이 아직 없습니다.</div>}
                     </div>
                   </div>
                 );
-              })
-            ) : (
-              <div className="text-sm text-slate-400">과목 기록 없음</div>
-            )}
-          </div>
-        ) : (
-          <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>
-        )}
-      </div>
+              }) : <div className="text-sm text-slate-400">과목 기록 없음</div>}
+            </div>
+          ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
+        </div>
+      </BlockedSection>
 
-      <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
-        <SectionTitle title="일일 학습 과제" right={selectedWeek?.label ? `${selectedWeek.label}` : ''} />
-        {recordLoading ? (
-          <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div>
-        ) : record ? (
-          <div className="mt-3 space-y-2">
-            {DAYS.map((d) => (
-              <DayNote key={d.k} label={d.label} value={dailyTasks?.[d.k]} />
-            ))}
-          </div>
-        ) : (
-          <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>
-        )}
-      </div>
+      <BlockedSection blocked={isLockedWeek}>
+        <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
+          <SectionTitle title="일일 학습 과제" right={selectedWeek?.label ? `${selectedWeek.label}` : ''} />
+          {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
+            <div className="mt-3 space-y-2">
+              {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasks?.[d.k]} />)}
+            </div>
+          ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
+        </div>
+      </BlockedSection>
 
-      <div className={['card p-5', SECTION_TONES.weekly].join(' ')}>
-        <SectionTitle title="주간 총괄멘토 피드백" right={selectedWeek?.label ? `${selectedWeek.label}` : ''} />
-        {recordLoading ? (
-          <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div>
-        ) : record ? (
-          <>
-            {weekRecord?.c_lead_weekly_feedback ? (
-              <div className="mt-3 rounded-xl border border-slate-200 bg-white/80 p-3">
-                <div className="text-xs font-semibold text-brand-800">주간 총괄멘토 피드백</div>
-                <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{weekRecord.c_lead_weekly_feedback}</div>
-              </div>
-            ) : (
-              <div className="mt-3 text-sm text-slate-500">피드백 없음</div>
-            )}
-            {weekRecord?.c_director_commentary ? (
-              <div className="mt-3 rounded-xl border border-slate-200 bg-white/80 p-3">
-                <div className="text-xs font-semibold text-brand-800">원장 코멘트</div>
-                <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{weekRecord.c_director_commentary}</div>
-              </div>
-            ) : null}
-          </>
-        ) : (
-          <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>
-        )}
-      </div>
+      <BlockedSection blocked={isLockedWeek}>
+        <div className={['card p-5', SECTION_TONES.weekly].join(' ')}>
+          <SectionTitle title="주간 총괄멘토 피드백" right={selectedWeek?.label ? `${selectedWeek.label}` : ''} />
+          {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
+            <>
+              {weekRecord?.c_lead_weekly_feedback ? (
+                <div className="mt-3 rounded-xl border border-slate-200 bg-white/80 p-3">
+                  <div className="text-xs font-semibold text-brand-800">주간 총괄멘토 피드백</div>
+                  <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{weekRecord.c_lead_weekly_feedback}</div>
+                </div>
+              ) : (
+                <div className="mt-3 text-sm text-slate-500">피드백 없음</div>
+              )}
+              {weekRecord?.c_director_commentary ? (
+                <div className="mt-3 rounded-xl border border-slate-200 bg-white/80 p-3">
+                  <div className="text-xs font-semibold text-brand-800">원장 코멘트</div>
+                  <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{weekRecord.c_director_commentary}</div>
+                </div>
+              ) : null}
+            </>
+          ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
+        </div>
+      </BlockedSection>
 
-      <div className="text-xs text-slate-400 px-1">
-        안내: 학부모 페이지는 조회 전용이며, 공유된 주차의 기록만 표시됩니다.
-      </div>
+      <div className="text-xs text-slate-400 px-1">안내: 학부모 페이지는 조회 전용이며, 공유된 주차의 기록만 표시됩니다.</div>
     </div>
   );
 }
