@@ -30,14 +30,30 @@ initDb();
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-const origin = process.env.WEB_ORIGIN || 'http://localhost:5173';
-app.use(
-  cors({
-    origin,
-    methods: ['GET','POST','PUT','DELETE'],
-    allowedHeaders: ['Content-Type','Authorization']
-  })
-);
+function normalizeOrigin(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  return /^https?:\/\//i.test(s) ? s : `https://${s}`;
+}
+
+const originList = String(process.env.WEB_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((s) => normalizeOrigin(s))
+  .filter(Boolean);
+
+const allowedOrigins = new Set(originList);
+const corsOptions = {
+  origin(origin, callback) {
+    // Allow non-browser requests (no Origin header)
+    if (!origin) return callback(null, true);
+    return callback(null, allowedOrigins.has(origin));
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -87,5 +103,5 @@ process.on('SIGTERM', () => {
 const port = Number(process.env.PORT || 3001);
 app.listen(port, () => {
   console.log(`Server listening on http://localhost:${port}`);
-  console.log(`Allowed web origin: ${origin}`);
+  console.log(`Allowed web origin(s): ${originList.join(', ')}`);
 });
