@@ -446,7 +446,7 @@ function bootstrap() {
 
 function seedDemoUsers() {
   const demo = [
-    { username: 'admin', role: 'admin', password: 'admin1234', display_name: '원장' },
+    { username: 'admin', role: 'director', password: 'admin1234', display_name: '원장' },
     { username: 'lead1', role: 'lead', password: 'pass1234', display_name: '총괄멘토' },
     { username: 'mentor1', role: 'mentor', password: 'pass1234', display_name: '학습멘토' },
     { username: 'staff1', role: 'admin', password: 'pass1234', display_name: '관리자' },
@@ -474,9 +474,24 @@ function seedDemoUsers() {
   }
 }
 
+function migrateLegacyAdminRole() {
+  const admin = db.prepare('SELECT id, role FROM users WHERE username=?').get('admin');
+  if (!admin) return;
+  if (String(admin.role) === 'director') return;
+
+  db.prepare(`
+    UPDATE users
+    SET role='director',
+        display_name=COALESCE(NULLIF(display_name,''), '원장'),
+        updated_at=datetime('now')
+    WHERE id=?
+  `).run(admin.id);
+}
+
 export function initDb() {
   bootstrap();
   seedDemoUsers();
+  migrateLegacyAdminRole();
 }
 
 function prep(sql) {
