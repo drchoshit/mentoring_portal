@@ -2,14 +2,16 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { requireRole } from '../lib/auth.js';
+import { dbFilePath } from '../lib/db.js';
 
 export default function backupRoutes(db) {
   const router = express.Router();
   router.use(requireRole('director'));
 
-  const DATA_DIR = path.resolve(process.cwd(), 'data');
-  const DB_PATH = path.join(DATA_DIR, 'db.sqlite');
-  const BACKUP_DIR = path.resolve(process.cwd(), 'backups');
+  const DB_PATH = dbFilePath;
+  const BACKUP_DIR = process.env.BACKUP_DIR
+    ? (path.isAbsolute(process.env.BACKUP_DIR) ? process.env.BACKUP_DIR : path.resolve(process.cwd(), process.env.BACKUP_DIR))
+    : path.join(path.dirname(DB_PATH), 'backups');
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
   function backupNow(reason = 'manual') {

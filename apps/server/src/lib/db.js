@@ -10,11 +10,32 @@ function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function resolvePersistentDataDir() {
+  const explicitDir = process.env.RENDER_DISK_PATH || process.env.PERSISTENT_DATA_DIR;
+  if (explicitDir) {
+    const dir = path.isAbsolute(explicitDir) ? explicitDir : path.resolve(process.cwd(), explicitDir);
+    ensureDir(dir);
+    return dir;
+  }
+
+  // Render persistent disk default mount path.
+  if (process.env.RENDER) {
+    const renderDiskDir = '/var/data';
+    ensureDir(renderDiskDir);
+    return renderDiskDir;
+  }
+
+  return null;
+}
+
 function resolveDbFile() {
   if (process.env.NODE_ENV === 'test') return ':memory:';
 
   const p = process.env.DB_PATH;
   if (p) return path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+
+  const persistentDir = resolvePersistentDataDir();
+  if (persistentDir) return path.join(persistentDir, 'db.sqlite');
 
   const dataDir = path.resolve(process.cwd(), 'data');
   ensureDir(dataDir);
@@ -607,4 +628,5 @@ export function upsertWeek({ label, start_date = null, end_date = null }) {
 }
 
 export { db };
+export const dbFilePath = dbFile;
 export default db;

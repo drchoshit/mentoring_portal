@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 
-import db, { initDb } from './lib/db.js';
+import db, { initDb, dbFilePath } from './lib/db.js';
 import { requireAuth } from './lib/auth.js';
 
 import authRoutes from './routes/auth.js';
@@ -74,9 +74,10 @@ app.use('/api/settings', requireAuth(db), settingsRoutes(db));
 app.use('/api/mentor-assignments', requireAuth(db), mentorAssignmentsRoutes(db));
 
 // ---- Backups (best-effort) ----
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const DB_PATH = path.join(DATA_DIR, 'db.sqlite');
-const BACKUP_DIR = path.resolve(process.cwd(), 'backups');
+const DB_PATH = dbFilePath;
+const BACKUP_DIR = process.env.BACKUP_DIR
+  ? (path.isAbsolute(process.env.BACKUP_DIR) ? process.env.BACKUP_DIR : path.resolve(process.cwd(), process.env.BACKUP_DIR))
+  : path.join(path.dirname(DB_PATH), 'backups');
 if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
 function backupNow(reason = 'interval') {
