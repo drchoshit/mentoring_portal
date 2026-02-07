@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: mentoring-api
+    runtime: node
+    rootDir: mentoring-app
+    buildCommand: npm install --workspaces
+    startCommand: npm run start --workspace apps/server
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: WEB_ORIGIN
+        fromService:
+          name: mentoring-web
+          type: static
+          property: url
+      - key: DB_PATH
+        value: /var/data/db.sqlite
+      - key: BACKUP_DIR
+        value: /var/data/backups
+    disk:
+      name: mentoring-data
+      mountPath: /var/data
+      sizeGB: 2
+  - type: static
+    name: mentoring-web
+    rootDir: mentoring-app
+    buildCommand: npm install --workspaces && npm run build --workspace apps/web
+    staticPublishPath: apps/web/dist
+    envVars:
+      - key: VITE_API_BASE
+        fromService:
+          name: mentoring-api
+          type: web
+          property: url
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

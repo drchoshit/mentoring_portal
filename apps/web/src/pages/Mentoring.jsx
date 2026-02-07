@@ -20,6 +20,13 @@ const ROLE_KO = {
   admin: '관리자',
   parent: '학부모'
 };
+const ROLE_ORDER = {
+  director: 0,
+  lead: 1,
+  admin: 2,
+  mentor: 3,
+  parent: 4
+};
 
 const SUBJECT_FIELD_KEYS = ['a_curriculum', 'a_last_hw', 'a_hw_exec', 'a_progress', 'a_this_hw', 'a_comment'];
 const SUBJECT_TONES = [
