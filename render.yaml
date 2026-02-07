@@ -3,7 +3,7 @@ services:
     name: mentoring-api
     runtime: node
     rootDir: mentoring-app
-    buildCommand: npm install --workspaces
+    buildCommand: npm install --workspace apps/server
     startCommand: npm run start --workspace apps/server
     healthCheckPath: /api/health
     envVars:
@@ -26,7 +26,7 @@ services:
     name: mentoring-web
     env: static
     rootDir: mentoring-app
-    buildCommand: npm install --workspaces && VITE_API_BASE=https://$API_HOST npm run build --workspace apps/web
+    buildCommand: npm install --workspace apps/web && VITE_API_BASE=https://${API_HOST:-localhost} npm run build --workspace apps/web
     staticPublishPath: apps/web/dist
     envVars:
       - key: API_HOST
