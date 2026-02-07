@@ -12,7 +12,7 @@ services:
       - key: WEB_ORIGIN
         fromService:
           name: mentoring-web
-          type: static
+          type: web
           property: url
       - key: DB_PATH
         value: /var/data/db.sqlite
@@ -22,8 +22,9 @@ services:
       name: mentoring-data
       mountPath: /var/data
       sizeGB: 2
-  - type: static
+  - type: web
     name: mentoring-web
+    env: static
     rootDir: mentoring-app
     buildCommand: npm install --workspaces && npm run build --workspace apps/web
     staticPublishPath: apps/web/dist
