@@ -13,7 +13,7 @@ services:
         fromService:
           name: mentoring-web
           type: web
-          property: url
+          property: host
       - key: DB_PATH
         value: /var/data/db.sqlite
       - key: BACKUP_DIR
@@ -26,14 +26,14 @@ services:
     name: mentoring-web
     env: static
     rootDir: mentoring-app
-    buildCommand: npm install --workspaces && npm run build --workspace apps/web
+    buildCommand: npm install --workspaces && VITE_API_BASE=https://$API_HOST npm run build --workspace apps/web
     staticPublishPath: apps/web/dist
     envVars:
-      - key: VITE_API_BASE
+      - key: API_HOST
         fromService:
           name: mentoring-api
           type: web
-          property: url
+          property: host
     routes:
       - type: rewrite
         source: /*
