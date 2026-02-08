@@ -179,7 +179,7 @@ function RoleTag({ role, active }) {
       {ROLE_KO[role] || role}
     </span>
   );
-}
+});
 
 function AutoGrowTextarea({ value, onValueChange, onBlur, disabled, minHeight = 240 }) {
   const ref = useRef(null);
