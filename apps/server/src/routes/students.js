@@ -60,6 +60,41 @@ export default function studentRoutes(db) {
     return res.json({ students: rows });
   });
 
+  router.post('/', requireRole('director', 'admin'), (req, res) => {
+    if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
+
+    const { external_id, name, grade, student_phone, parent_phone, schedule } = req.body || {};
+    const cleanName = String(name || '').trim();
+    if (!cleanName) return res.status(400).json({ error: 'Missing name' });
+
+    const ext = String(external_id || '').trim();
+    const externalId = ext ? ext : null;
+    const schedule_json = schedule ? JSON.stringify(schedule) : null;
+
+    try {
+      const info = db.prepare(`
+        INSERT INTO students (external_id, name, grade, student_phone, parent_phone, schedule_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      `).run(
+        externalId,
+        cleanName,
+        grade ? String(grade).trim() : null,
+        student_phone ? String(student_phone).trim() : null,
+        parent_phone ? String(parent_phone).trim() : null,
+        schedule_json
+      );
+
+      writeAudit(db, { user_id: req.user.id, action: 'create', entity: 'student', entity_id: info.lastInsertRowid, details: { name: cleanName, external_id: externalId } });
+      return res.json({ id: info.lastInsertRowid });
+    } catch (e) {
+      const msg = String(e?.message || '');
+      if (msg.includes('UNIQUE') || msg.includes('unique')) {
+        return res.status(400).json({ error: '이미 사용 중인 학생 ID입니다.' });
+      }
+      return res.status(500).json({ error: e?.message || 'Create failed' });
+    }
+  });
+
   router.get('/share-dates', requireRole('director', 'admin'), (req, res) => {
     try {
       const weekId = Number(req.query.weekId);

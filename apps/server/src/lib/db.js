@@ -32,10 +32,31 @@ function resolveDbFile() {
   if (process.env.NODE_ENV === 'test') return ':memory:';
 
   const p = process.env.DB_PATH;
-  if (p) return path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+  if (p) {
+    const resolved = path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+    // If DB_PATH points to db.sqlite but legacy app.db exists, prefer app.db to avoid data loss.
+    if (resolved.endsWith(`${path.sep}db.sqlite`)) {
+      const legacy = path.join(path.dirname(resolved), 'app.db');
+      if (fs.existsSync(legacy)) {
+        const legacySize = fs.statSync(legacy).size;
+        const resolvedSize = fs.existsSync(resolved) ? fs.statSync(resolved).size : 0;
+        if (resolvedSize < legacySize) return legacy;
+      }
+    }
+    return resolved;
+  }
 
   const persistentDir = resolvePersistentDataDir();
-  if (persistentDir) return path.join(persistentDir, 'db.sqlite');
+  if (persistentDir) {
+    const dbSqlite = path.join(persistentDir, 'db.sqlite');
+    const appDb = path.join(persistentDir, 'app.db');
+    if (fs.existsSync(appDb)) {
+      const appSize = fs.statSync(appDb).size;
+      const dbSize = fs.existsSync(dbSqlite) ? fs.statSync(dbSqlite).size : 0;
+      if (dbSize < appSize) return appDb;
+    }
+    return dbSqlite;
+  }
 
   const dataDir = path.resolve(process.cwd(), 'data');
   ensureDir(dataDir);

@@ -192,6 +192,7 @@ function ParentUsersTab() {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
   const [busyIssue, setBusyIssue] = useState(false);
+  const [busySaveAll, setBusySaveAll] = useState(false);
   const [resetExisting, setResetExisting] = useState(false);
   const [status, setStatus] = useState('');
 
@@ -238,6 +239,30 @@ function ParentUsersTab() {
     }
   }
 
+  async function saveAll() {
+    if (!rows.length) return;
+    const ok = confirm('전체 저장할까요?');
+    if (!ok) return;
+
+    setBusySaveAll(true);
+    setError('');
+    setStatus('');
+    try {
+      for (const r of rows) {
+        await api(`/api/users/parents/${r.student_id}/active`, {
+          method: 'PUT',
+          body: { is_active: r.is_active ? 1 : 0 }
+        });
+      }
+      setStatus('전체 저장했습니다.');
+      await load();
+    } catch (e) {
+      setError(e.message || '전체 저장에 실패했습니다.');
+    } finally {
+      setBusySaveAll(false);
+    }
+  }
+
   async function downloadJson() {
     try {
       await downloadFile('/api/users/parents/export.json', `parent_users_${new Date().toISOString().slice(0,10)}.json`);
@@ -276,7 +301,13 @@ function ParentUsersTab() {
             <button className="btn-ghost" onClick={downloadJson}>JSON 다운로드</button>
             <button className="btn-ghost" onClick={downloadExcelCsv}>엑셀(CSV) 다운로드</button>
             <button className="btn-ghost" onClick={load}>새로고침</button>
+            <button className="btn-primary" onClick={saveAll} disabled={busySaveAll}>
+              전체 저장
+            </button>
           </div>
+        </div>
+        <div className="mt-2 text-xs text-rose-600">
+          *정보 입력 후 반드시 전제 저장 버튼을 눌러주세요.
         </div>
       </div>
 

@@ -5,7 +5,7 @@
 //          (5) 모든 ???�역(최외�?card) ?�두�? ??굵고 진한 골드
 //          (6) 과목 ?�환 ???�동?�??+ 과목 ?�??버튼?� "모든 과목" ?�괄 ?�??// ?�른 기능?��? ?��?(캘린???�크?�로???�드 ?�송/과목 추�?/주간 과제·?�드�??�쇄/과거기록)
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { API_BASE, api, getToken } from '../api.js';
 import { useAuth } from '../auth/AuthProvider.jsx';
@@ -97,26 +97,24 @@ function normalizeLastHwTask(raw) {
 
 function parseLastHwTasks(value) {
   if (!value) return [];
-  if (Array.isArray(value)) return value.map(normalizeLastHwTask).filter((t) => t.text);
+  if (Array.isArray(value)) return value.map(normalizeLastHwTask);
   if (typeof value === 'object') {
     const arr = value.tasks || value.items || value.list;
-    if (Array.isArray(arr)) return arr.map(normalizeLastHwTask).filter((t) => t.text);
+    if (Array.isArray(arr)) return arr.map(normalizeLastHwTask);
   }
   const raw = String(value);
   const parsed = safeJson(raw, null);
-  if (Array.isArray(parsed)) return parsed.map(normalizeLastHwTask).filter((t) => t.text);
+  if (Array.isArray(parsed)) return parsed.map(normalizeLastHwTask);
   const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
   return lines.map((text) => ({ text, done: null, progress: '' }));
 }
 
 function serializeLastHwTasks(tasks) {
-  const cleaned = (tasks || [])
-    .map((t) => ({
-      text: String(t?.text || '').trim(),
-      done: t?.done === true ? true : t?.done === false ? false : null,
-      progress: t?.done === false ? String(t?.progress || '') : ''
-    }))
-    .filter((t) => t.text);
+  const cleaned = (tasks || []).map((t) => ({
+    text: String(t?.text || '').trim(),
+    done: t?.done === true ? true : t?.done === false ? false : null,
+    progress: t?.done === false ? String(t?.progress || '') : ''
+  }));
   return cleaned.length ? JSON.stringify(cleaned) : '';
 }
 
@@ -181,7 +179,7 @@ function RoleTag({ role, active }) {
       {ROLE_KO[role] || role}
     </span>
   );
-}
+});
 
 function AutoGrowTextarea({ value, onValueChange, onBlur, disabled, minHeight = 240 }) {
   const ref = useRef(null);
@@ -404,6 +402,7 @@ export default function Mentoring() {
   // 과목 ?�력 보존/?�동?�?�용 draft
   const [subjectDrafts, setSubjectDrafts] = useState({});
   const draftScopeRef = useRef('');
+  const profileRef = useRef(null);
 
   const parentMode = user?.role === 'parent';
   const weekRecordId = rec?.week_record?.id;
@@ -565,8 +564,17 @@ export default function Mentoring() {
 
   const schedule = useMemo(() => safeJson(rec?.student?.schedule_json, {}), [rec]);
   const scheduleWeekStart = schedule?.week_start || rec?.week?.start_date || '';
-  const dailyTasks = useMemo(() => safeJson(rec?.week_record?.b_daily_tasks, {}), [rec]);
-  const dailyFeedback = useMemo(() => safeJson(rec?.week_record?.b_lead_daily_feedback, {}), [rec]);
+  const dailyTasksValue = useMemo(() => safeJson(rec?.week_record?.b_daily_tasks, {}), [rec]);
+  const dailyFeedbackValue = useMemo(() => safeJson(rec?.week_record?.b_lead_daily_feedback, {}), [rec]);
+  const [dailyTasksDraft, setDailyTasksDraft] = useState(dailyTasksValue);
+  const [dailyFeedbackDraft, setDailyFeedbackDraft] = useState(dailyFeedbackValue);
+  const [leadWeeklyDraft, setLeadWeeklyDraft] = useState(rec?.week_record?.c_lead_weekly_feedback || '');
+  const [directorCommentDraft, setDirectorCommentDraft] = useState(rec?.week_record?.c_director_commentary || '');
+
+  useEffect(() => setDailyTasksDraft(dailyTasksValue), [dailyTasksValue]);
+  useEffect(() => setDailyFeedbackDraft(dailyFeedbackValue), [dailyFeedbackValue]);
+  useEffect(() => setLeadWeeklyDraft(rec?.week_record?.c_lead_weekly_feedback || ''), [rec?.week_record?.c_lead_weekly_feedback]);
+  useEffect(() => setDirectorCommentDraft(rec?.week_record?.c_director_commentary || ''), [rec?.week_record?.c_director_commentary]);
 
   // 보기 ?�책: parent�?server-permission 기반, �??�는 "?�션?� ?�출"
   const canEditA = (field) => canEdit(perms, user?.role, field);
@@ -798,23 +806,67 @@ export default function Mentoring() {
     }
   }
 
-  async function saveAllSubjects() {
+  async function saveAllSubjectsCore({ confirm = true } = {}) {
     if (parentMode) return;
     if (!subjectRecords.length) return;
+    const editableKeys = SUBJECT_FIELD_KEYS.filter((k) => canEdit(perms, user?.role, k));
+    if (!editableKeys.length) return;
+    if (confirm) confirmOrThrow('모든 과목 진도를 저장할까요?');
 
+    for (const r of subjectRecords) {
+      const sid = String(r.id);
+      const draft = subjectDrafts?.[sid] || {};
+      const body = {};
+      for (const k of editableKeys) body[k] = draft?.[k] ?? '';
+      await api(`/api/mentoring/subject-record/${sid}`, { method: 'PUT', body });
+    }
+  }
+
+  async function saveAllSubjects() {
     setBusy(true);
     try {
-      confirmOrThrow('모든 과목 진도를 저장할까요?');
-      for (const r of subjectRecords) {
-        const sid = String(r.id);
-        const draft = subjectDrafts?.[sid] || {};
-        const body = {};
-        for (const k of SUBJECT_FIELD_KEYS) body[k] = draft?.[k] ?? '';
-        await api(`/api/mentoring/subject-record/${sid}`, { method: 'PUT', body });
-      }
+      await saveAllSubjectsCore({ confirm: true });
       await loadAll();
     } catch (e) {
       if (e?.message !== '__CANCEL__') setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveAll() {
+    if (parentMode) return;
+    if (!weekRecordId) {
+      setError('주차를 먼저 선택해 주세요.');
+      return;
+    }
+
+    setError('');
+    setBusy(true);
+    try {
+      confirmOrThrow('전체 저장할까요?');
+      const patch = {};
+      if (canEditA('b_daily_tasks')) patch.b_daily_tasks = dailyTasksDraft;
+      if (canEditA('b_lead_daily_feedback')) patch.b_lead_daily_feedback = dailyFeedbackDraft;
+      if (canEditA('c_lead_weekly_feedback')) patch.c_lead_weekly_feedback = leadWeeklyDraft;
+      if (canEditA('c_director_commentary')) patch.c_director_commentary = directorCommentDraft;
+
+      if (Object.keys(patch).length) {
+        await api(`/api/mentoring/week-record/${weekRecordId}`, {
+          method: 'PUT',
+          body: patch
+        });
+      }
+
+      await saveAllSubjectsCore({ confirm: false });
+
+      if (profileRef.current?.saveProfile && user?.role !== 'parent') {
+        await profileRef.current.saveProfile({ confirm: false, manageBusy: false });
+      }
+
+      await loadAll();
+    } catch (e) {
+      if (e?.message !== '__CANCEL__') setError(e?.message || '전체 저장에 실패했습니다.');
     } finally {
       setBusy(false);
     }
@@ -884,13 +936,20 @@ export default function Mentoring() {
               <button className="btn-ghost" onClick={loadAll}>
                 새로고침
               </button>
+              <button className="btn-primary" onClick={saveAll} disabled={busy || parentMode}>
+                전체 저장
+              </button>
             </div>
+          </div>
+          <div className="mt-2 text-xs text-rose-600">
+            *정보 입력 후 반드시 전제 저장 버튼을 눌러주세요.
           </div>
           {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
         </GoldCard>
 
         {/* (2) 학생 정보 분리(가로형) + (성적/내신은 아래 카드) */}
         <StudentProfileSection
+          ref={profileRef}
           studentId={studentId}
           profileJson={rec?.student?.profile_json}
           userRole={user?.role}
@@ -1041,13 +1100,14 @@ export default function Mentoring() {
             <DailyTasksCard
               title="일일 학습 과제"
               fieldKey="b_daily_tasks"
-              value={dailyTasks}
+              value={dailyTasksDraft}
               perms={perms}
               currentRole={user?.role}
               visible={canViewA('b_daily_tasks')}
               editable={canEditA('b_daily_tasks')}
               onSave={(v) => saveWeekRecord({ b_daily_tasks: v })}
               onAutoSave={(v) => autoSaveWeekRecord({ b_daily_tasks: v })}
+              onChangeValue={setDailyTasksDraft}
               busy={busy}
               textareaMinHClass="min-h-[48px]"
               parentMode={parentMode}
@@ -1055,13 +1115,14 @@ export default function Mentoring() {
             <DailyTasksCard
               title="요일 별 총괄멘토 피드백"
               fieldKey="b_lead_daily_feedback"
-              value={dailyFeedback}
+              value={dailyFeedbackDraft}
               perms={perms}
               currentRole={user?.role}
               visible={canViewA('b_lead_daily_feedback')}
               editable={canEditA('b_lead_daily_feedback')}
               onSave={(v) => saveWeekRecord({ b_lead_daily_feedback: v })}
               onAutoSave={(v) => autoSaveWeekRecord({ b_lead_daily_feedback: v })}
+              onChangeValue={setDailyFeedbackDraft}
               busy={busy}
               textareaMinHClass="min-h-[48px]"
               parentMode={parentMode}
@@ -1072,12 +1133,13 @@ export default function Mentoring() {
             <TextFieldCard
               title="주간 총괄멘토 피드백"
               fieldKey="c_lead_weekly_feedback"
-              rec={rec}
+              value={leadWeeklyDraft}
               perms={perms}
               currentRole={user?.role}
               visible={canViewA('c_lead_weekly_feedback')}
               editable={canEditA('c_lead_weekly_feedback')}
               onSave={(txt) => saveWeekRecord({ c_lead_weekly_feedback: txt })}
+              onChangeValue={setLeadWeeklyDraft}
               busy={busy}
               textareaMinHClass="min-h-[50px]"
               parentMode={parentMode}
@@ -1085,12 +1147,13 @@ export default function Mentoring() {
             <TextFieldCard
               title="원장 코멘터리"
               fieldKey="c_director_commentary"
-              rec={rec}
+              value={directorCommentDraft}
               perms={perms}
               currentRole={user?.role}
               visible={canViewA('c_director_commentary')}
               editable={canEditA('c_director_commentary')}
               onSave={(txt) => saveWeekRecord({ c_director_commentary: txt })}
+              onChangeValue={setDirectorCommentDraft}
               busy={busy}
               textareaMinHClass="min-h-[50px]"
               parentMode={parentMode}
@@ -1690,6 +1753,7 @@ function DailyTasksCard({
   editable,
   onSave,
   onAutoSave,
+  onChangeValue,
   busy,
   textareaMinHClass,
   perms,
@@ -1699,8 +1763,13 @@ function DailyTasksCard({
   const [local, setLocal] = useState(value || {});
   const lastSavedRef = useRef('');
   const timerRef = useRef(null);
-  useEffect(() => setLocal(value || {}), [value]);
+  const skipSyncRef = useRef(false);
   useEffect(() => {
+    if (skipSyncRef.current) {
+      skipSyncRef.current = false;
+      return;
+    }
+    setLocal(value || {});
     lastSavedRef.current = JSON.stringify(value || {});
   }, [value]);
 
@@ -1751,7 +1820,12 @@ function DailyTasksCard({
             <textarea
               className={['textarea col-span-10', textareaMinHClass || 'min-h-[48px]'].join(' ')}
               value={local?.[d] || ''}
-              onChange={(e) => setLocal({ ...local, [d]: e.target.value })}
+              onChange={(e) => {
+                const next = { ...local, [d]: e.target.value };
+                setLocal(next);
+                skipSyncRef.current = true;
+                onChangeValue?.(next);
+              }}
               disabled={!editable || parentMode}
             />
           </div>
@@ -1763,9 +1837,16 @@ function DailyTasksCard({
 }
 
 /* 텍스트 카드 */
-function TextFieldCard({ title, fieldKey, rec, visible, editable, onSave, busy, textareaMinHClass, perms, currentRole, parentMode }) {
-  const [txt, setTxt] = useState(rec?.week_record?.[fieldKey] || '');
-  useEffect(() => setTxt(rec?.week_record?.[fieldKey] || ''), [rec, fieldKey]);
+function TextFieldCard({ title, fieldKey, value, visible, editable, onSave, onChangeValue, busy, textareaMinHClass, perms, currentRole, parentMode }) {
+  const [txt, setTxt] = useState(value || '');
+  const skipSyncRef = useRef(false);
+  useEffect(() => {
+    if (skipSyncRef.current) {
+      skipSyncRef.current = false;
+      return;
+    }
+    setTxt(value || '');
+  }, [value]);
 
   const p = getPerm(perms, fieldKey);
   const editRoles = p.roles_edit || [];
@@ -1794,7 +1875,12 @@ function TextFieldCard({ title, fieldKey, rec, visible, editable, onSave, busy, 
       <textarea
         className={['textarea', textareaMinHClass || 'min-h-[70px]'].join(' ')}
         value={txt || ''}
-        onChange={(e) => setTxt(e.target.value)}
+        onChange={(e) => {
+          const next = e.target.value;
+          setTxt(next);
+          skipSyncRef.current = true;
+          onChangeValue?.(next);
+        }}
         disabled={!editable || parentMode}
       />
       {!editable || parentMode ? <div className="mt-2 text-xs text-slate-700">읽기 전용</div> : null}
@@ -1803,7 +1889,7 @@ function TextFieldCard({ title, fieldKey, rec, visible, editable, onSave, busy, 
 }
 
 /* (2) 학생 정보 분리 + 성적/내신 카드 */
-function StudentProfileSection({ studentId, profileJson, userRole, busy, setBusy, setError }) {
+const StudentProfileSection = forwardRef(function StudentProfileSection({ studentId, profileJson, userRole, busy, setBusy, setError }, ref) {
   const isReadOnly = userRole === 'parent';
 
   const defaultProfile = useMemo(
@@ -1872,10 +1958,10 @@ function StudentProfileSection({ studentId, profileJson, userRole, busy, setBusy
     setProfile(next);
   }
 
-  async function saveProfile() {
-    setBusy(true);
+  async function saveProfile({ confirm = true, manageBusy = true } = {}) {
+    if (manageBusy) setBusy(true);
     try {
-      confirmOrThrow('학생 프로필(학생정보/성적) 저장할까요?');
+      if (confirm) confirmOrThrow('학생 프로필(학생정보/성적) 저장할까요?');
       await api(`/api/students/${encodeURIComponent(studentId)}/profile`, {
         method: 'PUT',
         body: { profile_json: JSON.stringify(profile) }
@@ -1883,9 +1969,11 @@ function StudentProfileSection({ studentId, profileJson, userRole, busy, setBusy
     } catch (e) {
       if (e?.message !== '__CANCEL__') setError(e.message || '학생 프로필 저장 실패');
     } finally {
-      setBusy(false);
+      if (manageBusy) setBusy(false);
     }
   }
+
+  useImperativeHandle(ref, () => ({ saveProfile }));
 
   return (
     <div className="space-y-6">

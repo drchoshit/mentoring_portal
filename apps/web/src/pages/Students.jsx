@@ -398,6 +398,75 @@ function StudentDetailModal({ student, onClose, onSaved }) {
   );
 }
 
+function StudentCreateModal({ onClose, onSaved }) {
+  const [externalId, setExternalId] = useState('');
+  const [name, setName] = useState('');
+  const [grade, setGrade] = useState('');
+  const [studentPhone, setStudentPhone] = useState('');
+  const [parentPhone, setParentPhone] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function create() {
+    if (!name.trim()) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api('/api/students', {
+        method: 'POST',
+        body: {
+          external_id: externalId.trim() || null,
+          name: name.trim(),
+          grade: grade.trim(),
+          student_phone: studentPhone.trim(),
+          parent_phone: parentPhone.trim(),
+          schedule: {}
+        }
+      });
+      onSaved?.();
+      onClose();
+    } catch (e) {
+      setError(e.message || '학생 추가에 실패했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="학생 추가" onClose={onClose}>
+      {error ? <div className="text-sm text-red-600">{error}</div> : null}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <label className="block">
+          <div className="text-xs text-slate-600">학생 ID (external_id)</div>
+          <input className="input mt-1" value={externalId} onChange={(e) => setExternalId(e.target.value)} placeholder="비워두면 자동" />
+        </label>
+        <div />
+        <label className="block">
+          <div className="text-xs text-slate-600">이름</div>
+          <input className="input mt-1" value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label className="block">
+          <div className="text-xs text-slate-600">학년</div>
+          <input className="input mt-1" value={grade} onChange={(e) => setGrade(e.target.value)} placeholder="예: 고2" />
+        </label>
+        <label className="block">
+          <div className="text-xs text-slate-600">학생 전화</div>
+          <input className="input mt-1" value={studentPhone} onChange={(e) => setStudentPhone(e.target.value)} placeholder="010-0000-0000" />
+        </label>
+        <label className="block">
+          <div className="text-xs text-slate-600">보호자 전화</div>
+          <input className="input mt-1" value={parentPhone} onChange={(e) => setParentPhone(e.target.value)} placeholder="010-0000-0000" />
+        </label>
+      </div>
+
+      <div className="mt-5 flex justify-end gap-2">
+        <button className="btn-ghost" onClick={onClose}>취소</button>
+        <button className="btn-primary" onClick={create} disabled={busy || !name.trim()}>추가</button>
+      </div>
+    </Modal>
+  );
+}
+
 export default function Students() {
   const { user } = useAuth();
   const nav = useNavigate();
@@ -415,6 +484,7 @@ export default function Students() {
   const [mentorImportMissing, setMentorImportMissing] = useState([]);
   const [mentorImportOpen, setMentorImportOpen] = useState(false);
   const [busyImport, setBusyImport] = useState(false);
+  const [savingAll, setSavingAll] = useState(false);
   const [legacyStudent, setLegacyStudent] = useState(null);
   const [workflowDates, setWorkflowDates] = useState({});
 
@@ -422,6 +492,7 @@ export default function Students() {
   const [detailStudent, setDetailStudent] = useState(null);
   const [calendarStudent, setCalendarStudent] = useState(null);
   const [penaltyStudent, setPenaltyStudent] = useState(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const workflowCardRef = useRef(null);
 
   const role = user?.role;
@@ -495,6 +566,40 @@ export default function Students() {
     loadWorkflowDates(selectedWeek);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWeek, canSeeMentorColumns]);
+
+  async function saveAllStudents() {
+    if (!canImport) {
+      setError('저장 권한이 없습니다.');
+      return;
+    }
+    if (!students.length) return;
+
+    const ok = confirm('전체 저장할까요?');
+    if (!ok) return;
+
+    setSavingAll(true);
+    setError('');
+    try {
+      for (const s of students) {
+        const schedule = safeJson(s?.schedule_json, null);
+        await api(`/api/students/${s.id}`, {
+          method: 'PUT',
+          body: {
+            name: String(s?.name || '').trim(),
+            grade: s?.grade ?? '',
+            student_phone: s?.student_phone ?? '',
+            parent_phone: s?.parent_phone ?? '',
+            schedule
+          }
+        });
+      }
+      await load();
+    } catch (e) {
+      setError(e.message || '전체 저장에 실패했습니다.');
+    } finally {
+      setSavingAll(false);
+    }
+  }
 
   const filtered = useMemo(() => {
     const q = query.trim();
@@ -677,8 +782,19 @@ export default function Students() {
                 제출/공유 현황 이동
               </button>
             ) : null}
+            {canImport ? (
+              <button className="btn-primary whitespace-nowrap px-4" onClick={() => setCreateOpen(true)}>
+                추가
+              </button>
+            ) : null}
             <button className="btn-ghost whitespace-nowrap px-4" onClick={load}>새로고침</button>
+            <button className="btn-primary whitespace-nowrap px-4" onClick={saveAllStudents} disabled={savingAll || !canImport}>
+              전체 저장
+            </button>
           </div>
+        </div>
+        <div className="mt-2 text-xs text-rose-600">
+          *정보 입력 후 반드시 전제 저장 버튼을 눌러주세요.
         </div>
         {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
       </div>
@@ -967,6 +1083,9 @@ export default function Students() {
         </div>
       ) : null}
 
+      {createOpen ? (
+        <StudentCreateModal onClose={() => setCreateOpen(false)} onSaved={load} />
+      ) : null}
       {detailStudent ? (
         <StudentDetailModal student={detailStudent} onClose={() => setDetailStudent(null)} onSaved={load} />
       ) : null}
