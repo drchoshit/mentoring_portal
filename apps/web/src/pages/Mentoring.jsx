@@ -2123,4 +2123,4 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
       </GoldCard>
     </div>
   );
-}
+});
