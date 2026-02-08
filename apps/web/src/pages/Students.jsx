@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../api.js';
+import { api, downloadFile } from '../api.js';
 import { useAuth } from '../auth/AuthProvider.jsx';
 
 const EN_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -484,7 +484,8 @@ export default function Students() {
   const [mentorImportMissing, setMentorImportMissing] = useState([]);
   const [mentorImportOpen, setMentorImportOpen] = useState(false);
   const [busyImport, setBusyImport] = useState(false);
-  const [savingAll, setSavingAll] = useState(false);
+  const [busyBackup, setBusyBackup] = useState(false);
+  const backupInputRef = useRef(null);
   const [legacyStudent, setLegacyStudent] = useState(null);
   const [workflowDates, setWorkflowDates] = useState({});
 
@@ -567,37 +568,40 @@ export default function Students() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWeek, canSeeMentorColumns]);
 
-  async function saveAllStudents() {
-    if (!canImport) {
-      setError('저장 권한이 없습니다.');
-      return;
+  async function downloadBackup() {
+    if (!canImport) return;
+    setError('');
+    setBusyBackup(true);
+    try {
+      const stamp = new Date().toISOString().slice(0, 10);
+      await downloadFile('/api/backups/export', `mentoring_backup_${stamp}.json`);
+    } catch (e) {
+      setError(e.message || '백업 다운로드에 실패했습니다.');
+    } finally {
+      setBusyBackup(false);
     }
-    if (!students.length) return;
+  }
 
-    const ok = confirm('전체 저장할까요?');
+  async function importBackup(file) {
+    if (!file) return;
+    if (!canImport) return;
+
+    const ok = confirm('백업 파일을 불러오면 현재 데이터가 모두 덮어씌워집니다. 진행할까요?');
     if (!ok) return;
 
-    setSavingAll(true);
+    setBusyBackup(true);
     setError('');
     try {
-      for (const s of students) {
-        const schedule = safeJson(s?.schedule_json, null);
-        await api(`/api/students/${s.id}`, {
-          method: 'PUT',
-          body: {
-            name: String(s?.name || '').trim(),
-            grade: s?.grade ?? '',
-            student_phone: s?.student_phone ?? '',
-            parent_phone: s?.parent_phone ?? '',
-            schedule
-          }
-        });
-      }
+      const fd = new FormData();
+      fd.append('file', file);
+      await api('/api/backups/import', { method: 'POST', body: fd });
       await load();
+      alert('불러오기가 완료되었습니다. 페이지를 새로고침해 주세요.');
     } catch (e) {
-      setError(e.message || '전체 저장에 실패했습니다.');
+      setError(e.message || '불러오기에 실패했습니다.');
     } finally {
-      setSavingAll(false);
+      setBusyBackup(false);
+      if (backupInputRef.current) backupInputRef.current.value = '';
     }
   }
 
@@ -788,16 +792,34 @@ export default function Students() {
               </button>
             ) : null}
             <button className="btn-ghost whitespace-nowrap px-4" onClick={load}>새로고침</button>
-            <button className="btn-primary whitespace-nowrap px-4" onClick={saveAllStudents} disabled={savingAll || !canImport}>
-              전체 저장
-            </button>
+            {canImport ? (
+              <>
+                <button className="btn-primary whitespace-nowrap px-4" onClick={downloadBackup} disabled={busyBackup}>
+                  전체 저장
+                </button>
+                <button className="btn-ghost whitespace-nowrap px-4" onClick={() => backupInputRef.current?.click()} disabled={busyBackup}>
+                  불러오기
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
-        <div className="mt-2 text-xs text-rose-600">
-          *정보 입력 후 반드시 전제 저장 버튼을 눌러주세요.
-        </div>
+        {canImport ? (
+          <div className="mt-2 text-xs text-rose-600">
+            *전체 저장은 모든 데이터를 백업 파일로 다운로드합니다.
+          </div>
+        ) : null}
         {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
       </div>
+      {canImport ? (
+        <input
+          ref={backupInputRef}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={(e) => importBackup(e.target.files?.[0] || null)}
+        />
+      ) : null}
 
       {canImport ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

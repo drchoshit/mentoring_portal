@@ -936,13 +936,7 @@ export default function Mentoring() {
               <button className="btn-ghost" onClick={loadAll}>
                 새로고침
               </button>
-              <button className="btn-primary" onClick={saveAll} disabled={busy || parentMode}>
-                전체 저장
-              </button>
             </div>
-          </div>
-          <div className="mt-2 text-xs text-rose-600">
-            *정보 입력 후 반드시 전제 저장 버튼을 눌러주세요.
           </div>
           {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
         </GoldCard>
