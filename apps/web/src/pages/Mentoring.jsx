@@ -807,7 +807,6 @@ export default function Mentoring() {
   }
 
   async function saveAllSubjectsCore({ confirm = true } = {}) {
-    if (parentMode) return;
     if (!subjectRecords.length) return;
     const editableKeys = SUBJECT_FIELD_KEYS.filter((k) => canEdit(perms, user?.role, k));
     if (!editableKeys.length) return;
@@ -835,7 +834,6 @@ export default function Mentoring() {
   }
 
   async function saveAll() {
-    if (parentMode) return;
     if (!weekRecordId) {
       setError('주차를 먼저 선택해 주세요.');
       return;
@@ -936,7 +934,13 @@ export default function Mentoring() {
               <button className="btn-ghost" onClick={loadAll}>
                 새로고침
               </button>
+              <button className="btn-primary" onClick={saveAll} disabled={busy}>
+                전체 저장
+              </button>
             </div>
+          </div>
+          <div className="mt-2 text-xs text-rose-600">
+            *정보 입력 후 반드시 전제 저장 버튼을 눌러주세요.
           </div>
           {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
         </GoldCard>
