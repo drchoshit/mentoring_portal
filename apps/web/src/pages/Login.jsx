@@ -5,8 +5,8 @@ import { useAuth } from '../auth/AuthProvider.jsx';
 export default function Login() {
   const { login } = useAuth();
   const nav = useNavigate();
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin1234');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
