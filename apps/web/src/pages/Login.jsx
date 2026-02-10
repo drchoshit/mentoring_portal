@@ -44,7 +44,6 @@ export default function Login() {
         </form>
 
         <div className="mt-6 text-xs text-slate-500">
-          데모 계정: admin/admin1234 · lead1/pass1234 · mentor1/pass1234 · staff1/pass1234 · parent1/pass1234
         </div>
       </div>
     </div>
