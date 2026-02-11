@@ -398,6 +398,7 @@ export default function Mentoring() {
 
   const [newSubject, setNewSubject] = useState('');
   const [showCalendar, setShowCalendar] = useState(true);
+  const [showLegacyRecordsModal, setShowLegacyRecordsModal] = useState(false);
 
   // 과목 ?�력 보존/?�동?�?�용 draft
   const [subjectDrafts, setSubjectDrafts] = useState({});
@@ -405,6 +406,7 @@ export default function Mentoring() {
   const profileRef = useRef(null);
 
   const parentMode = user?.role === 'parent';
+  const canViewLegacyRecords = ['director', 'admin', 'lead', 'mentor'].includes(String(user?.role || ''));
   const weekRecordId = rec?.week_record?.id;
 
   function setQueryParams(patch) {
@@ -972,6 +974,13 @@ export default function Mentoring() {
 
           {showCalendar ? <WeeklyCalendar schedule={schedule} weekStart={scheduleWeekStart} /> : null}
         </GoldCard>
+        {canViewLegacyRecords ? (
+          <GoldCard className="p-4">
+            <button className="btn-primary" type="button" onClick={() => setShowLegacyRecordsModal(true)}>
+              이전 멘토링 기록 확인하기
+            </button>
+          </GoldCard>
+        ) : null}
 
         {/* (3) 피드 모음: 작성 + 목록 */}
         <GoldCard className="p-5">
@@ -1317,6 +1326,14 @@ export default function Mentoring() {
           </div>
         </GoldCard>
       </div>
+
+      {showLegacyRecordsModal && rec?.student?.id ? (
+        <LegacyMentoringRecordsModal
+          studentId={rec.student.id}
+          studentName={rec.student.name}
+          onClose={() => setShowLegacyRecordsModal(false)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1393,6 +1410,73 @@ function WeeklyCalendar({ schedule, weekStart }) {
             </div>
           );
           })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LegacyMentoringRecordsModal({ studentId, studentName, onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [images, setImages] = useState([]);
+
+  useEffect(() => {
+    let mounted = true;
+    async function load() {
+      setLoading(true);
+      setError('');
+      try {
+        const r = await api(`/api/students/${encodeURIComponent(studentId)}/legacy-images`);
+        if (!mounted) return;
+        setImages(Array.isArray(r?.images) ? r.images : []);
+      } catch (e) {
+        if (!mounted) return;
+        setImages([]);
+        setError(e?.message || '이전 기록 이미지를 불러오지 못했습니다.');
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, [studentId]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="card w-full max-w-6xl bg-white p-5 max-h-[92vh] overflow-hidden">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-base font-semibold text-brand-900">{studentName || ''} 이전 멘토링 기록</div>
+            <div className="text-xs text-slate-600">원장 업로드 이미지 원본 확인</div>
+          </div>
+          <button className="btn-ghost" type="button" onClick={onClose}>
+            닫기
+          </button>
+        </div>
+
+        <div className="mt-4 max-h-[calc(92vh-110px)] overflow-y-auto pr-1">
+          {loading ? (
+            <div className="text-sm text-slate-600">이미지를 불러오는 중입니다.</div>
+          ) : error ? (
+            <div className="text-sm text-red-600">{error}</div>
+          ) : images.length ? (
+            <div className="space-y-4">
+              {images.map((img) => (
+                <div key={img.id} className="rounded-2xl border border-slate-200 bg-slate-50/40 p-3">
+                  <img
+                    src={`data:${img.mime_type};base64,${img.data_base64}`}
+                    alt="legacy mentoring record"
+                    className="mx-auto w-full rounded-xl border border-slate-200 bg-white object-contain max-h-[78vh]"
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-slate-600">등록된 이전 멘토링 기록 이미지가 없습니다.</div>
+          )}
         </div>
       </div>
     </div>

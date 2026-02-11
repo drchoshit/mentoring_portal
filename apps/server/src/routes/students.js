@@ -180,7 +180,7 @@ export default function studentRoutes(db) {
     }
   });
 
-  router.get('/:id/legacy-images', requireRole('director'), (req, res) => {
+  router.get('/:id/legacy-images', requireRole('director', 'admin', 'lead', 'mentor'), (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'Invalid student id' });
