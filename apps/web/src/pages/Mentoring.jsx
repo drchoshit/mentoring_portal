@@ -1420,6 +1420,7 @@ function LegacyMentoringRecordsModal({ studentId, studentName, onClose }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [images, setImages] = useState([]);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
 
   useEffect(() => {
     let mounted = true;
@@ -1444,6 +1445,19 @@ function LegacyMentoringRecordsModal({ studentId, studentName, onClose }) {
     };
   }, [studentId]);
 
+  useEffect(() => {
+    if (selectedIndex < 0) return undefined;
+
+    function onKeyDown(e) {
+      if (e.key === 'Escape') setSelectedIndex(-1);
+    }
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedIndex]);
+
+  const selectedImage = selectedIndex >= 0 ? images[selectedIndex] : null;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="card w-full max-w-6xl bg-white p-5 max-h-[92vh] overflow-hidden">
@@ -1464,13 +1478,20 @@ function LegacyMentoringRecordsModal({ studentId, studentName, onClose }) {
             <div className="text-sm text-red-600">{error}</div>
           ) : images.length ? (
             <div className="space-y-4">
-              {images.map((img) => (
+              {images.map((img, idx) => (
                 <div key={img.id} className="rounded-2xl border border-slate-200 bg-slate-50/40 p-3">
-                  <img
-                    src={`data:${img.mime_type};base64,${img.data_base64}`}
-                    alt="legacy mentoring record"
-                    className="mx-auto w-full rounded-xl border border-slate-200 bg-white object-contain max-h-[78vh]"
-                  />
+                  <button
+                    type="button"
+                    className="block w-full text-left"
+                    aria-label="이미지 전체화면 보기"
+                    onClick={() => setSelectedIndex(idx)}
+                  >
+                    <img
+                      src={`data:${img.mime_type};base64,${img.data_base64}`}
+                      alt="legacy mentoring record"
+                      className="mx-auto w-full rounded-xl border border-slate-200 bg-white object-contain max-h-[78vh] cursor-zoom-in"
+                    />
+                  </button>
                 </div>
               ))}
             </div>
@@ -1479,6 +1500,25 @@ function LegacyMentoringRecordsModal({ studentId, studentName, onClose }) {
           )}
         </div>
       </div>
+
+      {selectedImage ? (
+        <div className="fixed inset-0 z-[60] bg-black/85 p-4 sm:p-6" onClick={() => setSelectedIndex(-1)}>
+          <div className="mx-auto flex h-full w-full max-w-7xl flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-end">
+              <button className="btn-primary" type="button" onClick={() => setSelectedIndex(-1)}>
+                닫기
+              </button>
+            </div>
+            <div className="mt-3 flex-1 overflow-auto">
+              <img
+                src={`data:${selectedImage.mime_type};base64,${selectedImage.data_base64}`}
+                alt="legacy mentoring record full view"
+                className="mx-auto max-h-full w-auto max-w-full rounded-xl border border-white/30 bg-white/10 object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
