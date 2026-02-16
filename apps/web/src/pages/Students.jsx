@@ -468,7 +468,8 @@ function StudentCreateModal({ onClose, onSaved }) {
 }
 
 export default function Students() {
-  const showStudentAddDeleteButtons = false;
+  const showStudentAddButtons = false;
+  const showStudentDeleteButtons = true;
   const { user } = useAuth();
   const nav = useNavigate();
   const [students, setStudents] = useState([]);
@@ -787,7 +788,7 @@ export default function Students() {
                 제출/공유 현황 이동
               </button>
             ) : null}
-            {canImport && showStudentAddDeleteButtons ? (
+            {canImport && showStudentAddButtons ? (
               <button className="btn-primary whitespace-nowrap px-4" onClick={() => setCreateOpen(true)}>
                 추가
               </button>
@@ -980,7 +981,7 @@ export default function Students() {
                         ) : null}
                         <button className="btn-ghost" onClick={() => setCalendarStudent(s)}>캘린더</button>
 
-                        {canSeeDelete && showStudentAddDeleteButtons ? (
+                        {canSeeDelete && showStudentDeleteButtons ? (
                           <button
                             className="btn-ghost text-red-600"
                             onClick={() => deleteStudent(s)}
