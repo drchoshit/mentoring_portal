@@ -43,6 +43,14 @@ function columnAllowsNull(db, table, column) {
   return Number(c.notnull || 0) !== 1;
 }
 
+function tryWriteAudit(db, payload) {
+  try {
+    writeAudit(db, payload);
+  } catch (e) {
+    console.error('writeAudit failed:', e?.message || e);
+  }
+}
+
 export default function studentRoutes(db) {
   const router = express.Router();
 
@@ -219,8 +227,8 @@ export default function studentRoutes(db) {
       }
 
       const ins = db.prepare(`
-        INSERT INTO parent_legacy_images (student_id, mime_type, data_base64, created_at, updated_at)
-        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+        INSERT INTO parent_legacy_images (student_id, mime_type, data_base64, created_at)
+        VALUES (?, ?, ?, datetime('now'))
       `);
 
       const tx = db.transaction(() => {
@@ -232,7 +240,7 @@ export default function studentRoutes(db) {
 
       tx();
 
-      writeAudit(db, { user_id: req.user.id, action: 'create', entity: 'parent_legacy_images', entity_id: id, details: { count: files.length } });
+      tryWriteAudit(db, { user_id: req.user.id, action: 'create', entity: 'parent_legacy_images', entity_id: id, details: { count: files.length } });
       return res.json({ ok: true });
     } catch (e) {
       return res.status(500).json({ error: e?.message || 'Upload failed' });
@@ -240,18 +248,22 @@ export default function studentRoutes(db) {
   });
 
   router.delete('/:id/legacy-images/:imageId', requireRole('director'), (req, res) => {
-    const id = Number(req.params.id);
-    const imageId = Number(req.params.imageId);
-    if (!id || !imageId) return res.status(400).json({ error: 'Invalid id' });
+    try {
+      const id = Number(req.params.id);
+      const imageId = Number(req.params.imageId);
+      if (!id || !imageId) return res.status(400).json({ error: 'Invalid id' });
 
-    const row = db
-      .prepare('SELECT id FROM parent_legacy_images WHERE id=? AND student_id=?')
-      .get(imageId, id);
-    if (!row) return res.status(404).json({ error: 'Not found' });
+      const row = db
+        .prepare('SELECT id FROM parent_legacy_images WHERE id=? AND student_id=?')
+        .get(imageId, id);
+      if (!row) return res.status(404).json({ error: 'Not found' });
 
-    db.prepare('DELETE FROM parent_legacy_images WHERE id=?').run(imageId);
-    writeAudit(db, { user_id: req.user.id, action: 'delete', entity: 'parent_legacy_images', entity_id: imageId, details: { student_id: id } });
-    return res.json({ ok: true });
+      db.prepare('DELETE FROM parent_legacy_images WHERE id=?').run(imageId);
+      tryWriteAudit(db, { user_id: req.user.id, action: 'delete', entity: 'parent_legacy_images', entity_id: imageId, details: { student_id: id } });
+      return res.json({ ok: true });
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Delete failed' });
+    }
   });
 
   // 학생 "프로필(성적/목표대학 등)" 저장

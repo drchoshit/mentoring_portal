@@ -426,6 +426,22 @@ function ensureParentLegacyImagesTable() {
     CREATE INDEX IF NOT EXISTS idx_parent_legacy_images_student_id
       ON parent_legacy_images(student_id);
   `);
+
+  const cols = columnMap('parent_legacy_images');
+  if (!cols.has('created_at')) db.exec(`ALTER TABLE parent_legacy_images ADD COLUMN created_at TEXT;`);
+  if (!cols.has('updated_at')) db.exec(`ALTER TABLE parent_legacy_images ADD COLUMN updated_at TEXT;`);
+
+  db.exec(`
+    UPDATE parent_legacy_images
+    SET created_at = COALESCE(NULLIF(created_at,''), datetime('now'))
+    WHERE created_at IS NULL OR created_at = '';
+  `);
+
+  db.exec(`
+    UPDATE parent_legacy_images
+    SET updated_at = COALESCE(NULLIF(updated_at,''), datetime('now'))
+    WHERE updated_at IS NULL OR updated_at = '';
+  `);
 }
 
 function bootstrap() {
