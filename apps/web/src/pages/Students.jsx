@@ -215,6 +215,54 @@ function MentorImportMissingModal({ items, onClose }) {
   );
 }
 
+function MentorImportResultModal({ result, onClose }) {
+  const status = String(result?.status || 'ok');
+  const items = Array.isArray(result?.missing) ? result.missing : [];
+  const storedCount = Number(result?.storedCount || 0);
+  const message = String(result?.message || '').trim();
+
+  const summaryText = status === 'failed'
+    ? (message || '파일 불러오기에 실패했습니다.')
+    : status === 'partial'
+      ? `일부 학생 매칭 실패: ${items.length}명`
+      : '파일 불러오기가 완료되었습니다.';
+
+  const summaryClass = status === 'failed'
+    ? 'text-red-600'
+    : status === 'partial'
+      ? 'text-amber-700'
+      : 'text-emerald-700';
+
+  return (
+    <Modal title="학생 별 멘토 파일 확인" onClose={onClose}>
+      <div className={`text-sm ${summaryClass}`}>{summaryText}</div>
+      <div className="mt-2 text-xs text-slate-600">
+        반영 학생: {storedCount}명 / 미매칭 학생: {items.length}명
+      </div>
+      {items.length ? (
+        <div className="mt-3 max-h-80 overflow-auto rounded-xl border border-slate-200">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-600 bg-slate-50">
+                <th className="p-2 whitespace-nowrap">ID</th>
+                <th className="p-2 whitespace-nowrap">이름</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={`${it.id}-${it.name}`} className="border-t border-slate-200">
+                  <td className="p-2 whitespace-nowrap">{it.id}</td>
+                  <td className="p-2 whitespace-nowrap">{it.name || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
 function LegacyImagesModal({ student, onClose }) {
   const [loading, setLoading] = useState(true);
   const [images, setImages] = useState([]);
@@ -483,8 +531,7 @@ export default function Students() {
   const [penaltyFile, setPenaltyFile] = useState(null);
   const [mentorFile, setMentorFile] = useState(null);
   const [mentorImportMap, setMentorImportMap] = useState({});
-  const [mentorImportMissing, setMentorImportMissing] = useState([]);
-  const [mentorImportOpen, setMentorImportOpen] = useState(false);
+  const [mentorImportResult, setMentorImportResult] = useState(null);
   const [busyImport, setBusyImport] = useState(false);
   const [busyBackup, setBusyBackup] = useState(false);
   const backupInputRef = useRef(null);
@@ -650,6 +697,7 @@ export default function Students() {
     }
     setBusyImport(true);
     setError('');
+    setMentorImportResult(null);
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -729,9 +777,21 @@ export default function Students() {
       const r = await api('/api/mentor-assignments/import', { method: 'POST', body: fd });
       setMentorImportMap(buildMentorMap(r?.data));
       const missing = Array.isArray(r?.missing) ? r.missing : [];
-      setMentorImportMissing(missing);
-      setMentorImportOpen(missing.length > 0);
+      const storedCount = Array.isArray(r?.data?.assignments) ? r.data.assignments.length : 0;
+      setMentorImportResult({
+        status: missing.length ? 'partial' : 'ok',
+        storedCount,
+        missing,
+        message: ''
+      });
     } catch (e) {
+      const msg = e.message || '학생 별 멘토 파일 불러오기에 실패했습니다.';
+      setMentorImportResult({
+        status: 'failed',
+        storedCount: 0,
+        missing: [],
+        message: msg
+      });
       setError(e.message || '학생 별 멘토 파일을 읽는 데 실패했습니다.');
     } finally {
       setBusyImport(false);
@@ -1124,8 +1184,8 @@ export default function Students() {
       {penaltyStudent ? (
         <PenaltyModal student={penaltyStudent} onClose={() => setPenaltyStudent(null)} />
       ) : null}
-      {mentorImportOpen ? (
-        <MentorImportMissingModal items={mentorImportMissing} onClose={() => setMentorImportOpen(false)} />
+      {mentorImportResult ? (
+        <MentorImportResultModal result={mentorImportResult} onClose={() => setMentorImportResult(null)} />
       ) : null}
       {legacyStudent ? (
         <LegacyImagesModal student={legacyStudent} onClose={() => setLegacyStudent(null)} />
