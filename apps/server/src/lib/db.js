@@ -75,6 +75,25 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
 
+function isSqliteFullError(err) {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const msg = String(err.message || '');
+  return code === 'SQLITE_FULL' || /database or disk is full/i.test(msg);
+}
+
+function runBestEffort(fn, label) {
+  try {
+    return fn();
+  } catch (e) {
+    if (isSqliteFullError(e)) {
+      console.error(`[db bootstrap] Skipped "${label}" due to SQLITE_FULL`);
+      return null;
+    }
+    throw e;
+  }
+}
+
 function columnMap(table) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   const m = new Map();
@@ -334,25 +353,25 @@ function ensurePermissionAndConfigTables() {
   // Legacy DB compatibility: older tables may miss audit timestamp columns.
   {
     const fpCols = new Set(db.prepare(`PRAGMA table_info(field_permissions)`).all().map((r) => r.name));
-    if (!fpCols.has('created_at')) db.exec(`ALTER TABLE field_permissions ADD COLUMN created_at TEXT;`);
-    if (!fpCols.has('updated_at')) db.exec(`ALTER TABLE field_permissions ADD COLUMN updated_at TEXT;`);
-    db.exec(`
+    if (!fpCols.has('created_at')) runBestEffort(() => db.exec(`ALTER TABLE field_permissions ADD COLUMN created_at TEXT;`), 'field_permissions add created_at');
+    if (!fpCols.has('updated_at')) runBestEffort(() => db.exec(`ALTER TABLE field_permissions ADD COLUMN updated_at TEXT;`), 'field_permissions add updated_at');
+    runBestEffort(() => db.exec(`
       UPDATE field_permissions
       SET created_at = COALESCE(NULLIF(created_at,''), datetime('now')),
           updated_at = COALESCE(NULLIF(updated_at,''), datetime('now'))
       WHERE created_at IS NULL OR created_at='' OR updated_at IS NULL OR updated_at='';
-    `);
+    `), 'field_permissions timestamp backfill');
   }
   {
     const pcCols = new Set(db.prepare(`PRAGMA table_info(print_config)`).all().map((r) => r.name));
-    if (!pcCols.has('created_at')) db.exec(`ALTER TABLE print_config ADD COLUMN created_at TEXT;`);
-    if (!pcCols.has('updated_at')) db.exec(`ALTER TABLE print_config ADD COLUMN updated_at TEXT;`);
-    db.exec(`
+    if (!pcCols.has('created_at')) runBestEffort(() => db.exec(`ALTER TABLE print_config ADD COLUMN created_at TEXT;`), 'print_config add created_at');
+    if (!pcCols.has('updated_at')) runBestEffort(() => db.exec(`ALTER TABLE print_config ADD COLUMN updated_at TEXT;`), 'print_config add updated_at');
+    runBestEffort(() => db.exec(`
       UPDATE print_config
       SET created_at = COALESCE(NULLIF(created_at,''), datetime('now')),
           updated_at = COALESCE(NULLIF(updated_at,''), datetime('now'))
       WHERE created_at IS NULL OR created_at='' OR updated_at IS NULL OR updated_at='';
-    `);
+    `), 'print_config timestamp backfill');
   }
 
   const defaults = [
@@ -375,7 +394,10 @@ function ensurePermissionAndConfigTables() {
     VALUES (?, ?, ?, ?, ?)
   `);
   for (const row of defaults) {
-    upsert.run(row.key, row.label, JSON.stringify(row.view), JSON.stringify(row.edit), row.parent ? 1 : 0);
+    runBestEffort(
+      () => upsert.run(row.key, row.label, JSON.stringify(row.view), JSON.stringify(row.edit), row.parent ? 1 : 0),
+      `field_permissions seed ${row.key}`
+    );
   }
 }
 
@@ -428,20 +450,20 @@ function ensureParentLegacyImagesTable() {
   `);
 
   const cols = columnMap('parent_legacy_images');
-  if (!cols.has('created_at')) db.exec(`ALTER TABLE parent_legacy_images ADD COLUMN created_at TEXT;`);
-  if (!cols.has('updated_at')) db.exec(`ALTER TABLE parent_legacy_images ADD COLUMN updated_at TEXT;`);
+  if (!cols.has('created_at')) runBestEffort(() => db.exec(`ALTER TABLE parent_legacy_images ADD COLUMN created_at TEXT;`), 'parent_legacy_images add created_at');
+  if (!cols.has('updated_at')) runBestEffort(() => db.exec(`ALTER TABLE parent_legacy_images ADD COLUMN updated_at TEXT;`), 'parent_legacy_images add updated_at');
 
-  db.exec(`
+  runBestEffort(() => db.exec(`
     UPDATE parent_legacy_images
     SET created_at = COALESCE(NULLIF(created_at,''), datetime('now'))
     WHERE created_at IS NULL OR created_at = '';
-  `);
+  `), 'parent_legacy_images created_at backfill');
 
-  db.exec(`
+  runBestEffort(() => db.exec(`
     UPDATE parent_legacy_images
     SET updated_at = COALESCE(NULLIF(updated_at,''), datetime('now'))
     WHERE updated_at IS NULL OR updated_at = '';
-  `);
+  `), 'parent_legacy_images updated_at backfill');
 }
 
 function bootstrap() {
