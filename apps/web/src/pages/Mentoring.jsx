@@ -77,12 +77,17 @@ function fmtMD(d) {
   return `${m}/${dd}`;
 }
 
+function toRoundLabel(label) {
+  return String(label || '').replace(/주차/g, '회차');
+}
+
 function fmtWeekLabel(week) {
   if (!week) return '';
   const start = parseDateOnly(week.start_date);
   const end = parseDateOnly(week.end_date);
-  if (start && end) return `${week.label} (${fmtMD(start)}~${fmtMD(end)})`;
-  return week.label || '';
+  const label = toRoundLabel(week.label);
+  if (start && end) return `${label} (${fmtMD(start)}~${fmtMD(end)})`;
+  return label || '';
 }
 
 function normalizeLastHwTask(raw) {
@@ -467,7 +472,7 @@ export default function Mentoring() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId]);
 
-  // subjectDrafts 초기??병합: 주차 ?�는 ?�생??바뀌면 reset, 같�? 범위�??�규 과목�?추�?
+  // subjectDrafts 초기??병합: 회차 ?�는 ?�생??바뀌면 reset, 같�? 범위�??�규 과목�?추�?
   useEffect(() => {
     if (!rec?.subject_records) return;
     const scopeKey = `${studentId}:${weekId || ''}`;
@@ -520,7 +525,7 @@ export default function Mentoring() {
 
   async function openPrintPage() {
     if (!weekId) {
-      setError('주차를 먼저 선택해 주세요.');
+      setError('회차를 먼저 선택해 주세요.');
       return;
     }
 
@@ -654,7 +659,7 @@ export default function Mentoring() {
   async function doShare() {
     setBusy(true);
     try {
-      confirmOrThrow('해당 주차 기록을 학부모와 공유할까요?');
+      confirmOrThrow('해당 회차 기록을 학부모와 공유할까요?');
       if (weekRecordId) {
         await api(`/api/mentoring/week-record/${weekRecordId}`, {
           method: 'PUT',
@@ -837,7 +842,7 @@ export default function Mentoring() {
 
   async function saveAll() {
     if (!weekRecordId) {
-      setError('주차를 먼저 선택해 주세요.');
+      setError('회차를 먼저 선택해 주세요.');
       return;
     }
 
@@ -926,7 +931,7 @@ export default function Mentoring() {
               <select className="input w-44" value={weekId} onChange={(e) => changeWeek(e.target.value)}>
                 {weeks.map((w) => (
                   <option key={w.id} value={w.id}>
-                    {fmtWeekLabel(w) || w.label}
+                    {fmtWeekLabel(w) || toRoundLabel(w.label)}
                   </option>
                 ))}
               </select>
@@ -1230,7 +1235,7 @@ export default function Mentoring() {
               <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm">
                 <div>
                   <div className="text-sm font-semibold text-slate-900">학부모 공유</div>
-                  <div className="text-xs text-slate-700">해당 주차 기록을 학부모가 열람 가능하도록 전환</div>
+                  <div className="text-xs text-slate-700">해당 회차 기록을 학부모가 열람 가능하도록 전환</div>
                 </div>
                 <button className="btn-primary" disabled={busy} onClick={doShare}>
                   공유
@@ -1320,7 +1325,7 @@ export default function Mentoring() {
                 rel="noreferrer"
                 href={`/students/${encodeURIComponent(studentId)}/mentoring?week=${encodeURIComponent(w.id)}`}
               >
-                {w.label}
+                {toRoundLabel(w.label)}
               </a>
             ))}
           </div>
@@ -2104,7 +2109,7 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-brand-900">학생 정보</div>
-            <div className="text-xs text-slate-700">학생 단위 정보(주차와 무관)</div>
+            <div className="text-xs text-slate-700">학생 단위 정보(회차와 무관)</div>
           </div>
           <button className="btn-primary" disabled={busy || isReadOnly} onClick={saveProfile}>
             저장
@@ -2147,7 +2152,7 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-brand-900">성적/내신</div>
-            <div className="text-xs text-slate-700">학생 단위 정보(주차와 무관)</div>
+            <div className="text-xs text-slate-700">학생 단위 정보(회차와 무관)</div>
           </div>
           <button className="btn-primary" disabled={busy || isReadOnly} onClick={saveProfile}>
             저장

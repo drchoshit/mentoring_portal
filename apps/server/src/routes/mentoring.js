@@ -81,7 +81,7 @@ export default function mentoringRoutes(db) {
     const week_id = Number(req.query.weekId);
     if (!student_id || !week_id) return res.status(400).json({ error: 'Missing studentId/weekId' });
 
-    // parent는 본인 student만 접근 가능 + 공유된 주차만 열람
+    // parent는 본인 student만 접근 가능 + 공유된 회차만 열람
     if (req.user.role === 'parent') {
       try {
         assertParentOwnsStudent(req, student_id);

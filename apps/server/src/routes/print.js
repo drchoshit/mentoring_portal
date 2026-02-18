@@ -306,7 +306,7 @@ export default function printRoutes(db) {
               <th>총괄멘토</th><td>${esc(studentInfo.lead_name || '-')}</td>
             </tr>
             <tr>
-              <th>주차</th><td>${esc(week.label || '-')}</td>
+              <th>회차</th><td>${esc(String(week.label || '-').replace(/주차/g, '회차'))}</td>
               <th>기간</th><td>${esc(`${week.start_date || ''} ~ ${week.end_date || ''}`)}</td>
               <th>출력일</th><td>${esc(fmtDate(new Date().toISOString()))}</td>
             </tr>

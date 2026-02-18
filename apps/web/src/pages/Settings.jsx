@@ -13,6 +13,10 @@ const ROLE_LABEL = {
 
 const DEFAULT_PARENT_MENTOR_NOTICE = '멘토 및 멘토링 요일은 학생의 일정에 따라 변경될 수 있습니다.';
 
+function toRoundLabel(label) {
+  return String(label || '').replace(/주차/g, '회차');
+}
+
 function Section({ title, children }) {
   return (
     <div className="card p-5">
@@ -36,7 +40,7 @@ export default function Settings() {
             { k: 'admin_users', label: '관리자 권한' },
             { k: 'parent_users', label: '유저 권한' },
             { k: 'fields', label: '필드 권한' },
-            { k: 'weeks', label: '주차' },
+            { k: 'weeks', label: '회차' },
             { k: 'parent_view', label: '학부모 화면' },
             { k: 'print', label: '인쇄 설정' },
             { k: 'backup', label: '백업' }
@@ -509,7 +513,7 @@ function WeeksTab() {
     setError('');
     try {
       const r = await api('/api/weeks');
-      setWeeks(r.weeks || []);
+      setWeeks((r.weeks || []).map((w) => ({ ...w, label: toRoundLabel(w.label) })));
     } catch (e) {
       setError(e.message);
     }
@@ -519,7 +523,7 @@ function WeeksTab() {
   async function create(e) {
     e.preventDefault();
     try {
-      await api('/api/weeks', { method: 'POST', body: form });
+      await api('/api/weeks', { method: 'POST', body: { ...form, label: toRoundLabel(form.label) } });
       setForm({ label: '', start_date: '', end_date: '' });
       await load();
     } catch (e) {
@@ -529,7 +533,9 @@ function WeeksTab() {
 
   async function update(w, patch) {
     try {
-      await api(`/api/weeks/${w.id}`, { method: 'PUT', body: { ...w, ...patch } });
+      const next = { ...w, ...patch };
+      if (Object.prototype.hasOwnProperty.call(next, 'label')) next.label = toRoundLabel(next.label);
+      await api(`/api/weeks/${w.id}`, { method: 'PUT', body: next });
       await load();
     } catch (e) {
       setError(e.message);
@@ -537,12 +543,12 @@ function WeeksTab() {
   }
 
   return (
-    <Section title="주차 설정">
+    <Section title="회차 설정">
       {error ? <div className="text-sm text-red-600">{error}</div> : null}
       <form className="grid grid-cols-12 gap-3" onSubmit={create}>
         <div className="col-span-12 md:col-span-4">
-          <label className="text-xs text-slate-600">주차 이름</label>
-          <input className="input mt-1" value={form.label} onChange={(e)=>setForm({ ...form, label: e.target.value })} placeholder="1주차" />
+          <label className="text-xs text-slate-600">회차 이름</label>
+          <input className="input mt-1" value={form.label} onChange={(e)=>setForm({ ...form, label: toRoundLabel(e.target.value) })} placeholder="1회차" />
         </div>
         <div className="col-span-12 md:col-span-3">
           <label className="text-xs text-slate-600">시작일</label>
@@ -571,7 +577,7 @@ function WeeksTab() {
             {weeks.map(w => (
               <tr key={w.id} className="border-t border-slate-200">
                 <td className="py-2">{w.id}</td>
-                <td><input className="input" value={w.label} onChange={(e)=>update(w, { label: e.target.value })} /></td>
+                <td><input className="input" value={w.label} onChange={(e)=>update(w, { label: toRoundLabel(e.target.value) })} /></td>
                 <td><input className="input" value={w.start_date || ''} onChange={(e)=>update(w, { start_date: e.target.value })} /></td>
                 <td><input className="input" value={w.end_date || ''} onChange={(e)=>update(w, { end_date: e.target.value })} /></td>
               </tr>

@@ -42,6 +42,10 @@ function fmtYMD(value) {
   return `${y}-${m}-${dd}`;
 }
 
+function toRoundLabel(label) {
+  return String(label || '').replace(/주차/g, '회차');
+}
+
 function Modal({ title, onClose, children }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -734,7 +738,7 @@ export default function Students() {
         const skippedNoStudent = Number(result?.skippedNoStudent || 0);
         const skippedNoWeek = Number(result?.skippedNoWeek || 0);
         if (inserted === 0) {
-          setError(`벌점 반영 0건 (학생 매칭 실패 ${skippedNoStudent}건, 주차 매칭 실패 ${skippedNoWeek}건). 파일의 학생 ID/이름이 현재 학생 목록과 같은지 확인해주세요.`);
+          setError(`벌점 반영 0건 (학생 매칭 실패 ${skippedNoStudent}건, 회차 매칭 실패 ${skippedNoWeek}건). 파일의 학생 ID/이름이 현재 학생 목록과 같은지 확인해주세요.`);
         }
       }
     } catch (e) {
@@ -889,7 +893,7 @@ export default function Students() {
   async function bulkShareWithParent() {
     if (!canBulkShareParents) return;
     if (!selectedWeek) {
-      alert('먼저 주차를 선택해 주세요.');
+      alert('먼저 회차를 선택해 주세요.');
       return;
     }
     const targetIds = Array.from(
@@ -904,7 +908,7 @@ export default function Students() {
       return;
     }
     const ok = confirm(
-      `${selectedWeekObj?.label || '선택 주차'} 기준으로 선택한 ${targetIds.length}명의 멘토링 기록을 학부모에게 공유할까요?`
+      `${toRoundLabel(selectedWeekObj?.label || '선택 회차')} 기준으로 선택한 ${targetIds.length}명의 멘토링 기록을 학부모에게 공유할까요?`
     );
     if (!ok) return;
 
@@ -938,7 +942,7 @@ export default function Students() {
   async function bulkUnshareWithParent() {
     if (!canBulkShareParents) return;
     if (!selectedWeek) {
-      alert('먼저 주차를 선택해 주세요.');
+      alert('먼저 회차를 선택해 주세요.');
       return;
     }
     const targetIds = collectSelectedWorkflowIds();
@@ -947,7 +951,7 @@ export default function Students() {
       return;
     }
     const ok = confirm(
-      `${selectedWeekObj?.label || '선택 주차'} 기준으로 선택한 ${targetIds.length}명의 학부모 공유를 취소할까요?`
+      `${toRoundLabel(selectedWeekObj?.label || '선택 회차')} 기준으로 선택한 ${targetIds.length}명의 학부모 공유를 취소할까요?`
     );
     if (!ok) return;
 
@@ -984,11 +988,11 @@ export default function Students() {
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-3">
           <div>
             <div className="text-lg font-semibold text-brand-800">학생</div>
-            <div className="text-sm text-slate-600">학생을 선택해 주차별 멘토링 기록으로 이동합니다.</div>
+            <div className="text-sm text-slate-600">학생을 선택해 회차별 멘토링 기록으로 이동합니다.</div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <select className="input w-40" value={selectedWeek} onChange={(e)=>setSelectedWeek(e.target.value)}>
-              {(weeks || []).map(w => <option key={w.id} value={w.id}>{w.label}</option>)}
+              {(weeks || []).map(w => <option key={w.id} value={w.id}>{toRoundLabel(w.label)}</option>)}
             </select>
             <input className="input w-64" placeholder="검색(이름/ID)" value={query} onChange={(e)=>setQuery(e.target.value)} />
             {canSeeMentorColumns ? (
@@ -1251,7 +1255,7 @@ export default function Students() {
                 ) : null}
               </div>
             </div>
-            {selectedWeekObj ? <div className="text-xs text-slate-600">{selectedWeekObj.label}</div> : null}
+            {selectedWeekObj ? <div className="text-xs text-slate-600">{toRoundLabel(selectedWeekObj.label)}</div> : null}
           </div>
 
           <div className="mt-3 overflow-x-auto rounded-2xl border border-slate-200 bg-white/90 shadow-inner">
