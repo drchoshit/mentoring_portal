@@ -77,7 +77,7 @@ export default function backupRoutes(db) {
 
   router.post('/prune', (req, res) => {
     try {
-      const modeRaw = String(req.body?.mode || 'latest').toLowerCase();
+      const modeRaw = String(req.body?.mode || 'oldest').toLowerCase();
       const mode = modeRaw === 'oldest' ? 'oldest' : 'latest';
       const ratioRaw = Number(req.body?.ratio ?? 0.5);
       const ratio = Number.isFinite(ratioRaw) ? Math.min(0.95, Math.max(0.05, ratioRaw)) : 0.5;

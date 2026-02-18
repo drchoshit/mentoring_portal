@@ -52,7 +52,7 @@ function pruneBackupFilesByCount(keepMax = BACKUP_KEEP_MAX) {
   return targets;
 }
 
-function pruneLatestHalfBackups(keepMin = 1) {
+function pruneOldestHalfBackups(keepMin = 1) {
   const files = listBackupFiles();
   if (!files.length) return [];
 
@@ -61,7 +61,7 @@ function pruneLatestHalfBackups(keepMin = 1) {
   if (files.length - deleteCount < keepMin) deleteCount = Math.max(0, files.length - keepMin);
   if (deleteCount < 1) return [];
 
-  const targets = files.slice(0, deleteCount); // 최신 파일부터 삭제(요청 정책)
+  const targets = files.slice(files.length - deleteCount); // 오래된 파일부터 삭제
   for (const file of targets) {
     try { fs.unlinkSync(path.join(BACKUP_DIR, file)); } catch {}
   }
@@ -79,7 +79,7 @@ try {
   initDb();
 } catch (e) {
   if (!isSqliteFullError(e)) throw e;
-  const removed = pruneLatestHalfBackups(1);
+  const removed = pruneOldestHalfBackups(1);
   console.error(`[startup] SQLITE_FULL detected. Removed ${removed.length} backup file(s), then retrying initDb.`);
   if (!removed.length) throw e;
   initDb();

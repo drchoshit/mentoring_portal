@@ -722,8 +722,8 @@ function BackupTab() {
     }
   }
 
-  async function pruneLatestHalf() {
-    const ok = confirm('최신 백업의 50%를 삭제할까요? 이 작업은 되돌릴 수 없습니다.');
+  async function pruneOldestHalf() {
+    const ok = confirm('가장 오래된 백업의 50%를 삭제할까요? 이 작업은 되돌릴 수 없습니다.');
     if (!ok) return;
     setError('');
     setStatus('');
@@ -731,7 +731,7 @@ function BackupTab() {
     try {
       const r = await api('/api/backups/prune', {
         method: 'POST',
-        body: { mode: 'latest', ratio: 0.5, keep_min: 1 }
+        body: { mode: 'oldest', ratio: 0.5, keep_min: 1 }
       });
       setStatus(`정리 완료: ${r.deleted_count || 0}개 삭제`);
       await load();
@@ -767,7 +767,7 @@ function BackupTab() {
 
       <div className="mt-2 flex flex-wrap gap-2">
         <button className="btn-primary" onClick={backupNow} disabled={busy}>지금 백업</button>
-        <button className="btn-ghost" onClick={pruneLatestHalf} disabled={busy}>최신 50% 삭제</button>
+        <button className="btn-ghost" onClick={pruneOldestHalf} disabled={busy}>오래된 50% 삭제</button>
         <button className="btn-ghost" onClick={load} disabled={busy}>목록 새로고침</button>
       </div>
 
