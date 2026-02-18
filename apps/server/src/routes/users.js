@@ -299,6 +299,8 @@ export default function userRoutes(db) {
       SELECT
         s.external_id AS username,
         s.name,
+        s.student_phone,
+        s.parent_phone,
         pc.password_plain AS password,
         'parent' AS role,
         COALESCE(u.is_active, 1) AS is_active
@@ -313,6 +315,8 @@ export default function userRoutes(db) {
       users: rows.map(r => ({
         username: r.username ?? '',
         name: r.name ?? '',
+        student_phone: r.student_phone ?? '',
+        parent_phone: r.parent_phone ?? '',
         password: r.password ?? '',
         role: 'parent',
         is_active: Number(r.is_active ?? 1)
@@ -330,6 +334,8 @@ export default function userRoutes(db) {
       SELECT
         s.external_id AS username,
         s.name,
+        s.student_phone,
+        s.parent_phone,
         pc.password_plain AS password,
         COALESCE(u.is_active, 1) AS is_active
       FROM students s
@@ -338,13 +344,15 @@ export default function userRoutes(db) {
       ORDER BY s.id
     `).all();
 
-    const header = ['이름', 'ID(username)', '비밀번호', '역할', '활성'];
+    const header = ['이름', 'ID(username)', '학생 연락처', '학부모 연락처', '비밀번호', '역할', '활성'];
     const lines = [header.join(',')];
 
     for (const r of rows) {
       lines.push([
         escapeCsv(r.name ?? ''),
         escapeCsv(r.username ?? ''),
+        escapeCsv(r.student_phone ?? ''),
+        escapeCsv(r.parent_phone ?? ''),
         escapeCsv(r.password ?? ''),
         escapeCsv('parent'),
         escapeCsv(Number(r.is_active ?? 1) ? 'on' : 'off')
