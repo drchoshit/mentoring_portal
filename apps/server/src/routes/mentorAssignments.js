@@ -68,6 +68,45 @@ function parsePayload(payload) {
   return null;
 }
 
+function normalizedIdCandidates(rawId) {
+  const out = [];
+  const add = (v) => {
+    const s = String(v ?? '').trim();
+    if (!s) return;
+    if (!out.includes(s)) out.push(s);
+  };
+
+  add(rawId);
+
+  const key = String(rawId ?? '').trim();
+  if (!key) return out;
+
+  // Some JSON exporters stringify integer-like numbers as "... .0".
+  if (/^-?\d+\.0+$/.test(key)) {
+    add(key.replace(/\.0+$/, ''));
+  }
+
+  const asNumber = Number(key);
+  if (Number.isFinite(asNumber)) {
+    add(String(asNumber));
+    if (Number.isInteger(asNumber)) add(String(asNumber));
+  }
+
+  return out;
+}
+
+function buildStudentsByName(db) {
+  const map = new Map();
+  const rows = db.prepare('SELECT id, external_id, name FROM students WHERE name IS NOT NULL AND name != ?').all('');
+  rows.forEach((row) => {
+    const key = String(row?.name || '').trim();
+    if (!key) return;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(row);
+  });
+  return map;
+}
+
 export default function mentorAssignmentsRoutes(db) {
   const router = express.Router();
 
@@ -90,6 +129,7 @@ export default function mentorAssignmentsRoutes(db) {
     const rows = parsed.students || [];
     const findByExternal = db.prepare('SELECT id, external_id, name FROM students WHERE external_id=?');
     const findById = db.prepare('SELECT id, external_id, name FROM students WHERE id=?');
+    const studentsByName = buildStudentsByName(db);
 
     const byStudentId = new Map();
     const missing = [];
@@ -102,9 +142,30 @@ export default function mentorAssignmentsRoutes(db) {
       const key = String(rawId).trim();
       if (!key) return;
 
-      let student = findByExternal.get(key);
-      if (!student && String(Number(key)) === key) {
-        student = findById.get(Number(key));
+      let student = null;
+      const idCandidates = normalizedIdCandidates(rawId);
+
+      for (const candidate of idCandidates) {
+        student = findByExternal.get(candidate);
+        if (student) break;
+      }
+
+      if (!student) {
+        for (const candidate of idCandidates) {
+          const numeric = Number(candidate);
+          if (!Number.isSafeInteger(numeric)) continue;
+          if (String(numeric) !== candidate) continue;
+          student = findById.get(numeric);
+          if (student) break;
+        }
+      }
+
+      if (!student) {
+        const nameKey = String(row?.name || '').trim();
+        const nameMatches = nameKey ? (studentsByName.get(nameKey) || []) : [];
+        if (nameMatches.length === 1) {
+          student = nameMatches[0];
+        }
       }
 
       if (!student) {
