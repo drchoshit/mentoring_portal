@@ -339,6 +339,97 @@ export default function mentoringRoutes(db) {
     }
   });
 
+  router.post('/workflow/unshare-with-parent/bulk', (req, res) => {
+    try {
+      const { student_ids, week_id } = req.body || {};
+      const weekId = Number(week_id);
+      if (!weekId) return res.status(400).json({ error: 'Missing week_id' });
+      if (req.user.role !== 'director') {
+        return res.status(403).json({ error: 'Only director can bulk unshare' });
+      }
+
+      const requested = Array.isArray(student_ids)
+        ? Array.from(
+            new Set(
+              student_ids
+                .map((v) => Number(v))
+                .filter((n) => Number.isInteger(n) && n > 0)
+            )
+          )
+        : [];
+      if (!requested.length) {
+        return res.status(400).json({ error: 'Missing student_ids' });
+      }
+
+      const actor = db
+        .prepare('SELECT id FROM users WHERE id=?')
+        .get(Number(req.user.id));
+      const actorId = actor?.id ? Number(actor.id) : null;
+
+      const findStudent = db.prepare('SELECT id FROM students WHERE id=?');
+      const findWeekRecord = db.prepare(
+        'SELECT id, shared_with_parent FROM week_records WHERE student_id=? AND week_id=?'
+      );
+      const markUnshared = db.prepare(
+        "UPDATE week_records SET shared_with_parent=0, shared_at=NULL, updated_at=datetime('now'), updated_by=? WHERE student_id=? AND week_id=?"
+      );
+
+      const updated = [];
+      const skipped = [];
+      const tx = db.transaction(() => {
+        for (const studentId of requested) {
+          if (!findStudent.get(studentId)?.id) {
+            skipped.push({ student_id: studentId, reason: 'student_not_found' });
+            continue;
+          }
+
+          const weekRow = findWeekRecord.get(studentId, weekId);
+          if (!weekRow?.id) {
+            skipped.push({ student_id: studentId, reason: 'week_record_not_found' });
+            continue;
+          }
+          if (Number(weekRow.shared_with_parent) !== 1) {
+            skipped.push({ student_id: studentId, reason: 'already_unshared' });
+            continue;
+          }
+
+          const info = markUnshared.run(actorId, studentId, weekId);
+          if (info.changes) {
+            updated.push(studentId);
+          } else {
+            skipped.push({ student_id: studentId, reason: 'not_updated' });
+          }
+        }
+      });
+      tx();
+
+      writeAudit(db, {
+        user_id: req.user.id,
+        action: 'workflow',
+        entity: 'unshare_with_parent_bulk',
+        details: {
+          week_id: weekId,
+          requested_count: requested.length,
+          updated_count: updated.length,
+          skipped_count: skipped.length,
+          student_ids: requested
+        }
+      });
+
+      return res.json({
+        ok: true,
+        week_id: weekId,
+        requested_count: requested.length,
+        updated_count: updated.length,
+        skipped_count: skipped.length,
+        updated,
+        skipped
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Bulk unshare failed' });
+    }
+  });
+
   router.post('/workflow/submit-to-director', (req, res) => {
     const { student_id, week_id, reason } = req.body || {};
     if (!student_id || !week_id) return res.status(400).json({ error: 'Missing student_id/week_id' });

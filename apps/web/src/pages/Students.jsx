@@ -876,6 +876,16 @@ export default function Students() {
     });
   }
 
+  function collectSelectedWorkflowIds() {
+    return Array.from(
+      new Set(
+        (selectedWorkflowStudentIds || [])
+          .map((id) => Number(id))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      )
+    );
+  }
+
   async function bulkShareWithParent() {
     if (!canBulkShareParents) return;
     if (!selectedWeek) {
@@ -920,6 +930,49 @@ export default function Students() {
       const msg = e.message || '학부모 공유 처리 중 오류가 발생했습니다.';
       setError(msg);
       alert(`학부모 공유 처리 실패\n${msg}`);
+    } finally {
+      setBulkSharingParents(false);
+    }
+  }
+
+  async function bulkUnshareWithParent() {
+    if (!canBulkShareParents) return;
+    if (!selectedWeek) {
+      alert('먼저 주차를 선택해 주세요.');
+      return;
+    }
+    const targetIds = collectSelectedWorkflowIds();
+    if (!targetIds.length) {
+      alert('학부모 공유를 취소할 학생을 먼저 체크해 주세요.');
+      return;
+    }
+    const ok = confirm(
+      `${selectedWeekObj?.label || '선택 주차'} 기준으로 선택한 ${targetIds.length}명의 학부모 공유를 취소할까요?`
+    );
+    if (!ok) return;
+
+    setBulkSharingParents(true);
+    setError('');
+    try {
+      const r = await api('/api/mentoring/workflow/unshare-with-parent/bulk', {
+        method: 'POST',
+        body: {
+          week_id: Number(selectedWeek),
+          student_ids: targetIds
+        }
+      });
+      await loadWorkflowDates(selectedWeek);
+      setSelectedWorkflowStudentIds([]);
+
+      const updatedCount = Array.isArray(r?.updated) ? r.updated.length : Number(r?.updated_count || 0);
+      const skippedCount = Array.isArray(r?.skipped) ? r.skipped.length : Number(r?.skipped_count || 0);
+      alert(
+        `학부모 공유 취소 완료\n선택: ${targetIds.length}명\n취소 완료: ${updatedCount}명\n건너뜀: ${skippedCount}명`
+      );
+    } catch (e) {
+      const msg = e.message || '학부모 공유 취소 중 오류가 발생했습니다.';
+      setError(msg);
+      alert(`학부모 공유 취소 실패\n${msg}`);
     } finally {
       setBulkSharingParents(false);
     }
@@ -1183,6 +1236,13 @@ export default function Students() {
                       disabled={bulkSharingParents || !selectedWeek || !selectedWorkflowStudentIds.length}
                     >
                       {bulkSharingParents ? '공유 중...' : '학부모 공유'}
+                    </button>
+                    <button
+                      className="btn-ghost whitespace-nowrap px-3 py-1.5 text-xs"
+                      onClick={bulkUnshareWithParent}
+                      disabled={bulkSharingParents || !selectedWeek || !selectedWorkflowStudentIds.length}
+                    >
+                      {bulkSharingParents ? '처리 중...' : '공유 취소'}
                     </button>
                     <span className="text-xs text-slate-500">
                       선택 {selectedWorkflowStudentIds.length}명
