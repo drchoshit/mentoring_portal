@@ -537,6 +537,8 @@ export default function Students() {
   const backupInputRef = useRef(null);
   const [legacyStudent, setLegacyStudent] = useState(null);
   const [workflowDates, setWorkflowDates] = useState({});
+  const [selectedWorkflowStudentIds, setSelectedWorkflowStudentIds] = useState([]);
+  const [bulkSharingParents, setBulkSharingParents] = useState(false);
 
   const [penaltySummary, setPenaltySummary] = useState({});
   const [detailStudent, setDetailStudent] = useState(null);
@@ -555,6 +557,7 @@ export default function Students() {
   const canSeePenalty = !isMentor;
   const canSeeId = !isMentor;
   const canSeeMentorColumns = role === 'director' || role === 'admin';
+  const canBulkShareParents = role === 'director';
 
   function jumpToWorkflowStatus() {
     workflowCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -686,9 +689,32 @@ export default function Students() {
     () => (weeks || []).find((w) => String(w.id) === String(selectedWeek)),
     [weeks, selectedWeek]
   );
+  const selectedWorkflowSet = useMemo(
+    () => new Set((selectedWorkflowStudentIds || []).map((id) => String(id))),
+    [selectedWorkflowStudentIds]
+  );
+  const filteredWorkflowStudentIds = useMemo(
+    () => (filtered || []).map((s) => String(s.id)),
+    [filtered]
+  );
+  const selectedWorkflowCount = useMemo(
+    () => filteredWorkflowStudentIds.filter((id) => selectedWorkflowSet.has(id)).length,
+    [filteredWorkflowStudentIds, selectedWorkflowSet]
+  );
+  const allWorkflowSelected = filteredWorkflowStudentIds.length > 0
+    && selectedWorkflowCount === filteredWorkflowStudentIds.length;
   const selectedWeekRangeText = selectedWeekObj?.start_date && selectedWeekObj?.end_date
     ? `${selectedWeekObj.start_date}~${selectedWeekObj.end_date}`
     : '';
+
+  useEffect(() => {
+    setSelectedWorkflowStudentIds([]);
+  }, [selectedWeek]);
+
+  useEffect(() => {
+    const validIds = new Set((students || []).map((s) => String(s.id)));
+    setSelectedWorkflowStudentIds((prev) => prev.filter((id) => validIds.has(String(id))));
+  }, [students]);
 
   async function uploadFile(endpoint, file) {
     if (!file) {
@@ -827,6 +853,75 @@ export default function Students() {
       await load();
     } catch (e) {
       setError(e.message);
+    }
+  }
+
+  function toggleWorkflowStudent(studentId) {
+    if (!canBulkShareParents) return;
+    const key = String(studentId);
+    setSelectedWorkflowStudentIds((prev) =>
+      prev.includes(key) ? prev.filter((id) => id !== key) : [...prev, key]
+    );
+  }
+
+  function toggleWorkflowStudentsOnPage() {
+    if (!canBulkShareParents) return;
+    setSelectedWorkflowStudentIds((prev) => {
+      const prevSet = new Set(prev.map((id) => String(id)));
+      if (allWorkflowSelected) {
+        return prev.filter((id) => !filteredWorkflowStudentIds.includes(String(id)));
+      }
+      filteredWorkflowStudentIds.forEach((id) => prevSet.add(id));
+      return Array.from(prevSet);
+    });
+  }
+
+  async function bulkShareWithParent() {
+    if (!canBulkShareParents) return;
+    if (!selectedWeek) {
+      alert('먼저 주차를 선택해 주세요.');
+      return;
+    }
+    const targetIds = Array.from(
+      new Set(
+        (selectedWorkflowStudentIds || [])
+          .map((id) => Number(id))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      )
+    );
+    if (!targetIds.length) {
+      alert('학부모에게 공유할 학생을 먼저 체크해 주세요.');
+      return;
+    }
+    const ok = confirm(
+      `${selectedWeekObj?.label || '선택 주차'} 기준으로 선택한 ${targetIds.length}명의 멘토링 기록을 학부모에게 공유할까요?`
+    );
+    if (!ok) return;
+
+    setBulkSharingParents(true);
+    setError('');
+    try {
+      const r = await api('/api/mentoring/workflow/share-with-parent/bulk', {
+        method: 'POST',
+        body: {
+          week_id: Number(selectedWeek),
+          student_ids: targetIds
+        }
+      });
+      await loadWorkflowDates(selectedWeek);
+      setSelectedWorkflowStudentIds([]);
+
+      const updatedCount = Array.isArray(r?.updated) ? r.updated.length : Number(r?.updated_count || 0);
+      const skippedCount = Array.isArray(r?.skipped) ? r.skipped.length : Number(r?.skipped_count || 0);
+      alert(
+        `학부모 공유 처리 완료\n선택: ${targetIds.length}명\n공유 완료: ${updatedCount}명\n건너뜀: ${skippedCount}명`
+      );
+    } catch (e) {
+      const msg = e.message || '학부모 공유 처리 중 오류가 발생했습니다.';
+      setError(msg);
+      alert(`학부모 공유 처리 실패\n${msg}`);
+    } finally {
+      setBulkSharingParents(false);
     }
   }
 
@@ -1078,7 +1173,23 @@ export default function Students() {
         <div ref={workflowCardRef} className="card p-5">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-brand-800">멘토링 기록 제출/공유 현황 ({filtered.length}명)</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-sm font-semibold text-brand-800">멘토링 기록 제출/공유 현황 ({filtered.length}명)</div>
+                {canBulkShareParents ? (
+                  <>
+                    <button
+                      className="btn-primary whitespace-nowrap px-3 py-1.5 text-xs"
+                      onClick={bulkShareWithParent}
+                      disabled={bulkSharingParents || !selectedWeek || !selectedWorkflowStudentIds.length}
+                    >
+                      {bulkSharingParents ? '공유 중...' : '학부모 공유'}
+                    </button>
+                    <span className="text-xs text-slate-500">
+                      선택 {selectedWorkflowStudentIds.length}명
+                    </span>
+                  </>
+                ) : null}
+              </div>
             </div>
             {selectedWeekObj ? <div className="text-xs text-slate-600">{selectedWeekObj.label}</div> : null}
           </div>
@@ -1086,6 +1197,7 @@ export default function Students() {
           <div className="mt-3 overflow-x-auto rounded-2xl border border-slate-200 bg-white/90 shadow-inner">
             <table className="w-full min-w-[1060px] text-sm">
               <colgroup>
+                {canBulkShareParents ? <col className="bg-amber-50/35" /> : null}
                 <col className="bg-amber-50/60" />
                 <col className="bg-emerald-50/55" />
                 <col className="bg-emerald-50/35" />
@@ -1095,6 +1207,18 @@ export default function Students() {
               </colgroup>
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500 bg-slate-100/70">
+                  {canBulkShareParents ? (
+                    <th className="py-2 px-3 whitespace-nowrap border-b border-slate-200 text-center" rowSpan={2}>
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-emerald-600"
+                        checked={allWorkflowSelected}
+                        onChange={toggleWorkflowStudentsOnPage}
+                        disabled={bulkSharingParents || !filteredWorkflowStudentIds.length}
+                        aria-label="전체 선택"
+                      />
+                    </th>
+                  ) : null}
                   <th className="py-2 px-3 whitespace-nowrap border-b border-slate-200">학생 리스트(위 등록된 학생과 동일)</th>
                   <th className="px-3 whitespace-nowrap border-b border-slate-200" colSpan={2}>이번주 멘토명 / 멘토링 요일</th>
                   <th className="px-3 whitespace-nowrap border-b border-slate-200" colSpan={3}>학습멘토링 기록 제출일 / 총괄멘토링 기록 제출일 / 학부모 공유일</th>
@@ -1117,8 +1241,21 @@ export default function Students() {
                   const mentorSubmitted = workflow.mentorSubmittedAt ? fmtYMD(workflow.mentorSubmittedAt) : '';
                   const leadSubmitted = workflow.leadSubmittedAt ? fmtYMD(workflow.leadSubmittedAt) : '';
                   const shared = workflow.sharedAt ? fmtYMD(workflow.sharedAt) : '';
+                  const checked = selectedWorkflowSet.has(String(s.id));
                   return (
                     <tr key={`workflow-${s.id}`} className={['transition-colors', idx % 2 === 1 ? 'bg-white/75' : 'bg-white/95', 'hover:bg-gold-50/45'].join(' ')}>
+                      {canBulkShareParents ? (
+                        <td className="px-3 whitespace-nowrap border-b border-slate-100 text-center">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 accent-emerald-600"
+                            checked={checked}
+                            onChange={() => toggleWorkflowStudent(s.id)}
+                            disabled={bulkSharingParents}
+                            aria-label={`${s.name || '학생'} 선택`}
+                          />
+                        </td>
+                      ) : null}
                       <td className="py-2.5 px-3 whitespace-nowrap font-medium text-slate-900 border-b border-slate-100">
                         <div className="flex items-center gap-2">
                           <span className="text-slate-500">{s.external_id || '-'}</span>
