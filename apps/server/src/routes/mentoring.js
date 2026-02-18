@@ -237,7 +237,7 @@ export default function mentoringRoutes(db) {
 
     ensureWeekRecord(db, Number(student_id), Number(week_id));
     const info = db
-      .prepare('UPDATE week_records SET shared_with_parent=1, shared_at=datetime(\"now\"), updated_at=datetime(\"now\"), updated_by=? WHERE student_id=? AND week_id=?')
+      .prepare("UPDATE week_records SET shared_with_parent=1, shared_at=datetime('now'), updated_at=datetime('now'), updated_by=? WHERE student_id=? AND week_id=?")
       .run(req.user.id, Number(student_id), Number(week_id));
 
     if (!info.changes) {
@@ -280,7 +280,7 @@ export default function mentoringRoutes(db) {
         'SELECT id, shared_with_parent FROM week_records WHERE student_id=? AND week_id=?'
       );
       const markShared = db.prepare(
-        'UPDATE week_records SET shared_with_parent=1, shared_at=datetime(\"now\"), updated_at=datetime(\"now\"), updated_by=? WHERE student_id=? AND week_id=?'
+        "UPDATE week_records SET shared_with_parent=1, shared_at=datetime('now'), updated_at=datetime('now'), updated_by=? WHERE student_id=? AND week_id=?"
       );
 
       const updated = [];
