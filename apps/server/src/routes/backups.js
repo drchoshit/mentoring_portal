@@ -18,12 +18,38 @@ export default function backupRoutes(db) {
   const BACKUP_DIR = process.env.BACKUP_DIR
     ? (path.isAbsolute(process.env.BACKUP_DIR) ? process.env.BACKUP_DIR : path.resolve(process.cwd(), process.env.BACKUP_DIR))
     : path.join(path.dirname(DB_PATH), 'backups');
+  const BACKUP_KEEP_MAX = Math.max(10, Number(process.env.BACKUP_KEEP_MAX || 200));
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+
+  function listBackupFiles() {
+    return fs.readdirSync(BACKUP_DIR)
+      .filter((f) => f.endsWith('.sqlite'))
+      .sort((a, b) => b.localeCompare(a));
+  }
+
+  function pruneByKeepMax() {
+    const files = listBackupFiles();
+    const targets = files.slice(BACKUP_KEEP_MAX);
+    for (const file of targets) {
+      const filePath = path.join(BACKUP_DIR, file);
+      try { fs.unlinkSync(filePath); } catch {}
+    }
+    return targets;
+  }
+
+  function isSafeBackupFilename(file) {
+    const name = String(file || '').trim();
+    if (!name) return false;
+    if (name !== path.basename(name)) return false;
+    if (!name.endsWith('.sqlite')) return false;
+    return true;
+  }
 
   function backupNow(reason = 'manual') {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const out = path.join(BACKUP_DIR, `db-${stamp}-${reason}.sqlite`);
     fs.copyFileSync(DB_PATH, out);
+    pruneByKeepMax();
     return out;
   }
 
@@ -36,10 +62,7 @@ export default function backupRoutes(db) {
   }
 
   router.get('/list', (req, res) => {
-    const files = fs.readdirSync(BACKUP_DIR)
-      .filter((f) => f.endsWith('.sqlite'))
-      .sort((a, b) => b.localeCompare(a))
-      .slice(0, 200);
+    const files = listBackupFiles().slice(0, 200);
     res.json({ backups: files });
   });
 
@@ -49,6 +72,67 @@ export default function backupRoutes(db) {
       res.json({ ok: true, file: path.basename(filePath) });
     } catch (e) {
       res.status(500).json({ error: 'Backup failed' });
+    }
+  });
+
+  router.post('/prune', (req, res) => {
+    try {
+      const modeRaw = String(req.body?.mode || 'latest').toLowerCase();
+      const mode = modeRaw === 'oldest' ? 'oldest' : 'latest';
+      const ratioRaw = Number(req.body?.ratio ?? 0.5);
+      const ratio = Number.isFinite(ratioRaw) ? Math.min(0.95, Math.max(0.05, ratioRaw)) : 0.5;
+      const keepMinRaw = Number(req.body?.keep_min ?? 1);
+      const keepMin = Number.isFinite(keepMinRaw) ? Math.max(0, Math.floor(keepMinRaw)) : 1;
+
+      const files = listBackupFiles();
+      if (!files.length) return res.json({ ok: true, total: 0, deleted_count: 0, deleted: [] });
+
+      let deleteCount = Math.floor(files.length * ratio);
+      if (deleteCount < 1) deleteCount = 1;
+      if (files.length - deleteCount < keepMin) {
+        deleteCount = Math.max(0, files.length - keepMin);
+      }
+      if (deleteCount < 1) return res.json({ ok: true, total: files.length, deleted_count: 0, deleted: [] });
+
+      const targets = mode === 'latest' ? files.slice(0, deleteCount) : files.slice(files.length - deleteCount);
+      const deleted = [];
+      const failed = [];
+
+      for (const file of targets) {
+        const filePath = path.join(BACKUP_DIR, file);
+        try {
+          fs.unlinkSync(filePath);
+          deleted.push(file);
+        } catch (e) {
+          failed.push({ file, reason: e?.message || 'unlink failed' });
+        }
+      }
+
+      return res.json({
+        ok: true,
+        mode,
+        ratio,
+        total: files.length,
+        deleted_count: deleted.length,
+        failed_count: failed.length,
+        deleted,
+        failed
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Prune failed' });
+    }
+  });
+
+  router.delete('/file/:name', (req, res) => {
+    try {
+      const name = String(req.params.name || '');
+      if (!isSafeBackupFilename(name)) return res.status(400).json({ error: 'Invalid filename' });
+      const filePath = path.join(BACKUP_DIR, name);
+      if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Backup not found' });
+      fs.unlinkSync(filePath);
+      return res.json({ ok: true, deleted: name });
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Delete failed' });
     }
   });
 

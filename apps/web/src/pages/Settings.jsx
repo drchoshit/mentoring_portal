@@ -692,6 +692,7 @@ function BackupTab() {
   const [list, setList] = useState([]);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
 
   async function load() {
     setError('');
@@ -709,12 +710,53 @@ function BackupTab() {
   async function backupNow() {
     setError('');
     setStatus('');
+    setBusy(true);
     try {
       const r = await api('/api/backups/now', { method: 'POST', body: {} });
       setStatus(r.file ? `백업 생성됨: ${r.file}` : '백업 완료');
       await load();
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pruneLatestHalf() {
+    const ok = confirm('최신 백업의 50%를 삭제할까요? 이 작업은 되돌릴 수 없습니다.');
+    if (!ok) return;
+    setError('');
+    setStatus('');
+    setBusy(true);
+    try {
+      const r = await api('/api/backups/prune', {
+        method: 'POST',
+        body: { mode: 'latest', ratio: 0.5, keep_min: 1 }
+      });
+      setStatus(`정리 완료: ${r.deleted_count || 0}개 삭제`);
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteOne(file) {
+    if (!file) return;
+    const ok = confirm(`이 백업 파일을 삭제할까요?\n\n${file}`);
+    if (!ok) return;
+    setError('');
+    setStatus('');
+    setBusy(true);
+    try {
+      await api(`/api/backups/file/${encodeURIComponent(file)}`, { method: 'DELETE' });
+      setStatus(`삭제 완료: ${file}`);
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -724,8 +766,9 @@ function BackupTab() {
       {status ? <div className="text-sm text-emerald-700">{status}</div> : null}
 
       <div className="mt-2 flex flex-wrap gap-2">
-        <button className="btn-primary" onClick={backupNow}>지금 백업</button>
-        <button className="btn-ghost" onClick={load}>목록 새로고침</button>
+        <button className="btn-primary" onClick={backupNow} disabled={busy}>지금 백업</button>
+        <button className="btn-ghost" onClick={pruneLatestHalf} disabled={busy}>최신 50% 삭제</button>
+        <button className="btn-ghost" onClick={load} disabled={busy}>목록 새로고침</button>
       </div>
 
       <div className="mt-4 text-xs text-slate-600">
@@ -737,14 +780,20 @@ function BackupTab() {
           <thead>
             <tr className="text-left text-slate-600">
               <th className="py-2">파일</th>
+              <th className="py-2 w-28">관리</th>
             </tr>
           </thead>
           <tbody>
             {list.length === 0 ? (
-              <tr><td className="py-3 text-slate-500">백업이 없습니다</td></tr>
+              <tr><td className="py-3 text-slate-500" colSpan={2}>백업이 없습니다</td></tr>
             ) : list.map((f) => (
               <tr key={f} className="border-t border-slate-200">
                 <td className="py-2 font-mono text-xs">{f}</td>
+                <td className="py-2">
+                  <button className="btn-ghost text-red-600" onClick={() => deleteOne(f)} disabled={busy}>
+                    삭제
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
