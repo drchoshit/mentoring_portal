@@ -588,12 +588,15 @@ export default function Students() {
     try {
       const s = await api('/api/students');
       const w = await api('/api/weeks');
+      const weekList = Array.isArray(w.weeks) ? w.weeks : [];
       setStudents(s.students || []);
-      setWeeks(w.weeks || []);
+      setWeeks(weekList);
       let nextWeekId = selectedWeek;
-      const shouldDeferWorkflowLoad = !nextWeekId && (w.weeks || []).length;
+      const hasNextWeek = weekList.some((week) => String(week.id) === String(nextWeekId));
+      if (nextWeekId && !hasNextWeek) nextWeekId = '';
+      const shouldDeferWorkflowLoad = !nextWeekId && weekList.length;
       if (shouldDeferWorkflowLoad) {
-        nextWeekId = String(w.weeks[0].id);
+        nextWeekId = String(weekList[weekList.length - 1].id);
         setSelectedWeek(nextWeekId);
       }
       await loadPenaltySummary();
@@ -689,6 +692,7 @@ export default function Students() {
     return filtered.filter((s) => workflowDates?.[s.id]?.sharedAt).length;
   }, [canSeeMentorColumns, filtered, workflowDates]);
 
+  const weeksDesc = useMemo(() => [...(weeks || [])].reverse(), [weeks]);
   const selectedWeekObj = useMemo(
     () => (weeks || []).find((w) => String(w.id) === String(selectedWeek)),
     [weeks, selectedWeek]
@@ -992,7 +996,7 @@ export default function Students() {
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <select className="input w-40" value={selectedWeek} onChange={(e)=>setSelectedWeek(e.target.value)}>
-              {(weeks || []).map(w => <option key={w.id} value={w.id}>{toRoundLabel(w.label)}</option>)}
+              {weeksDesc.map(w => <option key={w.id} value={w.id}>{toRoundLabel(w.label)}</option>)}
             </select>
             <input className="input w-64" placeholder="검색(이름/ID)" value={query} onChange={(e)=>setQuery(e.target.value)} />
             {canSeeMentorColumns ? (

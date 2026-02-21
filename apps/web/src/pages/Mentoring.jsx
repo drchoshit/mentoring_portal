@@ -404,6 +404,7 @@ export default function Mentoring() {
   const [newSubject, setNewSubject] = useState('');
   const [showCalendar, setShowCalendar] = useState(true);
   const [showLegacyRecordsModal, setShowLegacyRecordsModal] = useState(false);
+  const weeksDesc = useMemo(() => [...(weeks || [])].reverse(), [weeks]);
 
   // 과목 ?�력 보존/?�동?�?�용 draft
   const [subjectDrafts, setSubjectDrafts] = useState({});
@@ -438,7 +439,8 @@ export default function Mentoring() {
     setError('');
     try {
       const w = await api('/api/weeks');
-      setWeeks(w.weeks || []);
+      const weekList = Array.isArray(w.weeks) ? w.weeks : [];
+      setWeeks(weekList);
 
       const p = await api('/api/permissions');
       setPerms(p.permissions || []);
@@ -448,8 +450,11 @@ export default function Mentoring() {
         setRecipients(rcp.recipients || []);
       }
 
-      const effectiveWeek = weekId || (w.weeks?.[0]?.id ? String(w.weeks[0].id) : '');
-      if (!weekId && effectiveWeek) {
+      const hasWeekId = weekId && weekList.some((week) => String(week.id) === String(weekId));
+      const effectiveWeek = hasWeekId
+        ? weekId
+        : (weekList[weekList.length - 1]?.id ? String(weekList[weekList.length - 1].id) : '');
+      if (!hasWeekId && effectiveWeek) {
         setWeekId(effectiveWeek);
         setQueryParams({ week: effectiveWeek });
       }
@@ -929,7 +934,7 @@ export default function Mentoring() {
             </div>
             <div className="flex flex-wrap gap-2 items-center">
               <select className="input w-44" value={weekId} onChange={(e) => changeWeek(e.target.value)}>
-                {weeks.map((w) => (
+                {weeksDesc.map((w) => (
                   <option key={w.id} value={w.id}>
                     {fmtWeekLabel(w) || toRoundLabel(w.label)}
                   </option>
