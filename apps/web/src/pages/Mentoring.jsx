@@ -404,6 +404,7 @@ export default function Mentoring() {
   const [newSubject, setNewSubject] = useState('');
   const [showCalendar, setShowCalendar] = useState(true);
   const [showLegacyRecordsModal, setShowLegacyRecordsModal] = useState(false);
+  const [showEntryNotice, setShowEntryNotice] = useState(true);
   const weeksDesc = useMemo(() => [...(weeks || [])].reverse(), [weeks]);
 
   // 과목 ?�력 보존/?�동?�?�용 draft
@@ -475,6 +476,10 @@ export default function Mentoring() {
   useEffect(() => {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studentId]);
+
+  useEffect(() => {
+    setShowEntryNotice(true);
   }, [studentId]);
 
   // subjectDrafts 초기??병합: 회차 ?�는 ?�생??바뀌면 reset, 같�? 범위�??�규 과목�?추�?
@@ -952,7 +957,7 @@ export default function Mentoring() {
             </div>
           </div>
           <div className="mt-2 text-xs text-rose-600">
-            *정보 입력 후 반드시 전제 저장 버튼을 눌러주세요.
+            *정보 입력 후 반드시 전체 저장 버튼을 눌러주세요.
           </div>
           {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
         </GoldCard>
@@ -1336,6 +1341,24 @@ export default function Mentoring() {
           </div>
         </GoldCard>
       </div>
+
+      {showEntryNotice ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4">
+          <div className="card w-full max-w-xl border-2 border-rose-200 bg-white p-6">
+            <div className="text-base font-semibold text-brand-900">안내</div>
+            <div className="mt-3 text-sm leading-7 text-slate-800">
+              기록 후 데이터가 유실되지 않기 위해 꼭{' '}
+              <span className="font-bold text-red-600">전체 저장 버튼</span>과{' '}
+              <span className="font-bold text-red-600">제출 버튼</span>을 눌러주세요!
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button className="btn-primary px-4" type="button" onClick={() => setShowEntryNotice(false)}>
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {showLegacyRecordsModal && rec?.student?.id ? (
         <LegacyMentoringRecordsModal
