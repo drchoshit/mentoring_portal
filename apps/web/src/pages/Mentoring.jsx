@@ -1407,22 +1407,6 @@ export default function Mentoring() {
           </GoldCard>
         ) : null}
 
-        <GoldCard className="p-5">
-          <div className="text-sm font-semibold text-brand-900">과거 기록 보기</div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {weeks.map((w) => (
-              <a
-                key={w.id}
-                className="btn-ghost"
-                target="_blank"
-                rel="noreferrer"
-                href={`/students/${encodeURIComponent(studentId)}/mentoring?week=${encodeURIComponent(w.id)}`}
-              >
-                {toRoundLabel(w.label)}
-              </a>
-            ))}
-          </div>
-        </GoldCard>
       </div>
 
       {showEntryNotice ? (
