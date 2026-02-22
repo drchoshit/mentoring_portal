@@ -14,6 +14,19 @@ function parsePositiveInt(v) {
   return Math.floor(n);
 }
 
+function normalizeIdList(raw) {
+  const input = Array.isArray(raw) ? raw : [raw];
+  const out = [];
+  const seen = new Set();
+  for (const v of input) {
+    const id = parsePositiveInt(v);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 export default function feedRoutes(db) {
   const router = express.Router();
 
@@ -114,33 +127,85 @@ export default function feedRoutes(db) {
   });
 
   router.post('/', (req, res) => {
-    const { to_user_id, student_id = null, target_field = null, title = null, body } = req.body || {};
-    if (!to_user_id || !body) return res.status(400).json({ error: 'Missing fields' });
+    const { to_user_id, to_user_ids, student_id = null, student_ids, target_field = null, title = null, body } = req.body || {};
+    const bodyText = String(body || '');
+    if (!bodyText.trim()) return res.status(400).json({ error: 'Missing body' });
 
-    const to = db.prepare('SELECT id, role FROM users WHERE id=?').get(Number(to_user_id));
-    if (!to) return res.status(404).json({ error: 'Recipient not found' });
-    if (!canSend(req.user.role, to.role)) return res.status(403).json({ error: 'Not allowed' });
-
-    const info = db.prepare(
-      'INSERT INTO feeds (from_user_id, to_user_id, student_id, target_field, title, body) VALUES (?,?,?,?,?,?)'
-    ).run(
-      req.user.id,
-      Number(to_user_id),
-      student_id ? Number(student_id) : null,
-      target_field,
-      title,
-      String(body)
+    // Backward-compatible: accepts single `to_user_id` or array `to_user_ids`.
+    const recipientIds = normalizeIdList(
+      Array.isArray(to_user_ids) ? to_user_ids : to_user_id
     );
+    if (!recipientIds.length) return res.status(400).json({ error: 'Missing recipients' });
+
+    const recipients = db.prepare(
+      `SELECT id, role FROM users WHERE id IN (${recipientIds.map(() => '?').join(',')})`
+    ).all(...recipientIds);
+    if (recipients.length !== recipientIds.length) {
+      return res.status(404).json({ error: 'Recipient not found' });
+    }
+    for (const to of recipients) {
+      if (!canSend(req.user.role, to.role)) return res.status(403).json({ error: 'Not allowed' });
+    }
+
+    // Backward-compatible: accepts single `student_id` or array `student_ids`.
+    const studentIds = normalizeIdList(
+      Array.isArray(student_ids) ? student_ids : student_id
+    );
+    if (studentIds.length) {
+      const existingStudents = db.prepare(
+        `SELECT id FROM students WHERE id IN (${studentIds.map(() => '?').join(',')})`
+      ).all(...studentIds);
+      if (existingStudents.length !== studentIds.length) {
+        return res.status(404).json({ error: 'Student not found' });
+      }
+    }
+
+    const studentTargets = studentIds.length ? studentIds : [null];
+    const maxCreates = 1000;
+    const totalCreates = recipientIds.length * studentTargets.length;
+    if (totalCreates > maxCreates) {
+      return res.status(400).json({ error: `Too many targets (max ${maxCreates})` });
+    }
+
+    const insertFeed = db.prepare(
+      'INSERT INTO feeds (from_user_id, to_user_id, student_id, target_field, title, body) VALUES (?,?,?,?,?,?)'
+    );
+
+    const createdIds = [];
+    const tx = db.transaction(() => {
+      for (const rid of recipientIds) {
+        for (const sid of studentTargets) {
+          const info = insertFeed.run(
+            req.user.id,
+            rid,
+            sid == null ? null : Number(sid),
+            target_field,
+            title,
+            bodyText
+          );
+          createdIds.push(Number(info.lastInsertRowid));
+        }
+      }
+    });
+    tx();
 
     writeAudit(db, {
       user_id: req.user.id,
       action: 'create',
       entity: 'feed',
-      entity_id: info.lastInsertRowid,
-      details: { to_user_id: Number(to_user_id), student_id }
+      entity_id: createdIds[0] || null,
+      details: {
+        to_user_ids: recipientIds,
+        student_ids: studentIds,
+        created_count: createdIds.length
+      }
     });
 
-    res.json({ id: info.lastInsertRowid });
+    res.json({
+      id: createdIds[0] || null,
+      ids: createdIds,
+      created_count: createdIds.length
+    });
   });
 
   router.post('/:id/comments', (req, res) => {
