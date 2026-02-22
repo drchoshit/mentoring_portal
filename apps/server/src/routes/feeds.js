@@ -65,8 +65,7 @@ export default function feedRoutes(db) {
     const studentId = parsePositiveInt(req.query.studentId);
     const limitReq = parsePositiveInt(req.query.limit);
     const limit = Math.min(limitReq || 300, 500);
-
-    const isPrivileged = ['director','admin','lead'].includes(req.user.role);
+    const isDirectorFeedPageView = req.user.role === 'director' && !studentId;
 
     const where = [];
     const params = [];
@@ -76,9 +75,10 @@ export default function feedRoutes(db) {
     // parent가 끼는 피드들은 애초에 생성 불가 정책이라 대부분 없겠지만, 안전장치
     where.push("u1.role!='parent' AND u2.role!='parent'");
 
-    if (!isPrivileged) {
-      where.push('(f.from_user_id=? OR f.to_user_id=?)');
-      params.push(req.user.id, req.user.id);
+    if (!isDirectorFeedPageView) {
+      // Default rule: recipient only (applies to mentoring page and non-director users).
+      where.push('f.to_user_id=?');
+      params.push(req.user.id);
     }
 
     if (studentId) {
@@ -216,9 +216,8 @@ export default function feedRoutes(db) {
     const feed = db.prepare('SELECT * FROM feeds WHERE id=? AND deleted_at IS NULL').get(feedId);
     if (!feed) return res.status(404).json({ error: 'Not found' });
 
-    const canSee = ['director','admin','lead'].includes(req.user.role)
-      ? true
-      : (feed.from_user_id === req.user.id || feed.to_user_id === req.user.id);
+    // Director can audit/comment all feeds on the feed page; others are recipient-only.
+    const canSee = req.user.role === 'director' || feed.to_user_id === req.user.id;
 
     if (!canSee) return res.status(403).json({ error: 'Forbidden' });
 
