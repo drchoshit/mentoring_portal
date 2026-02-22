@@ -402,6 +402,8 @@ export default function Mentoring() {
   const [feedsError, setFeedsError] = useState('');
 
   const [newSubject, setNewSubject] = useState('');
+  const [curriculumSourceSelection, setCurriculumSourceSelection] = useState('auto');
+  const [curriculumSourceEffectiveWeekId, setCurriculumSourceEffectiveWeekId] = useState('');
   const [showCalendar, setShowCalendar] = useState(true);
   const [showLegacyRecordsModal, setShowLegacyRecordsModal] = useState(false);
   const [showEntryNotice, setShowEntryNotice] = useState(true);
@@ -518,6 +520,14 @@ export default function Mentoring() {
     });
   }, [rec?.subject_records, studentId, weekId]);
 
+  useEffect(() => {
+    const preferenceWeekId = rec?.curriculum_source_preference_week_id;
+    const effectiveWeekId = rec?.curriculum_source_week_id;
+    const preferenceForCurrentWeek = Number(preferenceWeekId) > 0 && Number(preferenceWeekId) < Number(weekId || 0);
+    setCurriculumSourceSelection(preferenceForCurrentWeek ? String(preferenceWeekId) : 'auto');
+    setCurriculumSourceEffectiveWeekId(effectiveWeekId ? String(effectiveWeekId) : '');
+  }, [rec?.curriculum_source_preference_week_id, rec?.curriculum_source_week_id, weekId]);
+
   async function changeWeek(id) {
     setWeekId(id);
     setQueryParams({ week: id });
@@ -596,6 +606,17 @@ export default function Mentoring() {
   // 보기 ?�책: parent�?server-permission 기반, �??�는 "?�션?� ?�출"
   const canEditA = (field) => canEdit(perms, user?.role, field);
   const canViewA = (field) => (parentMode ? canView(perms, user?.role, field) : true);
+  const curriculumSourceOptions = useMemo(
+    () =>
+      [...(weeks || [])]
+        .filter((w) => Number(w?.id) < Number(weekId || 0))
+        .reverse(),
+    [weeks, weekId]
+  );
+  const curriculumSourceWeek = useMemo(
+    () => (weeks || []).find((w) => String(w.id) === String(curriculumSourceEffectiveWeekId)),
+    [weeks, curriculumSourceEffectiveWeekId]
+  );
 
   async function addSubject() {
     if (!newSubject.trim()) return;
@@ -619,6 +640,44 @@ export default function Mentoring() {
       const label = subjectName ? `"${subjectName}"` : '해당 과목';
       confirmOrThrow(`과목 ${label} 삭제할까요?`);
       await api(`/api/mentoring/subjects/${studentId}/${subjectId}`, { method: 'DELETE' });
+      await loadAll();
+    } catch (e) {
+      if (e?.message !== '__CANCEL__') setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyCurriculumSourceSelection() {
+    if (!weekId) {
+      setError('회차를 먼저 선택해 주세요.');
+      return;
+    }
+
+    const sourceWeekId = curriculumSourceSelection === 'auto'
+      ? null
+      : Number(curriculumSourceSelection);
+    const sourceWeekLabel = sourceWeekId
+      ? toRoundLabel((weeks || []).find((w) => Number(w.id) === sourceWeekId)?.label || `${sourceWeekId}회차`)
+      : '자동(이전 회차)';
+
+    setBusy(true);
+    try {
+      confirmOrThrow(
+        sourceWeekId
+          ? `${sourceWeekLabel} 커리큘럼을 현재 회차에 불러오고, 다음 회차에도 이 선택을 유지할까요?`
+          : '커리큘럼 불러오기 기준을 자동(이전 회차)으로 전환하고 현재 회차에 적용할까요?'
+      );
+      const result = await api('/api/mentoring/curriculum-source', {
+        method: 'PUT',
+        body: {
+          student_id: Number(studentId),
+          week_id: Number(weekId),
+          source_week_id: sourceWeekId
+        }
+      });
+      setCurriculumSourceSelection(result?.curriculum_source_preference_week_id ? String(result.curriculum_source_preference_week_id) : 'auto');
+      setCurriculumSourceEffectiveWeekId(result?.curriculum_source_week_id ? String(result.curriculum_source_week_id) : '');
       await loadAll();
     } catch (e) {
       if (e?.message !== '__CANCEL__') setError(e.message);
@@ -1041,9 +1100,33 @@ export default function Mentoring() {
           <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
             <div>
               <div className="text-sm font-semibold text-brand-900">학습 커리큘럼</div>
-              <div className="text-xs text-slate-700">과목 추가 · 가로 스크롤</div>
+              <div className="text-xs text-slate-700">
+                기본: 이전 회차 자동 불러오기
+                {curriculumSourceWeek ? ` · 현재 적용 기준: ${toRoundLabel(curriculumSourceWeek.label)}` : ''}
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 justify-end">
+              <select
+                className="input w-60"
+                value={curriculumSourceSelection}
+                onChange={(e) => setCurriculumSourceSelection(e.target.value)}
+                disabled={parentMode || busy || !curriculumSourceOptions.length}
+              >
+                <option value="auto">자동(이전 회차)</option>
+                {curriculumSourceOptions.map((w) => (
+                  <option key={w.id} value={String(w.id)}>
+                    {toRoundLabel(w.label)}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn-ghost"
+                type="button"
+                onClick={applyCurriculumSourceSelection}
+                disabled={parentMode || busy || !curriculumSourceOptions.length}
+              >
+                선택 회차 불러오기
+              </button>
               <input
                 className="input w-64"
                 placeholder="새 과목명"
@@ -1594,9 +1677,7 @@ function FeedCard({ feed, currentUser, onComment, onDelete }) {
   const comments = Array.isArray(feed?.comments) ? feed.comments : [];
 
   const [comment, setComment] = useState('');
-  const canDelete =
-    ['director', 'lead', 'admin'].includes(currentUser?.role) ||
-    (Number(feed?.from_user_id) === Number(currentUser?.id));
+  const canDelete = ['director', 'admin'].includes(currentUser?.role);
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">

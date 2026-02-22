@@ -466,6 +466,30 @@ function ensureParentLegacyImagesTable() {
   `), 'parent_legacy_images updated_at backfill');
 }
 
+function ensureCurriculumSourceTable() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS student_curriculum_sources (
+      student_id INTEGER PRIMARY KEY,
+      source_week_id INTEGER,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by INTEGER,
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_week_id) REFERENCES weeks(id) ON DELETE SET NULL,
+      FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+  `);
+
+  const cols = columnMap('student_curriculum_sources');
+  if (!cols.has('updated_at')) db.exec(`ALTER TABLE student_curriculum_sources ADD COLUMN updated_at TEXT;`);
+  if (!cols.has('updated_by')) db.exec(`ALTER TABLE student_curriculum_sources ADD COLUMN updated_by INTEGER;`);
+
+  db.exec(`
+    UPDATE student_curriculum_sources
+    SET updated_at = COALESCE(NULLIF(updated_at,''), datetime('now'))
+    WHERE updated_at IS NULL OR updated_at = '';
+  `);
+}
+
 function bootstrap() {
   ensureUsersTableAndColumns();
 
@@ -529,6 +553,7 @@ function bootstrap() {
   ensureStudentsColumns();
   ensureWeekRecordsColumns();
   ensureParentLegacyImagesTable();
+  ensureCurriculumSourceTable();
 
   // 추가: 학생(=학부모) 로그인 발급용 평문 비밀번호 저장 테이블
   db.exec(`

@@ -110,6 +110,13 @@ CREATE TABLE IF NOT EXISTS week_records (
   UNIQUE(student_id, week_id)
 );
 
+CREATE TABLE IF NOT EXISTS student_curriculum_sources (
+  student_id INTEGER PRIMARY KEY REFERENCES students(id) ON DELETE CASCADE,
+  source_week_id INTEGER REFERENCES weeks(id) ON DELETE SET NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_by INTEGER REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS penalties (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,

@@ -1,5 +1,5 @@
 import express from 'express';
-import { canEditField, canViewField, filterObjectByView } from '../lib/permissions.js';
+import { canEditField, filterObjectByView } from '../lib/permissions.js';
 import { writeAudit } from '../lib/audit.js';
 
 function ensureWeekRecord(db, student_id, week_id) {
@@ -11,12 +11,135 @@ function ensureWeekRecord(db, student_id, week_id) {
   return info.lastInsertRowid;
 }
 
-function ensureSubjectRecord(db, student_id, week_id, subject_id) {
+function toPositiveInt(v) {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+}
+
+function getPreviousWeekId(db, week_id) {
+  const row = db.prepare('SELECT id FROM weeks WHERE id < ? ORDER BY id DESC LIMIT 1').get(week_id);
+  return toPositiveInt(row?.id);
+}
+
+function getStoredCurriculumSourceWeekId(db, student_id) {
+  const row = db.prepare('SELECT source_week_id FROM student_curriculum_sources WHERE student_id=?').get(student_id);
+  return toPositiveInt(row?.source_week_id);
+}
+
+function resolveCurriculumSourceWeekId(db, student_id, week_id) {
+  const preferred = getStoredCurriculumSourceWeekId(db, student_id);
+  const prefExists = preferred
+    ? db.prepare('SELECT id FROM weeks WHERE id=?').get(preferred)
+    : null;
+  const preferenceWeekId = prefExists ? preferred : null;
+  const effectiveWeekId = preferenceWeekId && preferenceWeekId < week_id
+    ? preferenceWeekId
+    : getPreviousWeekId(db, week_id);
+  return { preferenceWeekId, effectiveWeekId };
+}
+
+function ensureSubjectRecord(db, student_id, week_id, subject_id, source_week_id = null) {
   const existing = db.prepare('SELECT id FROM subject_records WHERE student_id=? AND week_id=? AND subject_id=?').get(student_id, week_id, subject_id);
   if (existing) return existing.id;
-  const info = db.prepare('INSERT INTO subject_records (student_id, week_id, subject_id) VALUES (?,?,?)')
-    .run(student_id, week_id, subject_id);
+  const sourceWeekId = toPositiveInt(source_week_id);
+  let seedCurriculum = null;
+  if (sourceWeekId && sourceWeekId !== Number(week_id)) {
+    const source = db
+      .prepare('SELECT a_curriculum FROM subject_records WHERE student_id=? AND week_id=? AND subject_id=?')
+      .get(student_id, sourceWeekId, subject_id);
+    if (source?.a_curriculum != null) seedCurriculum = String(source.a_curriculum);
+  }
+  const info = db.prepare('INSERT INTO subject_records (student_id, week_id, subject_id, a_curriculum) VALUES (?,?,?,?)')
+    .run(student_id, week_id, subject_id, seedCurriculum);
   return info.lastInsertRowid;
+}
+
+function hydrateCurriculumFromSourceIfEmpty(db, student_id, week_id, source_week_id) {
+  const sourceWeekId = toPositiveInt(source_week_id);
+  if (!sourceWeekId || sourceWeekId === Number(week_id)) return;
+
+  db.prepare(
+    `
+    UPDATE subject_records
+    SET
+      a_curriculum = (
+        SELECT src.a_curriculum
+        FROM subject_records src
+        WHERE src.student_id = subject_records.student_id
+          AND src.subject_id = subject_records.subject_id
+          AND src.week_id = ?
+        LIMIT 1
+      ),
+      updated_at = datetime('now')
+    WHERE student_id = ?
+      AND week_id = ?
+      AND (a_curriculum IS NULL OR TRIM(a_curriculum) = '')
+      AND EXISTS (
+        SELECT 1
+        FROM subject_records src
+        WHERE src.student_id = subject_records.student_id
+          AND src.subject_id = subject_records.subject_id
+          AND src.week_id = ?
+          AND src.a_curriculum IS NOT NULL
+          AND TRIM(src.a_curriculum) != ''
+      )
+    `
+  ).run(sourceWeekId, student_id, week_id, sourceWeekId);
+}
+
+function hydrateLastHomeworkFromPreviousWeekIfEmpty(db, student_id, week_id, previous_week_id) {
+  const prevWeekId = toPositiveInt(previous_week_id);
+  if (!prevWeekId || prevWeekId === Number(week_id)) return;
+
+  db.prepare(
+    `
+    UPDATE subject_records
+    SET
+      a_last_hw = (
+        SELECT prev.a_this_hw
+        FROM subject_records prev
+        WHERE prev.student_id = subject_records.student_id
+          AND prev.subject_id = subject_records.subject_id
+          AND prev.week_id = ?
+        LIMIT 1
+      ),
+      updated_at = datetime('now')
+    WHERE student_id = ?
+      AND week_id = ?
+      AND (a_last_hw IS NULL OR TRIM(a_last_hw) = '')
+      AND EXISTS (
+        SELECT 1
+        FROM subject_records prev
+        WHERE prev.student_id = subject_records.student_id
+          AND prev.subject_id = subject_records.subject_id
+          AND prev.week_id = ?
+          AND prev.a_this_hw IS NOT NULL
+          AND TRIM(prev.a_this_hw) != ''
+      )
+    `
+  ).run(prevWeekId, student_id, week_id, prevWeekId);
+}
+
+function applyCurriculumSourceToWeek(db, student_id, week_id, source_week_id, updated_by) {
+  const sourceWeekId = toPositiveInt(source_week_id);
+  if (!sourceWeekId || sourceWeekId === Number(week_id)) return 0;
+
+  const info = db.prepare(
+    `
+    INSERT INTO subject_records (student_id, week_id, subject_id, a_curriculum, updated_at, updated_by)
+    SELECT student_id, ?, subject_id, a_curriculum, datetime('now'), ?
+    FROM subject_records
+    WHERE student_id = ? AND week_id = ?
+    ON CONFLICT(student_id, week_id, subject_id)
+    DO UPDATE SET
+      a_curriculum = excluded.a_curriculum,
+      updated_at = datetime('now'),
+      updated_by = excluded.updated_by
+    `
+  ).run(week_id, updated_by ?? null, student_id, sourceWeekId);
+
+  return Number(info?.changes || 0);
 }
 
 function assertParentOwnsStudent(req, student_id) {
@@ -93,14 +216,20 @@ export default function mentoringRoutes(db) {
       if (!shared || Number(shared.shared_with_parent) !== 1) return res.status(403).json({ error: 'Not shared' });
     }
 
-    ensureWeekRecord(db, student_id, week_id);
-
     const student = db.prepare('SELECT * FROM students WHERE id=?').get(student_id);
     const week = db.prepare('SELECT * FROM weeks WHERE id=?').get(week_id);
     if (!student || !week) return res.status(404).json({ error: 'Not found' });
 
+    const { preferenceWeekId, effectiveWeekId: curriculumSourceWeekId } = resolveCurriculumSourceWeekId(db, student_id, week_id);
+    const previousWeekId = getPreviousWeekId(db, week_id);
+
+    ensureWeekRecord(db, student_id, week_id);
+
     const subjects = db.prepare('SELECT id, name FROM mentoring_subjects WHERE student_id=? ORDER BY id').all(student_id);
-    for (const s of subjects) ensureSubjectRecord(db, student_id, week_id, s.id);
+    for (const s of subjects) ensureSubjectRecord(db, student_id, week_id, s.id, curriculumSourceWeekId);
+
+    hydrateCurriculumFromSourceIfEmpty(db, student_id, week_id, curriculumSourceWeekId);
+    hydrateLastHomeworkFromPreviousWeekIfEmpty(db, student_id, week_id, previousWeekId);
 
     const subject_records_raw = db.prepare(
       `SELECT r.*, s.name as subject_name
@@ -129,7 +258,87 @@ export default function mentoringRoutes(db) {
       ? filterObjectByView(db, req.user.role, weekRecord, { parentMode })
       : weekRecord;
 
-    res.json({ student, week, subjects, subject_records, week_record });
+    res.json({
+      student,
+      week,
+      subjects,
+      subject_records,
+      week_record,
+      curriculum_source_week_id: curriculumSourceWeekId || null,
+      curriculum_source_preference_week_id: preferenceWeekId || null
+    });
+  });
+
+  router.put('/curriculum-source', (req, res) => {
+    const student_id = toPositiveInt(req.body?.student_id ?? req.body?.studentId);
+    const week_id = toPositiveInt(req.body?.week_id ?? req.body?.weekId);
+    if (!student_id || !week_id) return res.status(400).json({ error: 'Missing student_id/week_id' });
+    if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
+
+    const student = db.prepare('SELECT id FROM students WHERE id=?').get(student_id);
+    const week = db.prepare('SELECT id FROM weeks WHERE id=?').get(week_id);
+    if (!student || !week) return res.status(404).json({ error: 'Not found' });
+
+    const rawSource = req.body?.source_week_id ?? req.body?.sourceWeekId;
+    let sourceWeekId = rawSource == null || rawSource === '' ? null : toPositiveInt(rawSource);
+    if (rawSource != null && rawSource !== '' && !sourceWeekId) {
+      return res.status(400).json({ error: 'Invalid source_week_id' });
+    }
+
+    if (sourceWeekId) {
+      const sourceWeek = db.prepare('SELECT id FROM weeks WHERE id=?').get(sourceWeekId);
+      if (!sourceWeek) return res.status(404).json({ error: 'Source week not found' });
+      if (sourceWeekId >= week_id) {
+        return res.status(400).json({ error: 'Source week must be before current week' });
+      }
+    }
+
+    const result = db.transaction(() => {
+      if (sourceWeekId) {
+        db.prepare(
+          `
+          INSERT INTO student_curriculum_sources (student_id, source_week_id, updated_at, updated_by)
+          VALUES (?, ?, datetime('now'), ?)
+          ON CONFLICT(student_id)
+          DO UPDATE SET
+            source_week_id = excluded.source_week_id,
+            updated_at = datetime('now'),
+            updated_by = excluded.updated_by
+          `
+        ).run(student_id, sourceWeekId, req.user.id);
+      } else {
+        db.prepare('DELETE FROM student_curriculum_sources WHERE student_id=?').run(student_id);
+      }
+
+      ensureWeekRecord(db, student_id, week_id);
+      const effectiveWeekId = sourceWeekId || getPreviousWeekId(db, week_id);
+      const copiedCount = effectiveWeekId
+        ? applyCurriculumSourceToWeek(db, student_id, week_id, effectiveWeekId, req.user.id)
+        : 0;
+
+      writeAudit(db, {
+        user_id: req.user.id,
+        action: 'update',
+        entity: 'curriculum_source',
+        entity_id: student_id,
+        details: {
+          student_id,
+          week_id,
+          source_week_id: sourceWeekId,
+          applied_source_week_id: effectiveWeekId || null,
+          copied_count: copiedCount
+        }
+      });
+
+      return { effectiveWeekId, copiedCount };
+    })();
+
+    return res.json({
+      ok: true,
+      curriculum_source_week_id: result.effectiveWeekId || null,
+      curriculum_source_preference_week_id: sourceWeekId || null,
+      copied_count: result.copiedCount
+    });
   });
 
   router.put('/subject-record/:id', (req, res) => {

@@ -169,7 +169,7 @@ export default function feedRoutes(db) {
     const feed = db.prepare('SELECT * FROM feeds WHERE id=? AND deleted_at IS NULL').get(feedId);
     if (!feed) return res.status(404).json({ error: 'Not found' });
 
-    const canDelete = req.user.role === 'director' || feed.from_user_id === req.user.id;
+    const canDelete = req.user.role === 'director' || req.user.role === 'admin';
     if (!canDelete) return res.status(403).json({ error: 'Forbidden' });
 
     db.prepare("UPDATE feeds SET deleted_at=datetime('now') WHERE id=?").run(feedId);
