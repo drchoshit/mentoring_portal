@@ -46,6 +46,36 @@ function toRoundLabel(label) {
   return String(label || '').replace(/주차/g, '회차');
 }
 
+function shareSkipReasonKo(reason) {
+  switch (String(reason || '').trim()) {
+    case 'already_shared':
+      return '이미 학부모 공유된 학생입니다.';
+    case 'no_subject_records':
+      return '수강 진도(과목 별)에 등록된 과목이 없습니다.';
+    case 'no_this_week_homework':
+      return '수강 진도(과목 별)의 모든 과목에 이번주 과제가 없습니다.';
+    default:
+      return '공유 조건에 맞지 않아 건너뛰었습니다.';
+  }
+}
+
+function buildBulkShareSkippedLines(skippedItems, students) {
+  const studentMap = new Map((students || []).map((s) => [Number(s?.id || 0), s]));
+  return (Array.isArray(skippedItems) ? skippedItems : []).map((item, idx) => {
+    const studentId = Number(item?.student_id || 0);
+    const fromList = studentMap.get(studentId);
+    const externalId = String(item?.external_id || fromList?.external_id || '').trim();
+    const name = String(item?.student_name || fromList?.name || '').trim();
+    const studentLabel = [externalId, name].filter(Boolean).join(' ') || name || externalId || `학생ID ${studentId || '-'}`;
+    const reason = String(item?.reason_ko || '').trim() || shareSkipReasonKo(item?.reason);
+    const subjectCount = Number(item?.subject_count || 0);
+    const detail = item?.reason === 'no_this_week_homework' && subjectCount > 0
+      ? `${reason} (${subjectCount})`
+      : reason;
+    return `${idx + 1}. ${studentLabel}: ${detail}`;
+  });
+}
+
 function Modal({ title, onClose, children }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -931,9 +961,13 @@ export default function Students() {
 
       const updatedCount = Array.isArray(r?.updated) ? r.updated.length : Number(r?.updated_count || 0);
       const skippedCount = Array.isArray(r?.skipped) ? r.skipped.length : Number(r?.skipped_count || 0);
+      const skippedLines = buildBulkShareSkippedLines(r?.skipped, students);
       alert(
         `학부모 공유 처리 완료\n선택: ${targetIds.length}명\n공유 완료: ${updatedCount}명\n건너뜀: ${skippedCount}명`
       );
+      if (skippedLines.length) {
+        alert(`건너뛴 상세\n${skippedLines.join('\n')}`);
+      }
     } catch (e) {
       const msg = e.message || '학부모 공유 처리 중 오류가 발생했습니다.';
       setError(msg);

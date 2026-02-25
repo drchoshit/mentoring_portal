@@ -11,6 +11,46 @@ function ensureWeekRecord(db, student_id, week_id) {
   return info.lastInsertRowid;
 }
 
+function normalizeHomeworkTask(raw) {
+  if (!raw) return { text: '' };
+  if (typeof raw === 'string') return { text: raw };
+  if (typeof raw === 'object') return { text: String(raw.text || '').trim() };
+  return { text: String(raw || '').trim() };
+}
+
+function parseHomeworkTasks(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map(normalizeHomeworkTask);
+
+  if (typeof value === 'object') {
+    const arr = value.tasks || value.items || value.list;
+    if (Array.isArray(arr)) return arr.map(normalizeHomeworkTask);
+  }
+
+  const raw = String(value);
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(normalizeHomeworkTask);
+    if (parsed && typeof parsed === 'object') {
+      const arr = parsed.tasks || parsed.items || parsed.list;
+      if (Array.isArray(arr)) return arr.map(normalizeHomeworkTask);
+    }
+  } catch {
+    // fallback below
+  }
+
+  return raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((text) => ({ text }));
+}
+
+function hasThisWeekHomework(value) {
+  const tasks = parseHomeworkTasks(value);
+  return tasks.some((task) => String(task?.text || '').trim().length > 0);
+}
+
 function toPositiveInt(v) {
   const n = Number(v);
   if (!Number.isInteger(n) || n <= 0) return null;
@@ -479,14 +519,25 @@ export default function mentoringRoutes(db) {
         return res.status(400).json({ error: 'Missing student_ids' });
       }
 
+      const week = db.prepare('SELECT id FROM weeks WHERE id=?').get(weekId);
+      if (!week?.id) return res.status(404).json({ error: 'Week not found' });
+
       const actor = db
         .prepare('SELECT id FROM users WHERE id=?')
         .get(Number(req.user.id));
       const actorId = actor?.id ? Number(actor.id) : null;
 
-      const findStudent = db.prepare('SELECT id FROM students WHERE id=?');
+      const findStudent = db.prepare('SELECT id, external_id, name FROM students WHERE id=?');
       const findWeekRecord = db.prepare(
         'SELECT id, shared_with_parent FROM week_records WHERE student_id=? AND week_id=?'
+      );
+      const findSubjectRecords = db.prepare(
+        `
+        SELECT id, a_this_hw
+        FROM subject_records
+        WHERE student_id=? AND week_id=?
+        ORDER BY id
+        `
       );
       const markShared = db.prepare(
         "UPDATE week_records SET shared_with_parent=1, shared_at=datetime('now'), updated_at=datetime('now'), updated_by=? WHERE student_id=? AND week_id=?"
@@ -496,26 +547,53 @@ export default function mentoringRoutes(db) {
       const skipped = [];
       const tx = db.transaction(() => {
         for (const studentId of requested) {
-          if (!findStudent.get(studentId)?.id) {
-            skipped.push({ student_id: studentId, reason: 'student_not_found' });
-            continue;
-          }
+          const student = findStudent.get(studentId) || null;
+          const studentName = String(student?.name || '').trim();
+          const externalId = String(student?.external_id || '').trim();
 
           const weekRow = findWeekRecord.get(studentId, weekId);
-          if (!weekRow?.id) {
-            skipped.push({ student_id: studentId, reason: 'week_record_not_found' });
-            continue;
-          }
-          if (Number(weekRow.shared_with_parent) === 1) {
-            skipped.push({ student_id: studentId, reason: 'already_shared' });
+          if (Number(weekRow?.shared_with_parent) === 1) {
+            skipped.push({
+              student_id: studentId,
+              external_id: externalId || null,
+              student_name: studentName || null,
+              reason: 'already_shared',
+              reason_ko: '이미 학부모 공유된 학생입니다.'
+            });
             continue;
           }
 
+          const subjectRows = findSubjectRecords.all(studentId, weekId);
+          if (!subjectRows.length) {
+            skipped.push({
+              student_id: studentId,
+              external_id: externalId || null,
+              student_name: studentName || null,
+              reason: 'no_subject_records',
+              reason_ko: '수강 진도(과목 별)에 등록된 과목이 없습니다.'
+            });
+            continue;
+          }
+
+          const hasHomework = subjectRows.some((row) => hasThisWeekHomework(row?.a_this_hw));
+          if (!hasHomework) {
+            skipped.push({
+              student_id: studentId,
+              external_id: externalId || null,
+              student_name: studentName || null,
+              reason: 'no_this_week_homework',
+              reason_ko: '수강 진도(과목 별)의 모든 과목에 이번주 과제가 없습니다.',
+              subject_count: subjectRows.length
+            });
+            continue;
+          }
+
+          ensureWeekRecord(db, studentId, weekId);
           const info = markShared.run(actorId, studentId, weekId);
           if (info.changes) {
             updated.push(studentId);
           } else {
-            skipped.push({ student_id: studentId, reason: 'not_updated' });
+            throw new Error(`Share failed: not updated (student_id=${studentId}, week_id=${weekId})`);
           }
         }
       });
