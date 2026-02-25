@@ -51,6 +51,31 @@ function hasThisWeekHomework(value) {
   return tasks.some((task) => String(task?.text || '').trim().length > 0);
 }
 
+function hasMeaningfulText(value) {
+  if (value == null) return false;
+
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return false;
+    try {
+      const parsed = JSON.parse(raw);
+      return hasMeaningfulText(parsed);
+    } catch {
+      return true;
+    }
+  }
+
+  if (Array.isArray(value)) return value.some((item) => hasMeaningfulText(item));
+
+  if (typeof value === 'object') {
+    const values = Object.values(value);
+    if (!values.length) return false;
+    return values.some((item) => hasMeaningfulText(item));
+  }
+
+  return String(value).trim().length > 0;
+}
+
 function toPositiveInt(v) {
   const n = Number(v);
   if (!Number.isInteger(n) || n <= 0) return null;
@@ -533,7 +558,7 @@ export default function mentoringRoutes(db) {
       );
       const findSubjectRecords = db.prepare(
         `
-        SELECT id, a_this_hw
+        SELECT id, a_this_hw, a_curriculum
         FROM subject_records
         WHERE student_id=? AND week_id=?
         ORDER BY id
@@ -558,32 +583,47 @@ export default function mentoringRoutes(db) {
               external_id: externalId || null,
               student_name: studentName || null,
               reason: 'already_shared',
-              reason_ko: '이미 학부모 공유된 학생입니다.'
+              reason_codes: ['already_shared'],
+              reason_ko: '이미 학부모 공유된 학생입니다.',
+              reasons_ko: ['이미 학부모 공유된 학생입니다.']
             });
             continue;
           }
 
           const subjectRows = findSubjectRecords.all(studentId, weekId);
-          if (!subjectRows.length) {
-            skipped.push({
-              student_id: studentId,
-              external_id: externalId || null,
-              student_name: studentName || null,
-              reason: 'no_subject_records',
-              reason_ko: '수강 진도(과목 별)에 등록된 과목이 없습니다.'
-            });
-            continue;
+          const subjectCount = subjectRows.length;
+          const homeworkSubjectCount = subjectRows.filter((row) => hasThisWeekHomework(row?.a_this_hw)).length;
+          const curriculumSubjectCount = subjectRows.filter((row) => hasMeaningfulText(row?.a_curriculum)).length;
+
+          const reasonCodes = [];
+          const reasonMessages = [];
+
+          if (!subjectCount) {
+            reasonCodes.push('no_subject_records');
+            reasonMessages.push('수강 진도(과목 별)에 등록된 과목이 없어 공유를 건너뜁니다.');
+          } else {
+            if (homeworkSubjectCount === 0) {
+              reasonCodes.push('no_this_week_homework');
+              reasonMessages.push(`이번주 과제가 과목 ${subjectCount}개 모두 비어 있어 공유를 건너뜁니다.`);
+            }
+            if (curriculumSubjectCount === 0) {
+              reasonCodes.push('no_curriculum_content');
+              reasonMessages.push(`학습 커리큘럼이 과목 ${subjectCount}개 모두 비어 있어 공유를 건너뜁니다.`);
+            }
           }
 
-          const hasHomework = subjectRows.some((row) => hasThisWeekHomework(row?.a_this_hw));
-          if (!hasHomework) {
+          if (reasonCodes.length) {
             skipped.push({
               student_id: studentId,
               external_id: externalId || null,
               student_name: studentName || null,
-              reason: 'no_this_week_homework',
-              reason_ko: '수강 진도(과목 별)의 모든 과목에 이번주 과제가 없습니다.',
-              subject_count: subjectRows.length
+              reason: reasonCodes[0],
+              reason_codes: reasonCodes,
+              reason_ko: reasonMessages.join(' / '),
+              reasons_ko: reasonMessages,
+              subject_count: subjectCount,
+              homework_subject_count: homeworkSubjectCount,
+              curriculum_subject_count: curriculumSubjectCount
             });
             continue;
           }

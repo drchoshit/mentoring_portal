@@ -54,6 +54,8 @@ function shareSkipReasonKo(reason) {
       return '수강 진도(과목 별)에 등록된 과목이 없습니다.';
     case 'no_this_week_homework':
       return '수강 진도(과목 별)의 모든 과목에 이번주 과제가 없습니다.';
+    case 'no_curriculum_content':
+      return '학습 커리큘럼이 모든 과목에서 비어 있습니다.';
     default:
       return '공유 조건에 맞지 않아 건너뛰었습니다.';
   }
@@ -67,13 +69,107 @@ function buildBulkShareSkippedLines(skippedItems, students) {
     const externalId = String(item?.external_id || fromList?.external_id || '').trim();
     const name = String(item?.student_name || fromList?.name || '').trim();
     const studentLabel = [externalId, name].filter(Boolean).join(' ') || name || externalId || `학생ID ${studentId || '-'}`;
-    const reason = String(item?.reason_ko || '').trim() || shareSkipReasonKo(item?.reason);
+    const reasons = Array.isArray(item?.reasons_ko)
+      ? item.reasons_ko.map((v) => String(v || '').trim()).filter(Boolean)
+      : [];
+    const reasonText = reasons.length
+      ? reasons.join(' / ')
+      : String(item?.reason_ko || '').trim() || shareSkipReasonKo(item?.reason);
+
     const subjectCount = Number(item?.subject_count || 0);
-    const detail = item?.reason === 'no_this_week_homework' && subjectCount > 0
-      ? `${reason} (${subjectCount})`
-      : reason;
-    return `${idx + 1}. ${studentLabel}: ${detail}`;
+    const homeworkSubjectCount = Number(item?.homework_subject_count || 0);
+    const curriculumSubjectCount = Number(item?.curriculum_subject_count || 0);
+
+    const statParts = [];
+    if (subjectCount > 0) statParts.push(`과목 ${subjectCount}개`);
+    if (Array.isArray(item?.reason_codes) && item.reason_codes.includes('no_this_week_homework')) {
+      statParts.push(`이번주 과제 입력 과목 ${homeworkSubjectCount}개`);
+    }
+    if (Array.isArray(item?.reason_codes) && item.reason_codes.includes('no_curriculum_content')) {
+      statParts.push(`커리큘럼 입력 과목 ${curriculumSubjectCount}개`);
+    }
+
+    const stats = statParts.length ? ` [${statParts.join(', ')}]` : '';
+    return `${idx + 1}. ${studentLabel}: ${reasonText}${stats}`;
   });
+}
+
+function escapeHtml(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function openBulkShareSkippedReportPage({ title, summaryLines, skippedLines, targetWindow }) {
+  const allLines = [...(summaryLines || []), '', '건너뛴 상세', ...(skippedLines || [])];
+  const reportText = allLines.join('\n').trim();
+
+  const win = targetWindow || window.open('', '_blank');
+  if (!win) return false;
+
+  const escapedTitle = escapeHtml(title || '학부모 공유 결과');
+  const escapedReport = escapeHtml(reportText);
+  const escapedSummary = escapeHtml((summaryLines || []).join('\n'));
+  const escapedSkipped = escapeHtml((skippedLines || []).join('\n'));
+
+  win.document.open();
+  win.document.write(`<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapedTitle}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; color: #0f172a; }
+    h1 { margin: 0 0 12px; font-size: 20px; }
+    p { margin: 0 0 12px; color: #475569; }
+    .actions { margin: 12px 0; display: flex; gap: 8px; }
+    button { border: 1px solid #cbd5e1; background: #fff; color: #0f172a; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+    button.primary { background: #0f766e; border-color: #0f766e; color: #fff; }
+    textarea { width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px; font-size: 13px; line-height: 1.45; white-space: pre; }
+    #reportText { min-height: 360px; }
+    #summaryText { min-height: 100px; margin-top: 12px; }
+    #skippedText { min-height: 220px; margin-top: 12px; }
+    .muted { margin-top: 8px; font-size: 12px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <h1>${escapedTitle}</h1>
+  <p>아래 내용을 복사해서 전달/보관할 수 있습니다.</p>
+  <div class="actions">
+    <button class="primary" id="copyAllBtn">전체 복사</button>
+    <button id="copySkippedBtn">건너뛴 상세만 복사</button>
+  </div>
+  <textarea id="reportText" readonly>${escapedReport}</textarea>
+  <div class="muted">요약</div>
+  <textarea id="summaryText" readonly>${escapedSummary}</textarea>
+  <div class="muted">건너뛴 상세</div>
+  <textarea id="skippedText" readonly>${escapedSkipped}</textarea>
+  <script>
+    const reportText = document.getElementById('reportText');
+    const skippedText = document.getElementById('skippedText');
+    const copyAllBtn = document.getElementById('copyAllBtn');
+    const copySkippedBtn = document.getElementById('copySkippedBtn');
+
+    function copyFrom(el) {
+      if (!el) return;
+      el.focus();
+      el.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(el.value).catch(() => {});
+      }
+    }
+
+    copyAllBtn.addEventListener('click', () => copyFrom(reportText));
+    copySkippedBtn.addEventListener('click', () => copyFrom(skippedText));
+  </script>
+</body>
+</html>`);
+  win.document.close();
+  return true;
 }
 
 function Modal({ title, onClose, children }) {
@@ -946,6 +1042,18 @@ export default function Students() {
     );
     if (!ok) return;
 
+    let preopenedReportWindow = null;
+    try {
+      preopenedReportWindow = window.open('', '_blank');
+      if (preopenedReportWindow) {
+        preopenedReportWindow.document.open();
+        preopenedReportWindow.document.write('<!doctype html><html lang="ko"><head><meta charset="utf-8" /><title>학부모 공유 결과 준비중</title></head><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:20px;">결과를 불러오는 중...</body></html>');
+        preopenedReportWindow.document.close();
+      }
+    } catch {
+      preopenedReportWindow = null;
+    }
+
     setBulkSharingParents(true);
     setError('');
     try {
@@ -962,16 +1070,33 @@ export default function Students() {
       const updatedCount = Array.isArray(r?.updated) ? r.updated.length : Number(r?.updated_count || 0);
       const skippedCount = Array.isArray(r?.skipped) ? r.skipped.length : Number(r?.skipped_count || 0);
       const skippedLines = buildBulkShareSkippedLines(r?.skipped, students);
+      const summaryLines = [
+        `회차: ${toRoundLabel(selectedWeekObj?.label || '선택 회차')}`,
+        `선택: ${targetIds.length}명`,
+        `공유 완료: ${updatedCount}명`,
+        `건너뜀: ${skippedCount}명`
+      ];
       alert(
         `학부모 공유 처리 완료\n선택: ${targetIds.length}명\n공유 완료: ${updatedCount}명\n건너뜀: ${skippedCount}명`
       );
       if (skippedLines.length) {
-        alert(`건너뛴 상세\n${skippedLines.join('\n')}`);
+        const opened = openBulkShareSkippedReportPage({
+          title: '학부모 공유 건너뛴 학생 상세',
+          summaryLines,
+          skippedLines,
+          targetWindow: preopenedReportWindow
+        });
+        if (!opened) alert(`건너뛴 상세\n${skippedLines.join('\n')}`);
+      } else if (preopenedReportWindow && !preopenedReportWindow.closed) {
+        preopenedReportWindow.close();
       }
     } catch (e) {
       const msg = e.message || '학부모 공유 처리 중 오류가 발생했습니다.';
       setError(msg);
       alert(`학부모 공유 처리 실패\n${msg}`);
+      if (preopenedReportWindow && !preopenedReportWindow.closed) {
+        preopenedReportWindow.close();
+      }
     } finally {
       setBulkSharingParents(false);
     }
