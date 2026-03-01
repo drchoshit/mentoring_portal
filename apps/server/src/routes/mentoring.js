@@ -522,6 +522,26 @@ export default function mentoringRoutes(db) {
     res.json({ ok: true, shared_with_parent: 1 });
   });
 
+  router.post('/workflow/share-with-parent/force', (req, res) => {
+    const { student_id, week_id } = req.body || {};
+    if (!student_id || !week_id) return res.status(400).json({ error: 'Missing student_id/week_id' });
+    if (req.user.role !== 'director') {
+      return res.status(403).json({ error: 'Only director can force share' });
+    }
+
+    ensureWeekRecord(db, Number(student_id), Number(week_id));
+    const info = db
+      .prepare("UPDATE week_records SET shared_with_parent=1, shared_at=datetime('now'), updated_at=datetime('now'), updated_by=? WHERE student_id=? AND week_id=?")
+      .run(req.user.id, Number(student_id), Number(week_id));
+
+    if (!info.changes) {
+      return res.status(500).json({ error: 'Force share failed: week record not updated' });
+    }
+
+    writeAudit(db, { user_id: req.user.id, action: 'workflow', entity: 'share_with_parent_force', details: { student_id, week_id } });
+    res.json({ ok: true, shared_with_parent: 1 });
+  });
+
   router.post('/workflow/share-with-parent/bulk', (req, res) => {
     try {
       const { student_ids, week_id } = req.body || {};

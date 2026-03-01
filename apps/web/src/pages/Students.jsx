@@ -669,6 +669,7 @@ export default function Students() {
   const [workflowDates, setWorkflowDates] = useState({});
   const [selectedWorkflowStudentIds, setSelectedWorkflowStudentIds] = useState([]);
   const [bulkSharingParents, setBulkSharingParents] = useState(false);
+  const [forceSharingStudentId, setForceSharingStudentId] = useState(null);
 
   const [penaltySummary, setPenaltySummary] = useState({});
   const [detailStudent, setDetailStudent] = useState(null);
@@ -688,9 +689,55 @@ export default function Students() {
   const canSeeId = !isMentor;
   const canSeeMentorColumns = role === 'director' || role === 'admin';
   const canBulkShareParents = role === 'director';
+  const canForceShareParents = role === 'director';
 
   function jumpToWorkflowStatus() {
     workflowCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function openMentoringRecord(studentId) {
+    if (!selectedWeek) {
+      alert('\uba3c\uc800 \ud68c\ucc28\ub97c \uc120\ud0dd\ud574 \uc8fc\uc138\uc694.');
+      return;
+    }
+    nav(`/students/${studentId}/mentoring?week=${encodeURIComponent(selectedWeek)}`);
+  }
+
+  async function forceShareWithParent(student) {
+    if (!canForceShareParents) return;
+    if (!selectedWeek) {
+      alert('\uba3c\uc800 \ud68c\ucc28\ub97c \uc120\ud0dd\ud574 \uc8fc\uc138\uc694.');
+      return;
+    }
+
+    const studentId = Number(student?.id || 0);
+    if (!studentId) return;
+
+    const studentLabel = String(student?.name || '').trim() || `ID ${studentId}`;
+    const roundLabel = toRoundLabel(selectedWeekObj?.label || '\uc120\ud0dd \ud68c\ucc28');
+    const ok = confirm(
+      `${studentLabel} \ud559\uc0dd\uc758 ${roundLabel} \uba58\ud1a0\ub9c1 \uae30\ub85d\uc744 \ud559\ubd80\ubaa8\uc640 \uac15\uc81c \uacf5\uc720\ud560\uae4c\uc694?`
+    );
+    if (!ok) return;
+
+    setForceSharingStudentId(studentId);
+    setError('');
+    try {
+      await api('/api/mentoring/workflow/share-with-parent/force', {
+        method: 'POST',
+        body: {
+          student_id: studentId,
+          week_id: Number(selectedWeek)
+        }
+      });
+      await loadWorkflowDates(selectedWeek);
+    } catch (e) {
+      const msg = e.message || '\uac15\uc81c \uacf5\uc720 \ucc98\ub9ac \uc911 \uc624\ub958\uac00 \ubc1c\uc0dd\ud588\uc2b5\ub2c8\ub2e4.';
+      setError(msg);
+      alert(`\uac15\uc81c \uacf5\uc720 \uc2e4\ud328\n${msg}`);
+    } finally {
+      setForceSharingStudentId(null);
+    }
   }
 
   async function loadPenaltySummary() {
@@ -1374,7 +1421,7 @@ export default function Students() {
 
                         <button
                           className="btn-primary"
-                          onClick={() => nav(`/students/${s.id}/mentoring?week=${encodeURIComponent(selectedWeek)}`)}
+                          onClick={() => openMentoringRecord(s.id)}
                           disabled={!selectedWeek}
                         >
                           멘토링
@@ -1422,7 +1469,7 @@ export default function Students() {
           </div>
 
           <div className="mt-3 overflow-x-auto rounded-2xl border border-slate-200 bg-white/90 shadow-inner">
-            <table className="w-full min-w-[1060px] text-sm">
+            <table className={`w-full ${canForceShareParents ? 'min-w-[1180px]' : 'min-w-[1060px]'} text-sm`}>
               <colgroup>
                 {canBulkShareParents ? <col className="bg-amber-50/35" /> : null}
                 <col className="bg-amber-50/60" />
@@ -1431,6 +1478,7 @@ export default function Students() {
                 <col className="bg-sky-50/40" />
                 <col className="bg-sky-50/30" />
                 <col className="bg-sky-50/40" />
+                {canForceShareParents ? <col className="bg-slate-50/45" /> : null}
               </colgroup>
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500 bg-slate-100/70">
@@ -1448,7 +1496,11 @@ export default function Students() {
                   ) : null}
                   <th className="py-2 px-3 whitespace-nowrap border-b border-slate-200">학생 리스트(위 등록된 학생과 동일)</th>
                   <th className="px-3 whitespace-nowrap border-b border-slate-200" colSpan={2}>이번주 멘토명 / 멘토링 요일</th>
-                  <th className="px-3 whitespace-nowrap border-b border-slate-200" colSpan={3}>학습멘토링 기록 제출일 / 총괄멘토링 기록 제출일 / 학부모 공유일</th>
+                  <th className="px-3 whitespace-nowrap border-b border-slate-200" colSpan={canForceShareParents ? 4 : 3}>
+                    {canForceShareParents
+                      ? '학습멘토링 기록 제출일 / 총괄멘토링 기록 제출일 / 학부모 공유일 / 작업'
+                      : '학습멘토링 기록 제출일 / 총괄멘토링 기록 제출일 / 학부모 공유일'}
+                  </th>
                 </tr>
                 <tr className="text-left text-slate-700 bg-white/80">
                   <th className="py-2.5 px-3 whitespace-nowrap border-b border-slate-200">학생</th>
@@ -1457,6 +1509,7 @@ export default function Students() {
                   <th className="px-3 whitespace-nowrap border-b border-slate-200">학습멘토링 기록 제출일</th>
                   <th className="px-3 whitespace-nowrap border-b border-slate-200">총괄멘토링 기록 제출일</th>
                   <th className="px-3 whitespace-nowrap border-b border-slate-200">학부모 공유일</th>
+                  {canForceShareParents ? <th className="px-3 whitespace-nowrap border-b border-slate-200">작업</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -1522,6 +1575,26 @@ export default function Students() {
                           <span className="text-slate-400">미공유</span>
                         )}
                       </td>
+                      {canForceShareParents ? (
+                        <td className="px-3 whitespace-nowrap border-b border-slate-100">
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="btn-ghost px-2.5 py-1 text-xs whitespace-nowrap"
+                              onClick={() => openMentoringRecord(s.id)}
+                              disabled={!selectedWeek || forceSharingStudentId === s.id}
+                            >
+                              멘토링 기록
+                            </button>
+                            <button
+                              className="btn-primary px-2.5 py-1 text-xs whitespace-nowrap"
+                              onClick={() => forceShareWithParent(s)}
+                              disabled={!selectedWeek || bulkSharingParents || forceSharingStudentId === s.id}
+                            >
+                              {forceSharingStudentId === s.id ? '공유 중...' : '강제 공유'}
+                            </button>
+                          </div>
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })}
