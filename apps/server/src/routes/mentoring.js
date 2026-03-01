@@ -248,7 +248,13 @@ export default function mentoringRoutes(db) {
     const student_id = Number(req.params.studentId);
     const subject_id = Number(req.params.subjectId);
     if (!student_id || !subject_id) return res.status(400).json({ error: 'Missing studentId/subjectId' });
-    if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
+    if (req.user.role === 'parent') {
+      try {
+        assertParentOwnsStudent(req, student_id);
+      } catch (e) {
+        return res.status(e.message === 'Forbidden' ? 403 : 401).json({ error: e.message });
+      }
+    }
 
     const row = db.prepare('SELECT id, name FROM mentoring_subjects WHERE id=? AND student_id=?').get(subject_id, student_id);
     if (!row) return res.status(404).json({ error: 'Not found' });

@@ -1903,11 +1903,9 @@ function SubjectWideEditor({ record, perms, role, busy, parentMode, draft, onCha
     <div className={['rounded-2xl border p-4 shadow-sm', toneClass || 'border-slate-200 bg-white/70'].join(' ')}>
       <div className="flex items-center justify-between gap-3">
         <div className="font-semibold text-brand-900">{record.subject_name}</div>
-        {!parentMode ? (
-          <button className="btn-ghost text-red-700" type="button" disabled={busy} onClick={onDelete}>
-                과목 삭제
-          </button>
-        ) : null}
+        <button className="btn-ghost text-red-700" type="button" disabled={busy} onClick={onDelete}>
+              과목 삭제
+        </button>
       </div>
 
       <div className="mt-4 space-y-4">
