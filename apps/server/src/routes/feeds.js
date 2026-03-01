@@ -84,6 +84,8 @@ export default function feedRoutes(db) {
     if (studentId) {
       where.push('f.student_id=?');
       params.push(studentId);
+      // 학생 상세(멘토링) 피드에서는 자동 생성되는 "멘토링 제출" 피드를 숨겨 과도한 노이즈를 줄인다.
+      where.push("(f.target_field IS NULL OR f.target_field!='workflow_submit')");
     }
 
     const sql = `
