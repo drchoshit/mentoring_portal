@@ -1736,7 +1736,7 @@ function FeedCard({ feed, currentUser, onComment, onDelete }) {
   );
 }
 
-/* 학습 커리큘럼(과목별: 하단 가로 스크롤) */
+/* 학습 커리큘럼(과목별: 3열 x 2행 가시 그리드) */
 function CurriculumStrip({ subjects, perms, role, parentMode, busy, drafts, onChangeDraft, onAutoSave }) {
   const fieldKey = 'a_curriculum';
   const perm = getPerm(perms, fieldKey);
@@ -1755,19 +1755,23 @@ function CurriculumStrip({ subjects, perms, role, parentMode, busy, drafts, onCh
   }
 
   return (
-    <div className="overflow-x-auto">
-      <div className="flex gap-3 min-w-max pb-1">
+    <div className="space-y-2">
+      <div className="text-xs text-slate-700">
+        3 x 2 그리드 보기 · 전체 {list.length}과목
+      </div>
+      <div className="max-h-[760px] overflow-y-auto pr-1">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {list.map((r, idx) => {
           const sid = String(r.id);
           const val = drafts?.[sid]?.[fieldKey] ?? '';
           const subjectTone = SUBJECT_TONES[idx % SUBJECT_TONES.length];
 
           return (
-            <div key={r.id} className="shrink-0 w-[240px]">
-              <div className={['rounded-2xl border p-3 shadow-sm', subjectTone].join(' ')}>
+            <div key={r.id} className="h-full min-h-[300px]">
+              <div className={['rounded-2xl border p-4 shadow-sm h-full flex flex-col', subjectTone].join(' ')}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900 break-words">{r.subject_name}</div>
+                    <div className="text-base font-semibold text-slate-900 break-words">{r.subject_name}</div>
                     <div className="mt-1 flex flex-wrap gap-1">
                       {(editRoles || []).map((rKey) => (
                         <RoleTag key={rKey} role={rKey} active={rKey === role} />
@@ -1780,7 +1784,7 @@ function CurriculumStrip({ subjects, perms, role, parentMode, busy, drafts, onCh
                 </div>
 
                 <textarea
-                  className="textarea mt-3 min-h-[140px] whitespace-pre-wrap break-words"
+                  className="textarea mt-3 min-h-[220px] flex-1 whitespace-pre-wrap break-words"
                   value={val}
                   onChange={(e) => onChangeDraft?.(r.id, { [fieldKey]: e.target.value })}
                   onBlur={() => {
@@ -1794,7 +1798,7 @@ function CurriculumStrip({ subjects, perms, role, parentMode, busy, drafts, onCh
             </div>
           );
         })}
-        <div className="text-xs text-slate-700">{list.length}건</div>
+        </div>
       </div>
     </div>
   );
