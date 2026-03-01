@@ -635,11 +635,15 @@ export default function Mentoring() {
 
   async function deleteSubject(subjectId, subjectName) {
     if (!subjectId) return;
+    if (!weekId) {
+      setError('회차를 먼저 선택해 주세요.');
+      return;
+    }
     setBusy(true);
     try {
       const label = subjectName ? `"${subjectName}"` : '해당 과목';
-      confirmOrThrow(`과목 ${label} 삭제할까요?`);
-      await api(`/api/mentoring/subjects/${studentId}/${subjectId}`, { method: 'DELETE' });
+      confirmOrThrow(`과목 ${label} 삭제할까요?\n현재 선택한 회차 이후의 기록만 삭제됩니다.`);
+      await api(`/api/mentoring/subjects/${studentId}/${subjectId}?weekId=${encodeURIComponent(weekId)}`, { method: 'DELETE' });
       await loadAll();
     } catch (e) {
       if (e?.message !== '__CANCEL__') setError(e.message);

@@ -218,26 +218,50 @@ export default function mentoringRoutes(db) {
 
   router.get('/subjects/:studentId', (req, res) => {
     const student_id = Number(req.params.studentId);
+    const week_id = Number(req.query.weekId || 0);
     try {
       assertParentOwnsStudent(req, student_id);
     } catch (e) {
       return res.status(e.message === 'Forbidden' ? 403 : 401).json({ error: e.message });
     }
 
-    const rows = db.prepare('SELECT id, name FROM mentoring_subjects WHERE student_id=? ORDER BY id').all(student_id);
+    const rows = week_id
+      ? db
+          .prepare('SELECT id, name FROM mentoring_subjects WHERE student_id=? AND (deleted_from_week_id IS NULL OR deleted_from_week_id > ?) ORDER BY id')
+          .all(student_id, week_id)
+      : db.prepare('SELECT id, name FROM mentoring_subjects WHERE student_id=? ORDER BY id').all(student_id);
     res.json({ subjects: rows });
   });
 
   router.post('/subjects/:studentId', (req, res) => {
     const student_id = Number(req.params.studentId);
     const { name } = req.body || {};
-    if (!name) return res.status(400).json({ error: 'Missing name' });
+    const normalizedName = String(name || '').trim();
+    if (!normalizedName) return res.status(400).json({ error: 'Missing name' });
 
     if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
 
+    const existing = db
+      .prepare('SELECT id, name, deleted_from_week_id FROM mentoring_subjects WHERE student_id=? AND name=?')
+      .get(student_id, normalizedName);
+    if (existing?.id) {
+      if (existing.deleted_from_week_id != null) {
+        db.prepare("UPDATE mentoring_subjects SET deleted_from_week_id=NULL, updated_at=datetime('now') WHERE id=?").run(existing.id);
+        writeAudit(db, {
+          user_id: req.user.id,
+          action: 'restore',
+          entity: 'mentoring_subject',
+          entity_id: existing.id,
+          details: { student_id, name: normalizedName }
+        });
+        return res.json({ id: existing.id, restored: true });
+      }
+      return res.status(400).json({ error: 'Subject exists' });
+    }
+
     try {
-      const info = db.prepare('INSERT INTO mentoring_subjects (student_id, name) VALUES (?,?)').run(student_id, String(name));
-      writeAudit(db, { user_id: req.user.id, action: 'create', entity: 'mentoring_subject', entity_id: info.lastInsertRowid, details: { student_id, name } });
+      const info = db.prepare('INSERT INTO mentoring_subjects (student_id, name) VALUES (?,?)').run(student_id, normalizedName);
+      writeAudit(db, { user_id: req.user.id, action: 'create', entity: 'mentoring_subject', entity_id: info.lastInsertRowid, details: { student_id, name: normalizedName } });
       return res.json({ id: info.lastInsertRowid });
     } catch {
       return res.status(400).json({ error: 'Subject exists' });
@@ -247,7 +271,9 @@ export default function mentoringRoutes(db) {
   router.delete('/subjects/:studentId/:subjectId', (req, res) => {
     const student_id = Number(req.params.studentId);
     const subject_id = Number(req.params.subjectId);
+    const week_id = Number(req.query.weekId || req.body?.week_id || 0);
     if (!student_id || !subject_id) return res.status(400).json({ error: 'Missing studentId/subjectId' });
+    if (!week_id) return res.status(400).json({ error: 'Missing weekId' });
     if (req.user.role === 'parent') {
       try {
         assertParentOwnsStudent(req, student_id);
@@ -256,18 +282,49 @@ export default function mentoringRoutes(db) {
       }
     }
 
-    const row = db.prepare('SELECT id, name FROM mentoring_subjects WHERE id=? AND student_id=?').get(subject_id, student_id);
+    const week = db.prepare('SELECT id FROM weeks WHERE id=?').get(week_id);
+    if (!week?.id) return res.status(404).json({ error: 'Week not found' });
+
+    const row = db.prepare('SELECT id, name, deleted_from_week_id FROM mentoring_subjects WHERE id=? AND student_id=?').get(subject_id, student_id);
     if (!row) return res.status(404).json({ error: 'Not found' });
 
-    db.prepare('DELETE FROM mentoring_subjects WHERE id=?').run(subject_id);
+    const nextDeletedFromWeekId = row.deleted_from_week_id
+      ? Math.min(Number(row.deleted_from_week_id), week_id)
+      : week_id;
+
+    const clearRecordsFromWeek = db.prepare(
+      'DELETE FROM subject_records WHERE student_id=? AND subject_id=? AND week_id>=?'
+    );
+    const markSubjectDeletedFromWeek = db.prepare(
+      "UPDATE mentoring_subjects SET deleted_from_week_id=?, updated_at=datetime('now') WHERE id=? AND student_id=?"
+    );
+
+    let removedRecordCount = 0;
+    const tx = db.transaction(() => {
+      const clearInfo = clearRecordsFromWeek.run(student_id, subject_id, nextDeletedFromWeekId);
+      removedRecordCount = Number(clearInfo?.changes || 0);
+      markSubjectDeletedFromWeek.run(nextDeletedFromWeekId, subject_id, student_id);
+    });
+    tx();
+
     writeAudit(db, {
       user_id: req.user.id,
       action: 'delete',
       entity: 'mentoring_subject',
       entity_id: subject_id,
-      details: { student_id, name: row.name }
+      details: {
+        student_id,
+        name: row.name,
+        deleted_from_week_id: nextDeletedFromWeekId,
+        removed_record_count: removedRecordCount
+      }
     });
-    return res.json({ ok: true });
+    return res.json({
+      ok: true,
+      subject_id,
+      deleted_from_week_id: nextDeletedFromWeekId,
+      removed_record_count: removedRecordCount
+    });
   });
 
   router.get('/record', (req, res) => {
@@ -296,7 +353,9 @@ export default function mentoringRoutes(db) {
 
     ensureWeekRecord(db, student_id, week_id);
 
-    const subjects = db.prepare('SELECT id, name FROM mentoring_subjects WHERE student_id=? ORDER BY id').all(student_id);
+    const subjects = db
+      .prepare('SELECT id, name FROM mentoring_subjects WHERE student_id=? AND (deleted_from_week_id IS NULL OR deleted_from_week_id > ?) ORDER BY id')
+      .all(student_id, week_id);
     for (const s of subjects) ensureSubjectRecord(db, student_id, week_id, s.id, curriculumSourceWeekId);
 
     hydrateCurriculumFromSourceIfEmpty(db, student_id, week_id, curriculumSourceWeekId);
@@ -306,9 +365,9 @@ export default function mentoringRoutes(db) {
       `SELECT r.*, s.name as subject_name
        FROM subject_records r
        JOIN mentoring_subjects s ON s.id=r.subject_id
-       WHERE r.student_id=? AND r.week_id=?
+       WHERE r.student_id=? AND r.week_id=? AND (s.deleted_from_week_id IS NULL OR s.deleted_from_week_id > ?)
        ORDER BY s.id`
-    ).all(student_id, week_id);
+    ).all(student_id, week_id, week_id);
 
     const weekRecord = db.prepare('SELECT * FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
 

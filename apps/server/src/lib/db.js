@@ -259,8 +259,10 @@ function ensureMentoringTables() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER NOT NULL,
       name TEXT NOT NULL,
+      deleted_from_week_id INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(deleted_from_week_id) REFERENCES weeks(id) ON DELETE SET NULL,
       FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
     );
 
@@ -290,6 +292,16 @@ function ensureMentoringTables() {
 
     CREATE INDEX IF NOT EXISTS idx_subject_records_student_week
       ON subject_records(student_id, week_id);
+  `);
+
+  const subjectCols = new Set(db.prepare(`PRAGMA table_info(mentoring_subjects)`).all().map((r) => r.name));
+  if (!subjectCols.has('deleted_from_week_id')) {
+    db.exec(`ALTER TABLE mentoring_subjects ADD COLUMN deleted_from_week_id INTEGER;`);
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_mentoring_subjects_student_deleted_from_week
+      ON mentoring_subjects(student_id, deleted_from_week_id);
   `);
 }
 
