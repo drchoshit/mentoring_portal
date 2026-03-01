@@ -1185,7 +1185,7 @@ export default function Mentoring() {
                 draft={subjectDrafts?.[String(r.id)] || {}}
                 onChangeDraft={(patch) => updateSubjectDraft(r.id, patch)}
                 onAutoSave={() => autoSaveOneSubject(r.id)}
-                onDelete={() => deleteSubject(r.id, r.subject_name)}
+                onDelete={() => deleteSubject(r.subject_id || r.id, r.subject_name)}
               />
             ))}
             {!subjectRecords.length ? (
