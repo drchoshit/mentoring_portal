@@ -51,7 +51,7 @@ export function filterObjectByView(db, role, obj, { parentMode = false } = {}) {
   if (!obj) return obj;
   const out = { ...obj };
   for (const key of Object.keys(out)) {
-    if (!key.match(/^(a_|b_|c_|scores_json)/)) continue;
+    if (!key.match(/^(a_|b_|c_|d_|scores_json)/)) continue;
     if (parentMode) {
       const parentOk = isParentVisible(db, key);
       if (!parentOk) out[key] = null;

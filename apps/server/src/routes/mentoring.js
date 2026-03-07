@@ -6,8 +6,8 @@ function ensureWeekRecord(db, student_id, week_id) {
   const existing = db.prepare('SELECT id FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
   if (existing) return existing.id;
   const info = db.prepare(
-    'INSERT INTO week_records (student_id, week_id, b_daily_tasks, b_daily_tasks_this_week, b_lead_daily_feedback, scores_json) VALUES (?,?,?,?,?,?)'
-  ).run(student_id, week_id, JSON.stringify({}), JSON.stringify({}), JSON.stringify({}), JSON.stringify([]));
+    'INSERT INTO week_records (student_id, week_id, b_daily_tasks, b_daily_tasks_this_week, b_lead_daily_feedback, d_clinic_records, scores_json) VALUES (?,?,?,?,?,?,?)'
+  ).run(student_id, week_id, JSON.stringify({}), JSON.stringify({}), JSON.stringify({}), JSON.stringify([]), JSON.stringify([]));
   return info.lastInsertRowid;
 }
 
@@ -85,6 +85,18 @@ function toPositiveInt(v) {
 function getPreviousWeekId(db, week_id) {
   const row = db.prepare('SELECT id FROM weeks WHERE id < ? ORDER BY id DESC LIMIT 1').get(week_id);
   return toPositiveInt(row?.id);
+}
+
+function getWeekRound(week) {
+  const label = String(week?.label || '');
+  const m = label.match(/(\d+)/);
+  if (m) {
+    const n = Number(m[1]);
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  const idNum = Number(week?.id || 0);
+  if (Number.isInteger(idNum) && idNum > 0) return idNum;
+  return 0;
 }
 
 function hydrateDailyTasksFromPreviousWeekIfEmpty(db, student_id, week_id, previous_week_id) {
@@ -295,7 +307,7 @@ export default function mentoringRoutes(db) {
     const normalizedName = String(name || '').trim();
     if (!normalizedName) return res.status(400).json({ error: 'Missing name' });
 
-    if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
+    if (req.user.role === 'parent' || req.user.role === 'mentor') return res.status(403).json({ error: 'Forbidden' });
 
     const existing = db
       .prepare('SELECT id, name, deleted_from_week_id FROM mentoring_subjects WHERE student_id=? AND name=?')
@@ -330,6 +342,7 @@ export default function mentoringRoutes(db) {
     const week_id = Number(req.query.weekId || req.body?.week_id || 0);
     if (!student_id || !subject_id) return res.status(400).json({ error: 'Missing studentId/subjectId' });
     if (!week_id) return res.status(400).json({ error: 'Missing weekId' });
+    if (req.user.role === 'mentor') return res.status(403).json({ error: 'Forbidden' });
     if (req.user.role === 'parent') {
       try {
         assertParentOwnsStudent(req, student_id);
@@ -403,12 +416,16 @@ export default function mentoringRoutes(db) {
     const student = db.prepare('SELECT * FROM students WHERE id=?').get(student_id);
     const week = db.prepare('SELECT * FROM weeks WHERE id=?').get(week_id);
     if (!student || !week) return res.status(404).json({ error: 'Not found' });
+    const weekRound = getWeekRound(week);
+    const useNewDailyTaskLayout = weekRound >= 4;
 
     const { preferenceWeekId, effectiveWeekId: curriculumSourceWeekId } = resolveCurriculumSourceWeekId(db, student_id, week_id);
     const previousWeekId = getPreviousWeekId(db, week_id);
 
     ensureWeekRecord(db, student_id, week_id);
-    hydrateDailyTasksFromPreviousWeekIfEmpty(db, student_id, week_id, previousWeekId);
+    if (useNewDailyTaskLayout) {
+      hydrateDailyTasksFromPreviousWeekIfEmpty(db, student_id, week_id, previousWeekId);
+    }
 
     const subjects = db
       .prepare('SELECT id, name FROM mentoring_subjects WHERE student_id=? AND (deleted_from_week_id IS NULL OR deleted_from_week_id > ?) ORDER BY id')
@@ -451,6 +468,7 @@ export default function mentoringRoutes(db) {
       subjects,
       subject_records,
       week_record,
+      use_new_daily_task_layout: useNewDailyTaskLayout,
       curriculum_source_week_id: curriculumSourceWeekId || null,
       curriculum_source_preference_week_id: preferenceWeekId || null
     });
@@ -460,7 +478,7 @@ export default function mentoringRoutes(db) {
     const student_id = toPositiveInt(req.body?.student_id ?? req.body?.studentId);
     const week_id = toPositiveInt(req.body?.week_id ?? req.body?.weekId);
     if (!student_id || !week_id) return res.status(400).json({ error: 'Missing student_id/week_id' });
-    if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
+    if (req.user.role === 'parent' || req.user.role === 'mentor') return res.status(403).json({ error: 'Forbidden' });
 
     const student = db.prepare('SELECT id FROM students WHERE id=?').get(student_id);
     const week = db.prepare('SELECT id FROM weeks WHERE id=?').get(week_id);
@@ -532,7 +550,7 @@ export default function mentoringRoutes(db) {
     const id = Number(req.params.id);
     const row = db.prepare('SELECT * FROM subject_records WHERE id=?').get(id);
     if (!row) return res.status(404).json({ error: 'Not found' });
-    if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
+    if (req.user.role === 'parent' || req.user.role === 'mentor') return res.status(403).json({ error: 'Forbidden' });
 
     const updates = {};
     for (const key of ['a_curriculum','a_last_hw','a_hw_exec','a_progress','a_this_hw','a_comment']) {
@@ -558,9 +576,13 @@ export default function mentoringRoutes(db) {
     const row = db.prepare('SELECT * FROM week_records WHERE id=?').get(id);
     if (!row) return res.status(404).json({ error: 'Not found' });
     if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
+    const week = db.prepare('SELECT id, label FROM weeks WHERE id=?').get(row.week_id);
+    const weekRound = getWeekRound(week);
+    const clinicEnabled = weekRound >= 5;
 
     const updates = {};
-    for (const key of ['b_daily_tasks','b_daily_tasks_this_week','b_lead_daily_feedback','c_lead_weekly_feedback','c_director_commentary','scores_json']) {
+    for (const key of ['b_daily_tasks','b_daily_tasks_this_week','b_lead_daily_feedback','c_lead_weekly_feedback','c_director_commentary','d_clinic_records','scores_json']) {
+      if (key === 'd_clinic_records' && !clinicEnabled) continue;
       if (key in (req.body || {})) updates[key] = req.body[key];
     }
     if ('shared_with_parent' in (req.body || {})) {
@@ -572,13 +594,20 @@ export default function mentoringRoutes(db) {
     const keys = Object.keys(updates);
     if (!keys.length) return res.json({ ok: true });
 
-    const allowed = keys.filter((k) => k === 'shared_with_parent' || canEditField(db, req.user.role, k));
+    const mentorEditableKeys = new Set(clinicEnabled ? ['d_clinic_records'] : []);
+    const allowed = keys.filter((k) => {
+      if (k === 'shared_with_parent') return true;
+      if (req.user.role === 'mentor') return mentorEditableKeys.has(k) && canEditField(db, req.user.role, k);
+      return canEditField(db, req.user.role, k);
+    });
     if (!allowed.length) return res.status(403).json({ error: 'No editable fields' });
 
     const normalized = {};
     for (const k of allowed) {
       if (k === 'scores_json' || k === 'b_daily_tasks' || k === 'b_daily_tasks_this_week' || k === 'b_lead_daily_feedback') {
         normalized[k] = JSON.stringify(updates[k] ?? {});
+      } else if (k === 'd_clinic_records') {
+        normalized[k] = JSON.stringify(Array.isArray(updates[k]) ? updates[k] : []);
       } else if (k === 'shared_with_parent') {
         normalized[k] = updates[k] ? 1 : 0;
       } else {

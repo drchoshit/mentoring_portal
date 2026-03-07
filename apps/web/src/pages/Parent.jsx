@@ -89,6 +89,51 @@ function toRoundLabel(label) {
   return String(label || '').replace(/주차/g, '회차');
 }
 
+function getWeekRound(week) {
+  const label = String(week?.label || '');
+  const m = label.match(/(\d+)/);
+  if (m) {
+    const n = Number(m[1]);
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  const idNum = Number(week?.id || 0);
+  if (Number.isInteger(idNum) && idNum > 0) return idNum;
+  return 0;
+}
+
+const DEFAULT_CLINIC_ENTRY = {
+  mentor_name: '',
+  subject: '',
+  material: '',
+  problem_name: '',
+  problem_type: '',
+  solved_date: '',
+  summary: ''
+};
+
+function normalizeClinicEntry(raw) {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_CLINIC_ENTRY };
+  return {
+    mentor_name: String(raw.mentor_name || '').trim(),
+    subject: String(raw.subject || '').trim(),
+    material: String(raw.material || '').trim(),
+    problem_name: String(raw.problem_name || '').trim(),
+    problem_type: String(raw.problem_type || '').trim(),
+    solved_date: String(raw.solved_date || '').trim(),
+    summary: String(raw.summary || '').trim()
+  };
+}
+
+function parseClinicEntries(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map(normalizeClinicEntry);
+  if (typeof value === 'object' && Array.isArray(value.entries)) return value.entries.map(normalizeClinicEntry);
+  const parsed = safeJson(value, []);
+  if (Array.isArray(parsed)) return parsed.map(normalizeClinicEntry);
+  if (parsed && typeof parsed === 'object' && Array.isArray(parsed.entries)) return parsed.entries.map(normalizeClinicEntry);
+  return [];
+}
+
 function Badge({ children }) {
   return (
     <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-100/70 px-2 py-0.5 text-[11px] text-amber-900">
@@ -105,6 +150,7 @@ const SECTION_TONES = {
   curriculum: 'border-sky-200/60 bg-sky-50/30',
   subjects: 'border-amber-200/60 bg-amber-50/30',
   daily: 'border-blue-200/60 bg-blue-50/30',
+  clinic: 'border-indigo-200/60 bg-indigo-50/30',
   weekly: 'border-emerald-200/60 bg-emerald-50/30'
 };
 
@@ -338,6 +384,9 @@ export default function Parent() {
     () => allWeeks.find((w) => String(w.id) === String(selectedWeekId)),
     [allWeeks, selectedWeekId]
   );
+  const selectedWeekRound = useMemo(() => getWeekRound(selectedWeek), [selectedWeek?.id, selectedWeek?.label]);
+  const useNewDailyTaskLayout = selectedWeekRound >= 4;
+  const showClinicSection = selectedWeekRound >= 5;
 
   useEffect(() => {
     if (!visibleWeeks.length) {
@@ -358,6 +407,7 @@ export default function Parent() {
   const weekRecord = useMemo(() => (record?.week_record || {}), [record]);
   const dailyTasks = useMemo(() => safeJson(weekRecord?.b_daily_tasks, {}), [weekRecord]);
   const dailyTasksThisWeek = useMemo(() => safeJson(weekRecord?.b_daily_tasks_this_week, {}), [weekRecord]);
+  const clinicEntries = useMemo(() => parseClinicEntries(weekRecord?.d_clinic_records), [weekRecord]);
   const scores = useMemo(() => safeJson(weekRecord?.scores_json, []), [weekRecord]);
 
   const penaltyItems = selected?.penalties?.items || [];
@@ -546,7 +596,7 @@ export default function Parent() {
 
       <BlockedSection blocked={isLockedWeek}>
         <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
-          <SectionTitle title="일일 학습 과제(지난주)" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+          <SectionTitle title={useNewDailyTaskLayout ? '일일 학습 과제(지난주)' : '일일 학습 과제'} right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
             <div className="mt-3 space-y-2">
               {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasks?.[d.k]} />)}
@@ -555,16 +605,57 @@ export default function Parent() {
         </div>
       </BlockedSection>
 
-      <BlockedSection blocked={isLockedWeek}>
-        <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
-          <SectionTitle title="일일 학습 과제(이번주)" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
-          {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-            <div className="mt-3 space-y-2">
-              {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasksThisWeek?.[d.k]} />)}
-            </div>
-          ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
-        </div>
-      </BlockedSection>
+      {useNewDailyTaskLayout ? (
+        <BlockedSection blocked={isLockedWeek}>
+          <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
+            <SectionTitle title="일일 학습 과제(이번주)" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+            {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
+              <div className="mt-3 space-y-2">
+                {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasksThisWeek?.[d.k]} />)}
+              </div>
+            ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
+          </div>
+        </BlockedSection>
+      ) : null}
+
+      {showClinicSection ? (
+        <BlockedSection blocked={isLockedWeek}>
+          <div className={['card p-5', SECTION_TONES.clinic].join(' ')}>
+            <SectionTitle title="클리닉 섹션" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+            {recordLoading ? (
+              <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div>
+            ) : record ? (
+              <div className="mt-3 space-y-3">
+                {clinicEntries.length ? (
+                  clinicEntries.map((entry, idx) => (
+                    <div key={`${entry.mentor_name}-${entry.problem_name}-${idx}`} className="rounded-xl border border-slate-200 bg-white/80 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-sm font-semibold text-brand-800">클리닉 기록 {idx + 1}</div>
+                        <div className="text-xs text-slate-600">{entry.solved_date || '-'}</div>
+                      </div>
+                      <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-slate-800">
+                        <div>진행 멘토: {entry.mentor_name || '-'}</div>
+                        <div>과목: {entry.subject || '-'}</div>
+                        <div>교재명: {entry.material || '-'}</div>
+                        <div>문제명: {entry.problem_name || '-'}</div>
+                        <div className="md:col-span-2">유형 기록: {entry.problem_type || '-'}</div>
+                      </div>
+                      <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50/70 p-2">
+                        <div className="text-xs font-semibold text-brand-800">해결요약 피드백</div>
+                        <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{entry.summary || '-'}</div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="mt-3 text-sm text-slate-500">공유된 클리닉 기록이 없습니다.</div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>
+            )}
+          </div>
+        </BlockedSection>
+      ) : null}
 
       <BlockedSection blocked={isLockedWeek}>
         <div className={['card p-5', SECTION_TONES.weekly].join(' ')}>

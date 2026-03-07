@@ -268,7 +268,7 @@ export default function studentRoutes(db) {
 
   // 학생 "프로필(성적/목표대학 등)" 저장
   // 멘토링 페이지에서 사용하는 저장 버튼용
-  router.put('/:id/profile', requireRole('director','admin','lead','mentor'), (req, res) => {
+  router.put('/:id/profile', requireRole('director','admin','lead'), (req, res) => {
     if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
 
     const id = Number(req.params.id);

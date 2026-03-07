@@ -73,6 +73,18 @@ function fmtDate(d) {
   return `${y}-${m}-${day}`;
 }
 
+function getWeekRound(week) {
+  const label = String(week?.label || '');
+  const m = label.match(/(\d+)/);
+  if (m) {
+    const n = Number(m[1]);
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  const idNum = Number(week?.id || 0);
+  if (Number.isInteger(idNum) && idNum > 0) return idNum;
+  return 0;
+}
+
 function makeSubjectRow(label, records, valueFn, rowClass = '') {
   const cls = rowClass ? ` class="${rowClass}"` : '';
   return `
@@ -97,6 +109,8 @@ export default function printRoutes(db) {
     const student = db.prepare('SELECT * FROM students WHERE id=?').get(student_id);
     const week = db.prepare('SELECT * FROM weeks WHERE id=?').get(week_id);
     if (!student || !week) return res.status(404).send('Not found');
+    const weekRound = getWeekRound(week);
+    const useNewDailyTaskLayout = weekRound >= 4;
 
     const subjRecords = db.prepare(
       `SELECT r.*, s.name as subject_name
@@ -116,17 +130,31 @@ export default function printRoutes(db) {
     const dailyTasksThisWeek = parseJson(weekRecord?.b_daily_tasks_this_week, {});
     const dailyFeedback = parseJson(weekRecord?.b_lead_daily_feedback, {});
 
-    const requiredPrintFields = new Set([
-      'a_curriculum',
-      'a_last_hw',
-      'a_hw_exec',
-      'a_progress',
-      'a_this_hw',
-      'a_comment',
-      'b_daily_tasks',
-      'b_daily_tasks_this_week',
-      'b_lead_daily_feedback'
-    ]);
+    const requiredPrintFields = new Set(
+      useNewDailyTaskLayout
+        ? [
+            'a_curriculum',
+            'a_last_hw',
+            'a_hw_exec',
+            'a_progress',
+            'a_this_hw',
+            'a_comment',
+            'b_daily_tasks',
+            'b_daily_tasks_this_week',
+            'b_lead_daily_feedback'
+          ]
+        : [
+            'a_curriculum',
+            'a_last_hw',
+            'a_hw_exec',
+            'a_progress',
+            'a_this_hw',
+            'a_comment',
+            'b_daily_tasks',
+            'b_lead_daily_feedback',
+            'c_lead_weekly_feedback'
+          ]
+    );
     const printable = (k) => canViewField(db, req.user.role, k) && (requiredPrintFields.has(k) || isEnabledPrint(db, k));
 
     const days = [
@@ -167,6 +195,75 @@ export default function printRoutes(db) {
       `2학년: 1학기 ${schoolGrades?.['2']?.['1'] || '-'} / 2학기 ${schoolGrades?.['2']?.['2'] || '-'}`,
       `3학년: 1학기 ${schoolGrades?.['3']?.['1'] || '-'} / 2학기 ${schoolGrades?.['3']?.['2'] || '-'}`
     ].join('\n');
+
+    const bottomSectionHtml = useNewDailyTaskLayout
+      ? `
+        <div class="card tasks-card">
+          <h3>일일 학습 과제(지난주)</h3>
+          <table class="dense day-table">
+            <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
+            <tbody>
+              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_daily_tasks') ? dailyTasks?.[d.key] : '')}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card tasks-this-week-card">
+          <h3>일일 학습 과제(이번주)</h3>
+          <table class="dense day-table">
+            <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
+            <tbody>
+              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_daily_tasks_this_week') ? dailyTasksThisWeek?.[d.key] : '')}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card daily-feedback-card">
+          <h3>요일 별 총괄멘토 피드백</h3>
+          <table class="dense feedback-table">
+            <thead><tr><th style="width:12mm;">요일</th><th>피드백</th></tr></thead>
+            <tbody>
+              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_lead_daily_feedback') ? dailyFeedback?.[d.key] : '')}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      `
+      : `
+        <div class="card tasks-card">
+          <h3>일일 학습 과제</h3>
+          <table class="dense day-table">
+            <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
+            <tbody>
+              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_daily_tasks') ? dailyTasks?.[d.key] : '')}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="bottom-right">
+          <div class="card daily-feedback-card">
+            <h3>요일 별 총괄멘토 피드백</h3>
+            <table class="dense feedback-table">
+              <thead><tr><th style="width:12mm;">요일</th><th>피드백</th></tr></thead>
+              <tbody>
+                ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_lead_daily_feedback') ? dailyFeedback?.[d.key] : '')}</td></tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="card weekly-feedback-card">
+            <h3>주간 총괄멘토 피드백</h3>
+            <table class="dense weekly-table">
+              <tbody>
+                <tr>
+                  <td class="note">${textToHtml(printable('c_lead_weekly_feedback') ? weekRecord?.c_lead_weekly_feedback : '')}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+
+    const bottomClass = useNewDailyTaskLayout ? 'bottom bottom-new' : 'bottom bottom-legacy';
 
     const html = `<!doctype html>
 <html>
@@ -226,6 +323,7 @@ export default function printRoutes(db) {
     .tasks-card { background: #f5f9ff; border-color: #9fb8d6; }
     .tasks-this-week-card { background: #eef8f1; border-color: #a8c9ae; }
     .daily-feedback-card { background: #f3faf5; border-color: #9fc8ac; }
+    .weekly-feedback-card { background: #fff6ed; border-color: #d8bda1; }
 
     table { width: 100%; border-collapse: collapse; table-layout: fixed; }
     th, td {
@@ -254,7 +352,13 @@ export default function printRoutes(db) {
 
     .bottom {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1.4mm;
+    }
+    .bottom.bottom-new { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .bottom.bottom-legacy { grid-template-columns: 1.05fr 1fr; }
+    .bottom-right {
+      display: grid;
+      grid-template-rows: auto auto;
       gap: 1.4mm;
     }
     .dense th, .dense td { font-size: 8.1px; padding: 0.78mm 1.0mm; }
@@ -262,6 +366,8 @@ export default function printRoutes(db) {
     .feedback-table thead th { background: #dff1e5; }
     .day-table tbody tr:nth-child(even) td { background: #fbfdff; }
     .feedback-table tbody tr:nth-child(even) td { background: #f9fdfa; }
+    .weekly-table td { background: #fffdf9; }
+    .weekly-table td.note { min-height: 18mm; }
 
     .info-table th { width: 13mm; background: #f3f7fb; }
     .info-table td { background: #fff; }
@@ -330,36 +436,8 @@ export default function printRoutes(db) {
         </table>
       </div>
 
-      <div class="bottom">
-        <div class="card tasks-card">
-          <h3>일일 학습 과제(지난주)</h3>
-          <table class="dense day-table">
-            <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
-            <tbody>
-              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_daily_tasks') ? dailyTasks?.[d.key] : '')}</td></tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-
-        <div class="card tasks-this-week-card">
-          <h3>일일 학습 과제(이번주)</h3>
-          <table class="dense day-table">
-            <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
-            <tbody>
-              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_daily_tasks_this_week') ? dailyTasksThisWeek?.[d.key] : '')}</td></tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-
-        <div class="card daily-feedback-card">
-          <h3>요일 별 총괄멘토 피드백</h3>
-          <table class="dense feedback-table">
-            <thead><tr><th style="width:12mm;">요일</th><th>피드백</th></tr></thead>
-            <tbody>
-              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_lead_daily_feedback') ? dailyFeedback?.[d.key] : '')}</td></tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
+      <div class="${bottomClass}">
+        ${bottomSectionHtml}
       </div>
 
       <div class="footer-note muted">자동 맞춤 인쇄: A4 가로 1페이지</div>

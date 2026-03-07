@@ -81,6 +81,18 @@ function toRoundLabel(label) {
   return String(label || '').replace(/주차/g, '회차');
 }
 
+function getWeekRound(week) {
+  const label = String(week?.label || '');
+  const m = label.match(/(\d+)/);
+  if (m) {
+    const n = Number(m[1]);
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  const idNum = Number(week?.id || 0);
+  if (Number.isInteger(idNum) && idNum > 0) return idNum;
+  return 0;
+}
+
 function fmtWeekLabel(week) {
   if (!week) return '';
   const start = parseDateOnly(week.start_date);
@@ -121,6 +133,44 @@ function serializeLastHwTasks(tasks) {
     progress: t?.done === false ? String(t?.progress || '') : ''
   }));
   return cleaned.length ? JSON.stringify(cleaned) : '';
+}
+
+const DEFAULT_CLINIC_ENTRY = {
+  mentor_name: '',
+  subject: '',
+  material: '',
+  problem_name: '',
+  problem_type: '',
+  solved_date: '',
+  summary: ''
+};
+
+function normalizeClinicEntry(raw) {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_CLINIC_ENTRY };
+  return {
+    mentor_name: String(raw.mentor_name || '').trim(),
+    subject: String(raw.subject || '').trim(),
+    material: String(raw.material || '').trim(),
+    problem_name: String(raw.problem_name || '').trim(),
+    problem_type: String(raw.problem_type || '').trim(),
+    solved_date: String(raw.solved_date || '').trim(),
+    summary: String(raw.summary || '').trim()
+  };
+}
+
+function parseClinicEntries(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map(normalizeClinicEntry);
+  if (typeof value === 'object' && Array.isArray(value.entries)) {
+    return value.entries.map(normalizeClinicEntry);
+  }
+  const raw = String(value);
+  const parsed = safeJson(raw, []);
+  if (Array.isArray(parsed)) return parsed.map(normalizeClinicEntry);
+  if (parsed && typeof parsed === 'object' && Array.isArray(parsed.entries)) {
+    return parsed.entries.map(normalizeClinicEntry);
+  }
+  return [];
 }
 
 function getPerm(perms, field_key) {
@@ -415,7 +465,8 @@ export default function Mentoring() {
   const profileRef = useRef(null);
 
   const parentMode = user?.role === 'parent';
-  const canViewLegacyRecords = ['director', 'admin', 'lead', 'mentor'].includes(String(user?.role || ''));
+  const mentorMode = user?.role === 'mentor';
+  const canViewLegacyRecords = ['director', 'admin', 'lead'].includes(String(user?.role || ''));
   const weekRecordId = rec?.week_record?.id;
 
   function setQueryParams(patch) {
@@ -591,15 +642,27 @@ export default function Mentoring() {
 
   const schedule = useMemo(() => safeJson(rec?.student?.schedule_json, {}), [rec]);
   const scheduleWeekStart = schedule?.week_start || rec?.week?.start_date || '';
+  const currentWeekRound = useMemo(() => getWeekRound(rec?.week), [rec?.week?.id, rec?.week?.label]);
+  const showClinicSection = currentWeekRound >= 5;
+  const useNewDailyTaskLayout = useMemo(() => {
+    if (typeof rec?.use_new_daily_task_layout === 'boolean') return rec.use_new_daily_task_layout;
+    return currentWeekRound >= 4;
+  }, [rec?.use_new_daily_task_layout, currentWeekRound]);
   const dailyTasksLastWeekValue = useMemo(() => safeJson(rec?.week_record?.b_daily_tasks, {}), [rec]);
   const dailyTasksThisWeekValue = useMemo(() => safeJson(rec?.week_record?.b_daily_tasks_this_week, {}), [rec]);
+  const dailyFeedbackValue = useMemo(() => safeJson(rec?.week_record?.b_lead_daily_feedback, {}), [rec]);
+  const clinicEntriesValue = useMemo(() => parseClinicEntries(rec?.week_record?.d_clinic_records), [rec]);
   const [dailyTasksLastWeekDraft, setDailyTasksLastWeekDraft] = useState(dailyTasksLastWeekValue);
   const [dailyTasksThisWeekDraft, setDailyTasksThisWeekDraft] = useState(dailyTasksThisWeekValue);
+  const [dailyFeedbackDraft, setDailyFeedbackDraft] = useState(dailyFeedbackValue);
+  const [clinicEntriesDraft, setClinicEntriesDraft] = useState(clinicEntriesValue);
   const [leadWeeklyDraft, setLeadWeeklyDraft] = useState(rec?.week_record?.c_lead_weekly_feedback || '');
   const [directorCommentDraft, setDirectorCommentDraft] = useState(rec?.week_record?.c_director_commentary || '');
 
   useEffect(() => setDailyTasksLastWeekDraft(dailyTasksLastWeekValue), [dailyTasksLastWeekValue]);
   useEffect(() => setDailyTasksThisWeekDraft(dailyTasksThisWeekValue), [dailyTasksThisWeekValue]);
+  useEffect(() => setDailyFeedbackDraft(dailyFeedbackValue), [dailyFeedbackValue]);
+  useEffect(() => setClinicEntriesDraft(clinicEntriesValue), [clinicEntriesValue]);
   useEffect(() => setLeadWeeklyDraft(rec?.week_record?.c_lead_weekly_feedback || ''), [rec?.week_record?.c_lead_weekly_feedback]);
   useEffect(() => setDirectorCommentDraft(rec?.week_record?.c_director_commentary || ''), [rec?.week_record?.c_director_commentary]);
 
@@ -924,10 +987,15 @@ export default function Mentoring() {
     try {
       confirmOrThrow('전체 저장할까요?');
       const patch = {};
-      if (canEditA('b_daily_tasks')) patch.b_daily_tasks = dailyTasksLastWeekDraft;
-      if (canEditA('b_daily_tasks_this_week')) patch.b_daily_tasks_this_week = dailyTasksThisWeekDraft;
-      if (canEditA('c_lead_weekly_feedback')) patch.c_lead_weekly_feedback = leadWeeklyDraft;
-      if (canEditA('c_director_commentary')) patch.c_director_commentary = directorCommentDraft;
+      if (!mentorMode && canEditA('b_daily_tasks')) patch.b_daily_tasks = dailyTasksLastWeekDraft;
+      if (!mentorMode && useNewDailyTaskLayout) {
+        if (canEditA('b_daily_tasks_this_week')) patch.b_daily_tasks_this_week = dailyTasksThisWeekDraft;
+      } else {
+        if (!mentorMode && canEditA('b_lead_daily_feedback')) patch.b_lead_daily_feedback = dailyFeedbackDraft;
+      }
+      if (!mentorMode && canEditA('c_lead_weekly_feedback')) patch.c_lead_weekly_feedback = leadWeeklyDraft;
+      if (!mentorMode && canEditA('c_director_commentary')) patch.c_director_commentary = directorCommentDraft;
+      if (showClinicSection && canEditA('d_clinic_records')) patch.d_clinic_records = clinicEntriesDraft;
 
       if (Object.keys(patch).length) {
         await api(`/api/mentoring/week-record/${weekRecordId}`, {
@@ -936,9 +1004,11 @@ export default function Mentoring() {
         });
       }
 
-      await saveAllSubjectsCore({ confirm: false });
+      if (!mentorMode) {
+        await saveAllSubjectsCore({ confirm: false });
+      }
 
-      if (profileRef.current?.saveProfile && user?.role !== 'parent') {
+      if (profileRef.current?.saveProfile && user?.role !== 'parent' && user?.role !== 'mentor') {
         await profileRef.current.saveProfile({ confirm: false, manageBusy: false });
       }
 
@@ -1052,6 +1122,23 @@ export default function Mentoring() {
 
           {showCalendar ? <WeeklyCalendar schedule={schedule} weekStart={scheduleWeekStart} /> : null}
         </GoldCard>
+
+        {showClinicSection ? (
+          <GoldCard className="p-5">
+            <ClinicSectionCard
+              value={clinicEntriesDraft}
+              visible={canViewA('d_clinic_records')}
+              editable={canEditA('d_clinic_records')}
+              onSave={(entries) => saveWeekRecord({ d_clinic_records: entries })}
+              onAutoSave={(entries) => autoSaveWeekRecord({ d_clinic_records: entries })}
+              onChangeValue={setClinicEntriesDraft}
+              busy={busy}
+              perms={perms}
+              currentRole={user?.role}
+              parentMode={parentMode}
+            />
+          </GoldCard>
+        ) : null}
         {canViewLegacyRecords ? (
           <GoldCard className="p-4">
             <button className="btn-primary" type="button" onClick={() => setShowLegacyRecordsModal(true)}>
@@ -1099,6 +1186,8 @@ export default function Mentoring() {
           </div>
         </GoldCard>
 
+        {!mentorMode ? (
+          <>
         {/* 학습 커리큘럼 */}
         <GoldCard className="p-5">
           <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
@@ -1203,11 +1292,15 @@ export default function Mentoring() {
         {/* 주간 과제/피드백 */}
         <GoldCard className="p-5">
           <div className="text-sm font-semibold text-brand-900">주간 과제/피드백</div>
-          <div className="mt-1 text-xs text-slate-700">지난주/이번주 일일 학습 과제 및 주간 총평, 원장 코멘터리</div>
+          <div className="mt-1 text-xs text-slate-700">
+            {useNewDailyTaskLayout
+              ? '지난주/이번주 일일 학습 과제 및 주간 총평, 원장 코멘터리'
+              : '일일 학습 과제 및 요일별 총괄멘토 피드백, 주간 총평, 원장 코멘터리'}
+          </div>
 
           <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
             <DailyTasksCard
-              title="일일 학습 과제(지난주)"
+              title={useNewDailyTaskLayout ? '일일 학습 과제(지난주)' : '일일 학습 과제'}
               fieldKey="b_daily_tasks"
               value={dailyTasksLastWeekDraft}
               perms={perms}
@@ -1221,21 +1314,39 @@ export default function Mentoring() {
               textareaMinHClass="min-h-[48px]"
               parentMode={parentMode}
             />
-            <DailyTasksCard
-              title="일일 학습 과제(이번주)"
-              fieldKey="b_daily_tasks_this_week"
-              value={dailyTasksThisWeekDraft}
-              perms={perms}
-              currentRole={user?.role}
-              visible={canViewA('b_daily_tasks_this_week')}
-              editable={canEditA('b_daily_tasks_this_week')}
-              onSave={(v) => saveWeekRecord({ b_daily_tasks_this_week: v })}
-              onAutoSave={(v) => autoSaveWeekRecord({ b_daily_tasks_this_week: v })}
-              onChangeValue={setDailyTasksThisWeekDraft}
-              busy={busy}
-              textareaMinHClass="min-h-[48px]"
-              parentMode={parentMode}
-            />
+            {useNewDailyTaskLayout ? (
+              <DailyTasksCard
+                title="일일 학습 과제(이번주)"
+                fieldKey="b_daily_tasks_this_week"
+                value={dailyTasksThisWeekDraft}
+                perms={perms}
+                currentRole={user?.role}
+                visible={canViewA('b_daily_tasks_this_week')}
+                editable={canEditA('b_daily_tasks_this_week')}
+                onSave={(v) => saveWeekRecord({ b_daily_tasks_this_week: v })}
+                onAutoSave={(v) => autoSaveWeekRecord({ b_daily_tasks_this_week: v })}
+                onChangeValue={setDailyTasksThisWeekDraft}
+                busy={busy}
+                textareaMinHClass="min-h-[48px]"
+                parentMode={parentMode}
+              />
+            ) : (
+              <DailyTasksCard
+                title="요일 별 총괄멘토 피드백"
+                fieldKey="b_lead_daily_feedback"
+                value={dailyFeedbackDraft}
+                perms={perms}
+                currentRole={user?.role}
+                visible={canViewA('b_lead_daily_feedback')}
+                editable={canEditA('b_lead_daily_feedback')}
+                onSave={(v) => saveWeekRecord({ b_lead_daily_feedback: v })}
+                onAutoSave={(v) => autoSaveWeekRecord({ b_lead_daily_feedback: v })}
+                onChangeValue={setDailyFeedbackDraft}
+                busy={busy}
+                textareaMinHClass="min-h-[48px]"
+                parentMode={parentMode}
+              />
+            )}
           </div>
 
           <div className="mt-6 space-y-6">
@@ -1269,6 +1380,8 @@ export default function Mentoring() {
             />
           </div>
         </GoldCard>
+          </>
+        ) : null}
 
         {/* 피드백 공유 */}
         <GoldCard className="p-5">
@@ -2114,9 +2227,182 @@ function TextFieldCard({ title, fieldKey, value, visible, editable, onSave, onCh
   );
 }
 
+function ClinicSectionCard({ value, visible, editable, onSave, onAutoSave, onChangeValue, busy, perms, currentRole, parentMode }) {
+  function ensureAtLeastOneEntry(input) {
+    const parsed = parseClinicEntries(input);
+    return parsed.length ? parsed : [{ ...DEFAULT_CLINIC_ENTRY }];
+  }
+
+  const [entries, setEntries] = useState(() => ensureAtLeastOneEntry(value));
+  const skipSyncRef = useRef(false);
+
+  useEffect(() => {
+    if (skipSyncRef.current) {
+      skipSyncRef.current = false;
+      return;
+    }
+    setEntries(ensureAtLeastOneEntry(value));
+  }, [value]);
+
+  const p = getPerm(perms, 'd_clinic_records');
+  const editRoles = p.roles_edit || [];
+
+  if (!visible && parentMode) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white/70 p-5 shadow-sm">
+        <div className="text-sm font-semibold text-brand-900">클리닉 섹션</div>
+        <div className="mt-2 text-sm text-slate-700">권한 설정에 의해 숨김</div>
+      </div>
+    );
+  }
+
+  function commit(next, { autoSave = false } = {}) {
+    const normalizedNext = Array.isArray(next) && next.length ? next : [{ ...DEFAULT_CLINIC_ENTRY }];
+    setEntries(normalizedNext);
+    skipSyncRef.current = true;
+    onChangeValue?.(normalizedNext);
+    if (autoSave && editable && !parentMode) onAutoSave?.(normalizedNext);
+  }
+
+  function updateEntry(idx, patch, autoSave = false) {
+    const next = entries.map((entry, i) => (i === idx ? { ...entry, ...patch } : entry));
+    commit(next, { autoSave });
+  }
+
+  function addEntry() {
+    const next = [...entries, { ...DEFAULT_CLINIC_ENTRY }];
+    commit(next);
+  }
+
+  function removeEntry(idx) {
+    const next = entries.filter((_, i) => i !== idx);
+    commit(next, { autoSave: true });
+  }
+
+  const placeholderSummary =
+    '일단 문제 해설해주고 학생이 빈칸유형을 어떻게 접근해야 하는지 몰라서 빈칸 앞뒤의 관계를 분석해서 해결할 수 있도록 멘토링함';
+
+  return (
+    <FieldShell
+      title="클리닉 섹션"
+      subtitle="학습멘토가 학생 질문 문제를 해설한 내용을 기록합니다."
+      editRoles={editRoles}
+      currentRole={currentRole}
+      right={
+        <button className="btn-primary" disabled={busy || !editable || parentMode} onClick={() => onSave(entries)}>
+          저장
+        </button>
+      }
+    >
+      <div className="space-y-4">
+        {entries.map((entry, idx) => (
+            <div key={idx} className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold text-slate-900">클리닉 기록 {idx + 1}</div>
+                {editable && !parentMode ? (
+                  <button className="btn-ghost text-red-700" type="button" onClick={() => removeEntry(idx)}>
+                    삭제
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="mt-3 grid grid-cols-12 gap-3">
+                <div className="col-span-12 md:col-span-6">
+                  <div className="text-xs text-slate-800">클리닉 진행 멘토</div>
+                  <input
+                    className="input mt-1"
+                    value={entry.mentor_name || ''}
+                    onChange={(e) => updateEntry(idx, { mentor_name: e.target.value })}
+                    onBlur={() => updateEntry(idx, {}, true)}
+                    disabled={!editable || parentMode}
+                  />
+                </div>
+                <div className="col-span-12 md:col-span-6">
+                  <div className="text-xs text-slate-800">해결 일자</div>
+                  <input
+                    type="date"
+                    className="input mt-1"
+                    value={entry.solved_date || ''}
+                    onChange={(e) => updateEntry(idx, { solved_date: e.target.value })}
+                    onBlur={() => updateEntry(idx, {}, true)}
+                    disabled={!editable || parentMode}
+                  />
+                </div>
+
+                <div className="col-span-12 md:col-span-3">
+                  <div className="text-xs text-slate-800">과목</div>
+                  <input
+                    className="input mt-1"
+                    value={entry.subject || ''}
+                    onChange={(e) => updateEntry(idx, { subject: e.target.value })}
+                    onBlur={() => updateEntry(idx, {}, true)}
+                    disabled={!editable || parentMode}
+                  />
+                  <div className="mt-1 text-[11px] text-slate-500">예시: 영어</div>
+                </div>
+                <div className="col-span-12 md:col-span-3">
+                  <div className="text-xs text-slate-800">교재명</div>
+                  <input
+                    className="input mt-1"
+                    value={entry.material || ''}
+                    onChange={(e) => updateEntry(idx, { material: e.target.value })}
+                    onBlur={() => updateEntry(idx, {}, true)}
+                    disabled={!editable || parentMode}
+                  />
+                  <div className="mt-1 text-[11px] text-slate-500">예시: 수능특강 문제편</div>
+                </div>
+                <div className="col-span-12 md:col-span-3">
+                  <div className="text-xs text-slate-800">문제명</div>
+                  <input
+                    className="input mt-1"
+                    value={entry.problem_name || ''}
+                    onChange={(e) => updateEntry(idx, { problem_name: e.target.value })}
+                    onBlur={() => updateEntry(idx, {}, true)}
+                    disabled={!editable || parentMode}
+                  />
+                  <div className="mt-1 text-[11px] text-slate-500">예시: 89페이지 3번</div>
+                </div>
+                <div className="col-span-12 md:col-span-3">
+                  <div className="text-xs text-slate-800">유형 기록</div>
+                  <input
+                    className="input mt-1"
+                    value={entry.problem_type || ''}
+                    onChange={(e) => updateEntry(idx, { problem_type: e.target.value })}
+                    onBlur={() => updateEntry(idx, {}, true)}
+                    disabled={!editable || parentMode}
+                  />
+                  <div className="mt-1 text-[11px] text-slate-500">예시: 빈칸추론</div>
+                </div>
+
+                <div className="col-span-12">
+                  <div className="text-xs text-slate-800">해결요약 피드백</div>
+                  <textarea
+                    className="textarea mt-1 min-h-[88px]"
+                    value={entry.summary || ''}
+                    placeholder={placeholderSummary}
+                    onChange={(e) => updateEntry(idx, { summary: e.target.value })}
+                    onBlur={() => updateEntry(idx, {}, true)}
+                    disabled={!editable || parentMode}
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+
+        {editable && !parentMode ? (
+          <button className="btn-ghost text-brand-800" type="button" onClick={addEntry}>
+            + 클리닉 기록 추가
+          </button>
+        ) : null}
+        {!editable || parentMode ? <div className="text-xs text-slate-700">읽기 전용</div> : null}
+      </div>
+    </FieldShell>
+  );
+}
+
 /* (2) 학생 정보 분리 + 성적/내신 카드 */
 const StudentProfileSection = forwardRef(function StudentProfileSection({ studentId, profileJson, userRole, busy, setBusy, setError }, ref) {
-  const isReadOnly = userRole === 'parent';
+  const isReadOnly = userRole === 'parent' || userRole === 'mentor';
 
   const defaultProfile = useMemo(
     () => ({

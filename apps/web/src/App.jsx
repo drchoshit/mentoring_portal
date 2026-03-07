@@ -10,8 +10,6 @@ import Students from './pages/Students.jsx';
 import Mentoring from './pages/Mentoring.jsx';
 import Settings from './pages/Settings.jsx';
 import Parent from './pages/Parent.jsx';
-import ParentHome from './pages/ParentHome.jsx';
-import ParentLegacy from './pages/ParentLegacy.jsx';
 
 function Shell({ children }) {
   return <AppShell>{children}</AppShell>;
@@ -28,7 +26,7 @@ export default function App() {
         path="/parent"
         element={
           <Guard roles={['parent']}>
-            <Shell><ParentHome /></Shell>
+            <Shell><Parent /></Shell>
           </Guard>
         }
       />
@@ -36,19 +34,10 @@ export default function App() {
         path="/parent/renewal"
         element={
           <Guard roles={['parent']}>
-            <Shell><Parent /></Shell>
+            <Navigate to="/parent" replace />
           </Guard>
         }
       />
-      <Route
-        path="/parent/legacy"
-        element={
-          <Guard roles={['parent']}>
-            <Shell><ParentLegacy /></Shell>
-          </Guard>
-        }
-      />
-
       <Route
         path="/"
         element={

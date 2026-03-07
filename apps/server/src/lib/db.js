@@ -207,6 +207,7 @@ function ensureWeekRecordsColumns() {
       b_lead_daily_feedback TEXT,
       c_lead_weekly_feedback TEXT,
       c_director_commentary TEXT,
+      d_clinic_records TEXT,
       scores_json TEXT,
       shared_with_parent INTEGER NOT NULL DEFAULT 0,
       shared_at TEXT,
@@ -230,6 +231,7 @@ function ensureWeekRecordsColumns() {
   if (!cols.has('b_lead_daily_feedback')) db.exec(`ALTER TABLE week_records ADD COLUMN b_lead_daily_feedback TEXT;`);
   if (!cols.has('c_lead_weekly_feedback')) db.exec(`ALTER TABLE week_records ADD COLUMN c_lead_weekly_feedback TEXT;`);
   if (!cols.has('c_director_commentary')) db.exec(`ALTER TABLE week_records ADD COLUMN c_director_commentary TEXT;`);
+  if (!cols.has('d_clinic_records')) db.exec(`ALTER TABLE week_records ADD COLUMN d_clinic_records TEXT;`);
   if (!cols.has('scores_json')) db.exec(`ALTER TABLE week_records ADD COLUMN scores_json TEXT;`);
   if (!cols.has('shared_with_parent')) db.exec(`ALTER TABLE week_records ADD COLUMN shared_with_parent INTEGER NOT NULL DEFAULT 0;`);
   if (!cols.has('shared_at')) db.exec(`ALTER TABLE week_records ADD COLUMN shared_at TEXT;`);
@@ -248,18 +250,28 @@ function ensureWeekRecordsColumns() {
     WHERE updated_at IS NULL OR updated_at = '';
   `);
 
-  // Migration safety: move legacy daily task payloads into this-week field when empty.
   db.exec(`
     UPDATE week_records
-    SET
-      b_daily_tasks_this_week = b_daily_tasks,
-      updated_at = datetime('now')
-    WHERE
-      (b_daily_tasks_this_week IS NULL OR TRIM(b_daily_tasks_this_week) = '' OR TRIM(b_daily_tasks_this_week) = '{}')
-      AND b_daily_tasks IS NOT NULL
-      AND TRIM(b_daily_tasks) != ''
-      AND TRIM(b_daily_tasks) != '{}';
+    SET d_clinic_records = COALESCE(NULLIF(d_clinic_records, ''), '[]')
+    WHERE d_clinic_records IS NULL OR TRIM(d_clinic_records) = '';
   `);
+
+  // Migration safety: apply only to round 4+ so legacy rounds (1~3) remain unchanged.
+  const round4WeekId = findWeekIdByRound(4);
+  if (round4WeekId) {
+    db.prepare(`
+      UPDATE week_records
+      SET
+        b_daily_tasks_this_week = b_daily_tasks,
+        updated_at = datetime('now')
+      WHERE
+        week_id >= @round4WeekId
+        AND (b_daily_tasks_this_week IS NULL OR TRIM(b_daily_tasks_this_week) = '' OR TRIM(b_daily_tasks_this_week) = '{}')
+        AND b_daily_tasks IS NOT NULL
+        AND TRIM(b_daily_tasks) != ''
+        AND TRIM(b_daily_tasks) != '{}'
+    `).run({ round4WeekId });
+  }
 
   db.exec(`
     UPDATE week_records
@@ -413,6 +425,7 @@ function ensurePermissionAndConfigTables() {
     { key: 'b_lead_daily_feedback', label: '요일 별 총괄멘토 피드백', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
     { key: 'c_lead_weekly_feedback', label: '주간 총괄멘토 피드백', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
     { key: 'c_director_commentary', label: '원장 코멘터리', view: ['director', 'lead', 'admin'], edit: ['director'], parent: 0 },
+    { key: 'd_clinic_records', label: '클리닉 섹션', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
     { key: 'scores_json', label: '점수/성적', view: ['director', 'lead', 'mentor', 'admin'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 0 }
   ];
 
@@ -427,6 +440,27 @@ function ensurePermissionAndConfigTables() {
       `field_permissions seed ${row.key}`
     );
   }
+
+  // Keep clinic permission consistent for already-initialized databases.
+  runBestEffort(
+    () => db.prepare(`
+      UPDATE field_permissions
+      SET
+        label = ?,
+        roles_view_json = ?,
+        roles_edit_json = ?,
+        parent_visible = ?,
+        updated_at = datetime('now')
+      WHERE field_key = ?
+    `).run(
+      '클리닉 섹션',
+      JSON.stringify(['director', 'lead', 'mentor', 'admin', 'parent']),
+      JSON.stringify(['director', 'lead', 'mentor', 'admin']),
+      1,
+      'd_clinic_records'
+    ),
+    'field_permissions sync d_clinic_records'
+  );
 }
 
 function ensureSystemTables() {
