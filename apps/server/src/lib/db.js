@@ -203,6 +203,7 @@ function ensureWeekRecordsColumns() {
       student_id INTEGER NOT NULL,
       week_id INTEGER NOT NULL,
       b_daily_tasks TEXT,
+      b_daily_tasks_this_week TEXT,
       b_lead_daily_feedback TEXT,
       c_lead_weekly_feedback TEXT,
       c_director_commentary TEXT,
@@ -225,6 +226,7 @@ function ensureWeekRecordsColumns() {
   const cols = columnMap('week_records');
 
   if (!cols.has('b_daily_tasks')) db.exec(`ALTER TABLE week_records ADD COLUMN b_daily_tasks TEXT;`);
+  if (!cols.has('b_daily_tasks_this_week')) db.exec(`ALTER TABLE week_records ADD COLUMN b_daily_tasks_this_week TEXT;`);
   if (!cols.has('b_lead_daily_feedback')) db.exec(`ALTER TABLE week_records ADD COLUMN b_lead_daily_feedback TEXT;`);
   if (!cols.has('c_lead_weekly_feedback')) db.exec(`ALTER TABLE week_records ADD COLUMN c_lead_weekly_feedback TEXT;`);
   if (!cols.has('c_director_commentary')) db.exec(`ALTER TABLE week_records ADD COLUMN c_director_commentary TEXT;`);
@@ -394,6 +396,7 @@ function ensurePermissionAndConfigTables() {
     { key: 'a_this_hw', label: '이번주 과제', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
     { key: 'a_comment', label: '과목 별 코멘트', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
     { key: 'b_daily_tasks', label: '일일 학습 과제', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
+    { key: 'b_daily_tasks_this_week', label: '일일 학습 과제(이번주)', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
     { key: 'b_lead_daily_feedback', label: '요일 별 총괄멘토 피드백', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
     { key: 'c_lead_weekly_feedback', label: '주간 총괄멘토 피드백', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
     { key: 'c_director_commentary', label: '원장 코멘터리', view: ['director', 'lead', 'admin'], edit: ['director'], parent: 0 },

@@ -591,15 +591,15 @@ export default function Mentoring() {
 
   const schedule = useMemo(() => safeJson(rec?.student?.schedule_json, {}), [rec]);
   const scheduleWeekStart = schedule?.week_start || rec?.week?.start_date || '';
-  const dailyTasksValue = useMemo(() => safeJson(rec?.week_record?.b_daily_tasks, {}), [rec]);
-  const dailyFeedbackValue = useMemo(() => safeJson(rec?.week_record?.b_lead_daily_feedback, {}), [rec]);
-  const [dailyTasksDraft, setDailyTasksDraft] = useState(dailyTasksValue);
-  const [dailyFeedbackDraft, setDailyFeedbackDraft] = useState(dailyFeedbackValue);
+  const dailyTasksLastWeekValue = useMemo(() => safeJson(rec?.week_record?.b_daily_tasks, {}), [rec]);
+  const dailyTasksThisWeekValue = useMemo(() => safeJson(rec?.week_record?.b_daily_tasks_this_week, {}), [rec]);
+  const [dailyTasksLastWeekDraft, setDailyTasksLastWeekDraft] = useState(dailyTasksLastWeekValue);
+  const [dailyTasksThisWeekDraft, setDailyTasksThisWeekDraft] = useState(dailyTasksThisWeekValue);
   const [leadWeeklyDraft, setLeadWeeklyDraft] = useState(rec?.week_record?.c_lead_weekly_feedback || '');
   const [directorCommentDraft, setDirectorCommentDraft] = useState(rec?.week_record?.c_director_commentary || '');
 
-  useEffect(() => setDailyTasksDraft(dailyTasksValue), [dailyTasksValue]);
-  useEffect(() => setDailyFeedbackDraft(dailyFeedbackValue), [dailyFeedbackValue]);
+  useEffect(() => setDailyTasksLastWeekDraft(dailyTasksLastWeekValue), [dailyTasksLastWeekValue]);
+  useEffect(() => setDailyTasksThisWeekDraft(dailyTasksThisWeekValue), [dailyTasksThisWeekValue]);
   useEffect(() => setLeadWeeklyDraft(rec?.week_record?.c_lead_weekly_feedback || ''), [rec?.week_record?.c_lead_weekly_feedback]);
   useEffect(() => setDirectorCommentDraft(rec?.week_record?.c_director_commentary || ''), [rec?.week_record?.c_director_commentary]);
 
@@ -924,8 +924,8 @@ export default function Mentoring() {
     try {
       confirmOrThrow('전체 저장할까요?');
       const patch = {};
-      if (canEditA('b_daily_tasks')) patch.b_daily_tasks = dailyTasksDraft;
-      if (canEditA('b_lead_daily_feedback')) patch.b_lead_daily_feedback = dailyFeedbackDraft;
+      if (canEditA('b_daily_tasks')) patch.b_daily_tasks = dailyTasksLastWeekDraft;
+      if (canEditA('b_daily_tasks_this_week')) patch.b_daily_tasks_this_week = dailyTasksThisWeekDraft;
       if (canEditA('c_lead_weekly_feedback')) patch.c_lead_weekly_feedback = leadWeeklyDraft;
       if (canEditA('c_director_commentary')) patch.c_director_commentary = directorCommentDraft;
 
@@ -1203,35 +1203,35 @@ export default function Mentoring() {
         {/* 주간 과제/피드백 */}
         <GoldCard className="p-5">
           <div className="text-sm font-semibold text-brand-900">주간 과제/피드백</div>
-          <div className="mt-1 text-xs text-slate-700">일일 학습 과제 및 주간 총평, 원장 코멘터리</div>
+          <div className="mt-1 text-xs text-slate-700">지난주/이번주 일일 학습 과제 및 주간 총평, 원장 코멘터리</div>
 
           <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
             <DailyTasksCard
-              title="일일 학습 과제"
+              title="일일 학습 과제(지난주)"
               fieldKey="b_daily_tasks"
-              value={dailyTasksDraft}
+              value={dailyTasksLastWeekDraft}
               perms={perms}
               currentRole={user?.role}
               visible={canViewA('b_daily_tasks')}
               editable={canEditA('b_daily_tasks')}
               onSave={(v) => saveWeekRecord({ b_daily_tasks: v })}
               onAutoSave={(v) => autoSaveWeekRecord({ b_daily_tasks: v })}
-              onChangeValue={setDailyTasksDraft}
+              onChangeValue={setDailyTasksLastWeekDraft}
               busy={busy}
               textareaMinHClass="min-h-[48px]"
               parentMode={parentMode}
             />
             <DailyTasksCard
-              title="요일 별 총괄멘토 피드백"
-              fieldKey="b_lead_daily_feedback"
-              value={dailyFeedbackDraft}
+              title="일일 학습 과제(이번주)"
+              fieldKey="b_daily_tasks_this_week"
+              value={dailyTasksThisWeekDraft}
               perms={perms}
               currentRole={user?.role}
-              visible={canViewA('b_lead_daily_feedback')}
-              editable={canEditA('b_lead_daily_feedback')}
-              onSave={(v) => saveWeekRecord({ b_lead_daily_feedback: v })}
-              onAutoSave={(v) => autoSaveWeekRecord({ b_lead_daily_feedback: v })}
-              onChangeValue={setDailyFeedbackDraft}
+              visible={canViewA('b_daily_tasks_this_week')}
+              editable={canEditA('b_daily_tasks_this_week')}
+              onSave={(v) => saveWeekRecord({ b_daily_tasks_this_week: v })}
+              onAutoSave={(v) => autoSaveWeekRecord({ b_daily_tasks_this_week: v })}
+              onChangeValue={setDailyTasksThisWeekDraft}
               busy={busy}
               textareaMinHClass="min-h-[48px]"
               parentMode={parentMode}
@@ -2229,10 +2229,6 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
             <input className="input mt-1" value={profile?.student_info?.school_name || ''} onChange={(e) => updateInfo({ school_name: e.target.value })} disabled={isReadOnly} />
           </div>
 
-          <div className="col-span-12 md:col-span-4">
-            <div className="text-xs text-slate-800">학년</div>
-            <input className="input mt-1" value={profile?.student_info?.school_grade || ''} onChange={(e) => updateInfo({ school_grade: e.target.value })} disabled={isReadOnly} />
-          </div>
           <div className="col-span-12 md:col-span-4">
             <div className="text-xs text-slate-800">학습멘토</div>
             <input className="input mt-1" value={profile?.student_info?.mentor_name || ''} onChange={(e) => updateInfo({ mentor_name: e.target.value })} disabled={isReadOnly} />

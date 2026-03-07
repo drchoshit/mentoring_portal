@@ -113,6 +113,7 @@ export default function printRoutes(db) {
     const schoolGrades = profile?.school_grades && typeof profile.school_grades === 'object' ? profile.school_grades : {};
 
     const dailyTasks = parseJson(weekRecord?.b_daily_tasks, {});
+    const dailyTasksThisWeek = parseJson(weekRecord?.b_daily_tasks_this_week, {});
     const dailyFeedback = parseJson(weekRecord?.b_lead_daily_feedback, {});
 
     const requiredPrintFields = new Set([
@@ -123,8 +124,8 @@ export default function printRoutes(db) {
       'a_this_hw',
       'a_comment',
       'b_daily_tasks',
-      'b_lead_daily_feedback',
-      'c_lead_weekly_feedback'
+      'b_daily_tasks_this_week',
+      'b_lead_daily_feedback'
     ]);
     const printable = (k) => canViewField(db, req.user.role, k) && (requiredPrintFields.has(k) || isEnabledPrint(db, k));
 
@@ -223,8 +224,8 @@ export default function printRoutes(db) {
     .score-card { background: #f7f5ff; border-color: #b3afda; }
     .subject-card { background: #fffdf8; border-color: #d6c6af; }
     .tasks-card { background: #f5f9ff; border-color: #9fb8d6; }
+    .tasks-this-week-card { background: #eef8f1; border-color: #a8c9ae; }
     .daily-feedback-card { background: #f3faf5; border-color: #9fc8ac; }
-    .weekly-feedback-card { background: #fff6ed; border-color: #d8bda1; }
 
     table { width: 100%; border-collapse: collapse; table-layout: fixed; }
     th, td {
@@ -253,12 +254,7 @@ export default function printRoutes(db) {
 
     .bottom {
       display: grid;
-      grid-template-columns: 1.05fr 1fr;
-      gap: 1.4mm;
-    }
-    .bottom-right {
-      display: grid;
-      grid-template-rows: auto auto;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 1.4mm;
     }
     .dense th, .dense td { font-size: 8.1px; padding: 0.78mm 1.0mm; }
@@ -266,8 +262,6 @@ export default function printRoutes(db) {
     .feedback-table thead th { background: #dff1e5; }
     .day-table tbody tr:nth-child(even) td { background: #fbfdff; }
     .feedback-table tbody tr:nth-child(even) td { background: #f9fdfa; }
-    .weekly-table td { background: #fffdf9; }
-    .weekly-table td.note { min-height: 18mm; }
 
     .info-table th { width: 13mm; background: #f3f7fb; }
     .info-table td { background: #fff; }
@@ -301,7 +295,6 @@ export default function printRoutes(db) {
               <th>학교</th><td>${esc(studentInfo.school_name || '-')}</td>
             </tr>
             <tr>
-              <th>학교학년</th><td>${esc(studentInfo.school_grade || '-')}</td>
               <th>학습멘토</th><td>${esc(studentInfo.mentor_name || '-')}</td>
               <th>총괄멘토</th><td>${esc(studentInfo.lead_name || '-')}</td>
             </tr>
@@ -339,7 +332,7 @@ export default function printRoutes(db) {
 
       <div class="bottom">
         <div class="card tasks-card">
-          <h3>일일 학습 과제</h3>
+          <h3>일일 학습 과제(지난주)</h3>
           <table class="dense day-table">
             <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
             <tbody>
@@ -348,27 +341,24 @@ export default function printRoutes(db) {
           </table>
         </div>
 
-        <div class="bottom-right">
-          <div class="card daily-feedback-card">
-            <h3>요일 별 총괄멘토 피드백</h3>
-            <table class="dense feedback-table">
-              <thead><tr><th style="width:12mm;">요일</th><th>피드백</th></tr></thead>
-              <tbody>
-                ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_lead_daily_feedback') ? dailyFeedback?.[d.key] : '')}</td></tr>`).join('')}
-              </tbody>
-            </table>
-          </div>
+        <div class="card tasks-this-week-card">
+          <h3>일일 학습 과제(이번주)</h3>
+          <table class="dense day-table">
+            <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
+            <tbody>
+              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_daily_tasks_this_week') ? dailyTasksThisWeek?.[d.key] : '')}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
 
-          <div class="card weekly-feedback-card">
-            <h3>주간 총괄멘토 피드백</h3>
-            <table class="dense weekly-table">
-              <tbody>
-                <tr>
-                  <td class="note">${textToHtml(printable('c_lead_weekly_feedback') ? weekRecord?.c_lead_weekly_feedback : '')}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+        <div class="card daily-feedback-card">
+          <h3>요일 별 총괄멘토 피드백</h3>
+          <table class="dense feedback-table">
+            <thead><tr><th style="width:12mm;">요일</th><th>피드백</th></tr></thead>
+            <tbody>
+              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_lead_daily_feedback') ? dailyFeedback?.[d.key] : '')}</td></tr>`).join('')}
+            </tbody>
+          </table>
         </div>
       </div>
 

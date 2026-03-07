@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS week_records (
   student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
   week_id INTEGER NOT NULL REFERENCES weeks(id) ON DELETE CASCADE,
   b_daily_tasks TEXT,
+  b_daily_tasks_this_week TEXT,
   b_lead_daily_feedback TEXT,
   c_lead_weekly_feedback TEXT,
   c_director_commentary TEXT,

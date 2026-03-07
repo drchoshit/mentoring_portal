@@ -6,8 +6,8 @@ function ensureWeekRecord(db, student_id, week_id) {
   const existing = db.prepare('SELECT id FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
   if (existing) return existing.id;
   const info = db.prepare(
-    'INSERT INTO week_records (student_id, week_id, b_daily_tasks, b_lead_daily_feedback, scores_json) VALUES (?,?,?,?,?)'
-  ).run(student_id, week_id, JSON.stringify({}), JSON.stringify({}), JSON.stringify([]));
+    'INSERT INTO week_records (student_id, week_id, b_daily_tasks, b_daily_tasks_this_week, b_lead_daily_feedback, scores_json) VALUES (?,?,?,?,?,?)'
+  ).run(student_id, week_id, JSON.stringify({}), JSON.stringify({}), JSON.stringify({}), JSON.stringify([]));
   return info.lastInsertRowid;
 }
 
@@ -85,6 +85,62 @@ function toPositiveInt(v) {
 function getPreviousWeekId(db, week_id) {
   const row = db.prepare('SELECT id FROM weeks WHERE id < ? ORDER BY id DESC LIMIT 1').get(week_id);
   return toPositiveInt(row?.id);
+}
+
+function hydrateDailyTasksFromPreviousWeekIfEmpty(db, student_id, week_id, previous_week_id) {
+  const prevWeekId = toPositiveInt(previous_week_id);
+  if (!prevWeekId || prevWeekId === Number(week_id)) return;
+
+  db.prepare(
+    `
+    UPDATE week_records
+    SET
+      b_daily_tasks = COALESCE(
+        (
+          SELECT prev.b_daily_tasks_this_week
+          FROM week_records prev
+          WHERE prev.student_id = week_records.student_id
+            AND prev.week_id = ?
+          LIMIT 1
+        ),
+        (
+          SELECT prev.b_daily_tasks
+          FROM week_records prev
+          WHERE prev.student_id = week_records.student_id
+            AND prev.week_id = ?
+          LIMIT 1
+        )
+      ),
+      updated_at = datetime('now')
+    WHERE student_id = ?
+      AND week_id = ?
+      AND (
+        b_daily_tasks IS NULL
+        OR TRIM(b_daily_tasks) = ''
+        OR TRIM(b_daily_tasks) = '{}'
+      )
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM week_records prev
+          WHERE prev.student_id = week_records.student_id
+            AND prev.week_id = ?
+            AND prev.b_daily_tasks_this_week IS NOT NULL
+            AND TRIM(prev.b_daily_tasks_this_week) != ''
+            AND TRIM(prev.b_daily_tasks_this_week) != '{}'
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM week_records prev
+          WHERE prev.student_id = week_records.student_id
+            AND prev.week_id = ?
+            AND prev.b_daily_tasks IS NOT NULL
+            AND TRIM(prev.b_daily_tasks) != ''
+            AND TRIM(prev.b_daily_tasks) != '{}'
+        )
+      )
+    `
+  ).run(prevWeekId, prevWeekId, student_id, week_id, prevWeekId, prevWeekId);
 }
 
 function getStoredCurriculumSourceWeekId(db, student_id) {
@@ -352,6 +408,7 @@ export default function mentoringRoutes(db) {
     const previousWeekId = getPreviousWeekId(db, week_id);
 
     ensureWeekRecord(db, student_id, week_id);
+    hydrateDailyTasksFromPreviousWeekIfEmpty(db, student_id, week_id, previousWeekId);
 
     const subjects = db
       .prepare('SELECT id, name FROM mentoring_subjects WHERE student_id=? AND (deleted_from_week_id IS NULL OR deleted_from_week_id > ?) ORDER BY id')
@@ -503,7 +560,7 @@ export default function mentoringRoutes(db) {
     if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
 
     const updates = {};
-    for (const key of ['b_daily_tasks','b_lead_daily_feedback','c_lead_weekly_feedback','c_director_commentary','scores_json']) {
+    for (const key of ['b_daily_tasks','b_daily_tasks_this_week','b_lead_daily_feedback','c_lead_weekly_feedback','c_director_commentary','scores_json']) {
       if (key in (req.body || {})) updates[key] = req.body[key];
     }
     if ('shared_with_parent' in (req.body || {})) {
@@ -520,7 +577,7 @@ export default function mentoringRoutes(db) {
 
     const normalized = {};
     for (const k of allowed) {
-      if (k === 'scores_json' || k === 'b_daily_tasks' || k === 'b_lead_daily_feedback') {
+      if (k === 'scores_json' || k === 'b_daily_tasks' || k === 'b_daily_tasks_this_week' || k === 'b_lead_daily_feedback') {
         normalized[k] = JSON.stringify(updates[k] ?? {});
       } else if (k === 'shared_with_parent') {
         normalized[k] = updates[k] ? 1 : 0;

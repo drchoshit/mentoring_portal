@@ -357,6 +357,7 @@ export default function Parent() {
   const subjectRecords = useMemo(() => (record?.subject_records || []), [record]);
   const weekRecord = useMemo(() => (record?.week_record || {}), [record]);
   const dailyTasks = useMemo(() => safeJson(weekRecord?.b_daily_tasks, {}), [weekRecord]);
+  const dailyTasksThisWeek = useMemo(() => safeJson(weekRecord?.b_daily_tasks_this_week, {}), [weekRecord]);
   const scores = useMemo(() => safeJson(weekRecord?.scores_json, []), [weekRecord]);
 
   const penaltyItems = selected?.penalties?.items || [];
@@ -545,10 +546,21 @@ export default function Parent() {
 
       <BlockedSection blocked={isLockedWeek}>
         <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
-          <SectionTitle title="일일 학습 과제" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+          <SectionTitle title="일일 학습 과제(지난주)" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
             <div className="mt-3 space-y-2">
               {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasks?.[d.k]} />)}
+            </div>
+          ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
+        </div>
+      </BlockedSection>
+
+      <BlockedSection blocked={isLockedWeek}>
+        <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
+          <SectionTitle title="일일 학습 과제(이번주)" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+          {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
+            <div className="mt-3 space-y-2">
+              {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasksThisWeek?.[d.k]} />)}
             </div>
           ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
         </div>
