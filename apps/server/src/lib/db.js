@@ -248,6 +248,19 @@ function ensureWeekRecordsColumns() {
     WHERE updated_at IS NULL OR updated_at = '';
   `);
 
+  // Migration safety: move legacy daily task payloads into this-week field when empty.
+  db.exec(`
+    UPDATE week_records
+    SET
+      b_daily_tasks_this_week = b_daily_tasks,
+      updated_at = datetime('now')
+    WHERE
+      (b_daily_tasks_this_week IS NULL OR TRIM(b_daily_tasks_this_week) = '' OR TRIM(b_daily_tasks_this_week) = '{}')
+      AND b_daily_tasks IS NOT NULL
+      AND TRIM(b_daily_tasks) != ''
+      AND TRIM(b_daily_tasks) != '{}';
+  `);
+
   db.exec(`
     UPDATE week_records
     SET shared_at = COALESCE(NULLIF(shared_at,''), updated_at)
