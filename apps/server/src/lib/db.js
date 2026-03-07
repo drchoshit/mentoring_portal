@@ -631,6 +631,65 @@ function seedDemoUsers() {
   }
 }
 
+function parseRoundNumber(label) {
+  const raw = String(label || '').trim();
+  if (!raw) return null;
+  const m = raw.match(/(\d+)\s*(?:회차|주차)?/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isInteger(n) ? n : null;
+}
+
+function findWeekIdByRound(round) {
+  const rows = db.prepare('SELECT id, label FROM weeks ORDER BY id').all();
+  if (!rows.length) return null;
+
+  for (const r of rows) {
+    if (parseRoundNumber(r.label) === round) return Number(r.id);
+  }
+
+  // Fallback for legacy labels: use sequential order.
+  if (rows.length >= round) return Number(rows[round - 1].id);
+  return null;
+}
+
+function backfillRound4LastWeekTasksFromRound3ThisWeek() {
+  const prevWeekId = findWeekIdByRound(3);
+  const currWeekId = findWeekIdByRound(4);
+  if (!prevWeekId || !currWeekId) return 0;
+
+  const info = db.prepare(`
+    UPDATE week_records AS cur
+    SET
+      b_daily_tasks = (
+        SELECT prev.b_daily_tasks_this_week
+        FROM week_records AS prev
+        WHERE prev.student_id = cur.student_id
+          AND prev.week_id = @prevWeekId
+        LIMIT 1
+      ),
+      updated_at = datetime('now')
+    WHERE cur.week_id = @currWeekId
+      AND EXISTS (
+        SELECT 1
+        FROM week_records AS prev
+        WHERE prev.student_id = cur.student_id
+          AND prev.week_id = @prevWeekId
+          AND prev.b_daily_tasks_this_week IS NOT NULL
+          AND TRIM(prev.b_daily_tasks_this_week) != ''
+          AND TRIM(prev.b_daily_tasks_this_week) != '{}'
+      )
+      AND (
+        cur.b_daily_tasks IS NULL
+        OR TRIM(cur.b_daily_tasks) = ''
+        OR TRIM(cur.b_daily_tasks) = '{}'
+        OR TRIM(cur.b_daily_tasks) = TRIM(COALESCE(cur.b_daily_tasks_this_week, ''))
+      )
+  `).run({ prevWeekId, currWeekId });
+
+  return Number(info?.changes || 0);
+}
+
 function migrateLegacyAdminRole() {
   const admin = db.prepare('SELECT id, role FROM users WHERE username=?').get('admin');
   if (!admin) return;
@@ -647,6 +706,11 @@ function migrateLegacyAdminRole() {
 
 export function initDb() {
   bootstrap();
+  const backfilled = backfillRound4LastWeekTasksFromRound3ThisWeek();
+  if (backfilled > 0) {
+    // eslint-disable-next-line no-console
+    console.log(`[db] Backfilled round-4 last-week daily tasks for ${backfilled} record(s).`);
+  }
   seedDemoUsers();
   migrateLegacyAdminRole();
 }
