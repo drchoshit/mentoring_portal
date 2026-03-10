@@ -1586,17 +1586,19 @@ export default function Mentoring() {
                     </div>
                     {idx === 0 ? (
                       <>
-                        <div className="col-span-12 md:col-span-8">
-                          <div className="text-xs text-slate-800">전달사항</div>
-                          <textarea
-                            className="textarea mt-1 min-h-[40px]"
-                            value={item.note || ''}
-                            onChange={(e) => updateWrongAnswerProblem(idx, { note: e.target.value })}
-                            disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                          />
+                        <div className="col-span-12 md:col-span-6">
+                          <div className="h-full min-h-[210px] rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex flex-col">
+                            <div className="text-xs font-semibold text-slate-800">전달사항</div>
+                            <textarea
+                              className="textarea mt-2 flex-1 min-h-0"
+                              value={item.note || ''}
+                              onChange={(e) => updateWrongAnswerProblem(idx, { note: e.target.value })}
+                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                            />
+                          </div>
                         </div>
-                        <div className="col-span-12 md:col-span-4">
-                          <div className="h-full rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                        <div className="col-span-12 md:col-span-6">
+                          <div className="h-full min-h-[210px] rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex flex-col">
                             <div className="text-xs font-semibold text-slate-800">배정된 멘토</div>
                             {wrongAnswerDistributionDraft?.assignment?.mentor_name ? (
                               <>
@@ -1617,7 +1619,7 @@ export default function Mentoring() {
                             ) : (
                               <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
                             )}
-                            <div className="mt-3 grid grid-cols-3 gap-2">
+                            <div className="mt-auto grid grid-cols-3 gap-2 pt-3">
                               <div>
                                 <div className="text-[11px] text-slate-600">월</div>
                                 <input
