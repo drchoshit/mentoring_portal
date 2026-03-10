@@ -1100,6 +1100,30 @@ export default function Mentoring() {
     });
   }
 
+  function removeWrongAnswerImage(problemIndex, targetImage, imageIndex = -1) {
+    setWrongAnswerDistributionDraft((prev) => {
+      const base = normalizeWrongAnswerDistribution(prev);
+      const list = Array.isArray(base.problems) ? [...base.problems] : [];
+      if (!list[problemIndex]) return base;
+
+      const current = normalizeWrongAnswerItem(list[problemIndex]);
+      const targetId = String(targetImage?.id || '').trim();
+      const targetUrl = String(targetImage?.url || '').trim();
+
+      const nextImages = (Array.isArray(current.images) ? current.images : []).filter((img, idx) => {
+        if (targetId) return String(img?.id || '').trim() !== targetId;
+        if (targetUrl) return String(img?.url || '').trim() !== targetUrl;
+        return idx !== imageIndex;
+      });
+
+      list[problemIndex] = {
+        ...current,
+        images: nextImages
+      };
+      return { ...base, problems: list };
+    });
+  }
+
   function findWrongAnswerCandidates() {
     const candidates = buildOverlapCandidates(schedule, mentorInfo);
     setWrongAnswerCandidates(candidates);
@@ -1766,22 +1790,36 @@ export default function Mentoring() {
                     <div className="mt-3">
                       <div className="text-xs text-slate-700">업로드된 문제 이미지 ({item.images.length}장)</div>
                       <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-                        {item.images.map((img) => (
-                          <a
-                            key={img.id || img.url}
-                            href={wrongAnswerImageUrl(img.url)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="block shrink-0 rounded-lg border border-slate-200 bg-white p-1"
+                        {item.images.map((img, imageIdx) => (
+                          <div
+                            key={img.id || `${img.url}-${imageIdx}`}
+                            className="relative block shrink-0 rounded-lg border border-slate-200 bg-white p-1"
                             title={img.filename || '문제 이미지'}
                           >
-                            <img
-                              src={wrongAnswerImageUrl(img.url)}
-                              alt={img.filename || '문제 이미지'}
-                              className="h-20 w-20 rounded-md object-cover"
-                              loading="lazy"
-                            />
-                          </a>
+                            <a href={wrongAnswerImageUrl(img.url)} target="_blank" rel="noreferrer">
+                              <img
+                                src={wrongAnswerImageUrl(img.url)}
+                                alt={img.filename || '문제 이미지'}
+                                className="h-20 w-20 rounded-md object-cover"
+                                loading="lazy"
+                              />
+                            </a>
+                            {canEditA('e_wrong_answer_distribution') && !parentMode ? (
+                              <button
+                                type="button"
+                                className="absolute right-1 top-1 rounded-md border border-rose-200 bg-white/95 px-1.5 py-0.5 text-[10px] text-rose-700 shadow-sm hover:bg-rose-50"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const ok = window.confirm('이 문제 이미지를 삭제할까요?');
+                                  if (!ok) return;
+                                  removeWrongAnswerImage(idx, img, imageIdx);
+                                }}
+                              >
+                                삭제
+                              </button>
+                            ) : null}
+                          </div>
                         ))}
                       </div>
                     </div>
