@@ -1587,10 +1587,10 @@ export default function Mentoring() {
                     {idx === 0 ? (
                       <>
                         <div className="col-span-12 md:col-span-6">
-                          <div className="h-full min-h-[210px] rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex flex-col">
+                          <div className="h-full min-h-[110px] rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex flex-col">
                             <div className="text-xs font-semibold text-slate-800">전달사항</div>
                             <textarea
-                              className="textarea mt-2 flex-1 min-h-0"
+                              className="textarea mt-2 min-h-[68px]"
                               value={item.note || ''}
                               onChange={(e) => updateWrongAnswerProblem(idx, { note: e.target.value })}
                               disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
@@ -1598,7 +1598,7 @@ export default function Mentoring() {
                           </div>
                         </div>
                         <div className="col-span-12 md:col-span-6">
-                          <div className="h-full min-h-[210px] rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex flex-col">
+                          <div className="h-full min-h-[110px] rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex flex-col">
                             <div className="text-xs font-semibold text-slate-800">배정된 멘토</div>
                             {wrongAnswerDistributionDraft?.assignment?.mentor_name ? (
                               <>
@@ -1619,7 +1619,7 @@ export default function Mentoring() {
                             ) : (
                               <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
                             )}
-                            <div className="mt-auto grid grid-cols-3 gap-2 pt-3">
+                            <div className="mt-1 grid grid-cols-3 gap-2">
                               <div>
                                 <div className="text-[11px] text-slate-600">월</div>
                                 <input
