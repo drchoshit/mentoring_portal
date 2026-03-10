@@ -17,72 +17,6 @@ const upload = multer({
   }
 });
 
-const DEFAULT_WRONG_ANSWER_ITEM = {
-  subject: '',
-  material: '',
-  problem_name: '',
-  problem_type: '',
-  note: '',
-  images: []
-};
-
-function safeJson(text, fallback) {
-  try {
-    if (!text) return fallback;
-    return JSON.parse(text);
-  } catch {
-    return fallback;
-  }
-}
-
-function normalizeProblemImage(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const url = String(raw.url || '').trim();
-  if (!url) return null;
-  return {
-    id: String(raw.id || '').trim() || `img_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
-    filename: String(raw.filename || '').trim(),
-    stored_name: String(raw.stored_name || '').trim(),
-    url,
-    mime_type: String(raw.mime_type || '').trim(),
-    size: Number(raw.size || 0) || 0,
-    uploaded_at: String(raw.uploaded_at || '').trim(),
-    uploaded_via: String(raw.uploaded_via || '').trim()
-  };
-}
-
-function normalizeWrongAnswerItem(raw) {
-  const base = raw && typeof raw === 'object' ? raw : {};
-  return {
-    subject: String(base.subject || '').trim(),
-    material: String(base.material || '').trim(),
-    problem_name: String(base.problem_name || '').trim(),
-    problem_type: String(base.problem_type || '').trim(),
-    note: String(base.note || '').trim(),
-    images: Array.isArray(base.images) ? base.images.map(normalizeProblemImage).filter(Boolean) : []
-  };
-}
-
-function normalizeWrongAnswerDistribution(value) {
-  if (!value || typeof value !== 'object') {
-    return { problems: [{ ...DEFAULT_WRONG_ANSWER_ITEM }], assignment: null, searched_at: '' };
-  }
-  const problemsRaw = Array.isArray(value.problems)
-    ? value.problems
-    : Array.isArray(value.items)
-      ? value.items
-      : [];
-  const problems = problemsRaw.length
-    ? problemsRaw.map(normalizeWrongAnswerItem)
-    : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
-  const assignment = value.assignment && typeof value.assignment === 'object' ? value.assignment : null;
-  return {
-    problems,
-    assignment,
-    searched_at: String(value.searched_at || '').trim()
-  };
-}
-
 function ensureWrongAnswerImagesTable(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS wrong_answer_images (
@@ -403,14 +337,9 @@ export default function problemUploadRoutes(db) {
       const files = Array.isArray(req.files) ? req.files : [];
       if (!files.length) return res.status(400).json({ error: '업로드할 이미지가 없습니다.' });
 
-      const weekRecord = db.prepare('SELECT id, e_wrong_answer_distribution FROM week_records WHERE student_id=? AND week_id=?').get(studentId, weekId);
+      const weekRecord = db.prepare('SELECT id FROM week_records WHERE student_id=? AND week_id=?').get(studentId, weekId);
       if (!weekRecord?.id) return res.status(404).json({ error: '주간 기록을 찾지 못했습니다.' });
 
-      const current = normalizeWrongAnswerDistribution(safeJson(weekRecord.e_wrong_answer_distribution, {}));
-      const problems = Array.isArray(current.problems) ? [...current.problems] : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
-      while (problems.length <= problemIndex) problems.push({ ...DEFAULT_WRONG_ANSWER_ITEM });
-
-      const target = normalizeWrongAnswerItem(problems[problemIndex] || {});
       const now = new Date().toISOString();
       const insertImage = db.prepare(`
         INSERT INTO wrong_answer_images
@@ -446,17 +375,6 @@ export default function problemUploadRoutes(db) {
         }
       });
       tx();
-
-      target.images = [...(Array.isArray(target.images) ? target.images : []), ...uploaded];
-      problems[problemIndex] = target;
-
-      const next = {
-        ...current,
-        problems
-      };
-
-      db.prepare("UPDATE week_records SET e_wrong_answer_distribution=?, updated_at=datetime('now') WHERE id=?")
-        .run(JSON.stringify(next), weekRecord.id);
 
       return res.json({
         ok: true,

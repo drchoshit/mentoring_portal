@@ -1306,6 +1306,9 @@ export default function Mentoring() {
         body: { e_wrong_answer_distribution: wrongAnswerDistributionDraft }
       });
       await loadAll();
+      if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+        window.alert('오답 배분이 완료되었습니다.');
+      }
     } catch (e) {
       if (e?.message !== '__CANCEL__') setError(e?.message || '오답 배분 저장에 실패했습니다.');
     } finally {

@@ -328,6 +328,15 @@ const DEFAULT_WRONG_ANSWER_ITEM = {
 };
 
 const KO_DAY = ['일', '월', '화', '수', '목', '금', '토'];
+const DAY_ORDER_MAP = new Map([
+  ['월', 1],
+  ['화', 2],
+  ['수', 3],
+  ['목', 4],
+  ['금', 5],
+  ['토', 6],
+  ['일', 7]
+]);
 
 function ensureWrongAnswerImagesTable(db) {
   db.exec(`
@@ -405,6 +414,86 @@ function normalizeWrongAnswerDistribution(value) {
   };
 }
 
+function listWrongAnswerImages(db, student_id, week_id) {
+  const studentId = Number(student_id || 0);
+  const weekId = Number(week_id || 0);
+  if (!studentId || !weekId) return [];
+
+  ensureWrongAnswerImagesTable(db);
+  const rows = db
+    .prepare(
+      `SELECT id, problem_index, filename, mime_type, size_bytes, created_at
+       FROM wrong_answer_images
+       WHERE student_id=? AND week_id=? AND deleted_at IS NULL
+       ORDER BY problem_index, created_at, id`
+    )
+    .all(studentId, weekId);
+
+  return rows.map((row) => ({
+    id: String(row?.id || '').trim(),
+    filename: String(row?.filename || '').trim(),
+    stored_name: String(row?.id || '').trim(),
+    url: `/api/problem-upload/image/${encodeURIComponent(String(row?.id || '').trim())}`,
+    mime_type: String(row?.mime_type || '').trim(),
+    size: Number(row?.size_bytes || 0) || 0,
+    uploaded_at: String(row?.created_at || '').trim(),
+    uploaded_via: 'qr_mobile',
+    problem_index: Number(row?.problem_index || 0) || 0
+  }));
+}
+
+function mergeWrongAnswerDistributionWithImages(db, student_id, week_id, rawDistribution) {
+  const base = normalizeWrongAnswerDistribution(rawDistribution);
+  const tableImages = listWrongAnswerImages(db, student_id, week_id);
+
+  const byProblem = new Map();
+  const tableImageIds = new Set();
+  let maxProblemIndex = Math.max(0, (Array.isArray(base.problems) ? base.problems.length : 1) - 1);
+  for (const image of tableImages) {
+    const idx = Math.max(0, Number(image?.problem_index || 0) || 0);
+    maxProblemIndex = Math.max(maxProblemIndex, idx);
+    if (!byProblem.has(idx)) byProblem.set(idx, []);
+    byProblem.get(idx).push({
+      id: String(image.id || '').trim(),
+      filename: String(image.filename || '').trim(),
+      stored_name: String(image.stored_name || '').trim(),
+      url: String(image.url || '').trim(),
+      mime_type: String(image.mime_type || '').trim(),
+      size: Number(image.size || 0) || 0,
+      uploaded_at: String(image.uploaded_at || '').trim(),
+      uploaded_via: String(image.uploaded_via || '').trim()
+    });
+    if (image.id) tableImageIds.add(String(image.id).trim());
+  }
+
+  const mergedProblems = [];
+  for (let idx = 0; idx <= maxProblemIndex; idx += 1) {
+    const item = normalizeWrongAnswerItem(base.problems?.[idx] || {});
+    const tableList = byProblem.get(idx) || [];
+
+    const legacyList = (Array.isArray(item.images) ? item.images : []).filter((img) => {
+      const id = String(img?.id || '').trim();
+      const url = String(img?.url || '').trim();
+      const isManagedPath = /\/api\/problem-upload\/image\//.test(url);
+
+      if (id && tableImageIds.has(id)) return false;
+      if (isManagedPath) return false;
+      if (id.startsWith('img_')) return false;
+      return Boolean(id || url);
+    });
+
+    mergedProblems.push({
+      ...item,
+      images: [...tableList, ...legacyList]
+    });
+  }
+
+  return {
+    ...base,
+    problems: mergedProblems.length ? mergedProblems : [{ ...DEFAULT_WRONG_ANSWER_ITEM }]
+  };
+}
+
 function parseTimePart(value) {
   const raw = String(value || '').trim();
   const m = raw.match(/^(\d{1,2}):(\d{2})$/);
@@ -425,6 +514,11 @@ function toHHMM(totalMinutes) {
 
 function normalizeMentorName(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
+function dayOrderValue(day) {
+  const key = String(day || '').trim();
+  return DAY_ORDER_MAP.get(key) || 999;
 }
 
 function resolveSessionDayLabel(week, assignment) {
@@ -636,9 +730,22 @@ export default function mentoringRoutes(db) {
         })
       : subject_records_raw;
 
-    const week_record = parentMode
+    let week_record = parentMode
       ? filterObjectByView(db, req.user.role, weekRecord, { parentMode })
       : weekRecord;
+
+    if (week_record && week_record.e_wrong_answer_distribution != null) {
+      const mergedWrongAnswer = mergeWrongAnswerDistributionWithImages(
+        db,
+        student_id,
+        week_id,
+        safeJson(week_record.e_wrong_answer_distribution, {})
+      );
+      week_record = {
+        ...week_record,
+        e_wrong_answer_distribution: JSON.stringify(mergedWrongAnswer)
+      };
+    }
 
     res.json({
       student,
@@ -794,19 +901,6 @@ export default function mentoringRoutes(db) {
       }
     }
 
-    let wrongAnswerImageKeepIds = null;
-    if (allowed.includes('e_wrong_answer_distribution')) {
-      const parsedWrongAnswer = normalizeWrongAnswerDistribution(safeJson(normalized.e_wrong_answer_distribution, {}));
-      const keepIds = new Set();
-      for (const problem of Array.isArray(parsedWrongAnswer.problems) ? parsedWrongAnswer.problems : []) {
-        for (const img of Array.isArray(problem?.images) ? problem.images : []) {
-          const id = String(img?.id || '').trim();
-          if (id) keepIds.add(id);
-        }
-      }
-      wrongAnswerImageKeepIds = Array.from(keepIds);
-    }
-
     let setSql = allowed.map((k) => `${k}=?`).join(', ');
     const values = allowed.map((k) => normalized[k]);
     if (allowed.includes('shared_with_parent')) {
@@ -819,25 +913,6 @@ export default function mentoringRoutes(db) {
     const tx = db.transaction(() => {
       db.prepare(`UPDATE week_records SET ${setSql}, updated_at=datetime('now'), updated_by=? WHERE id=?`)
         .run(...values, req.user.id, id);
-
-      if (Array.isArray(wrongAnswerImageKeepIds)) {
-        ensureWrongAnswerImagesTable(db);
-        if (wrongAnswerImageKeepIds.length) {
-          const placeholders = wrongAnswerImageKeepIds.map(() => '?').join(', ');
-          db.prepare(
-            `UPDATE wrong_answer_images
-             SET deleted_at=datetime('now')
-             WHERE student_id=? AND week_id=? AND deleted_at IS NULL
-               AND id NOT IN (${placeholders})`
-          ).run(row.student_id, row.week_id, ...wrongAnswerImageKeepIds);
-        } else {
-          db.prepare(
-            `UPDATE wrong_answer_images
-             SET deleted_at=datetime('now')
-             WHERE student_id=? AND week_id=? AND deleted_at IS NULL`
-          ).run(row.student_id, row.week_id);
-        }
-      }
     });
     tx();
 
@@ -898,25 +973,23 @@ export default function mentoringRoutes(db) {
       .get(student_id, week_id);
     if (!weekRecord?.id) return res.status(404).json({ error: 'Week record not found' });
 
-    const current = normalizeWrongAnswerDistribution(safeJson(weekRecord.e_wrong_answer_distribution, {}));
-    const problems = Array.isArray(current.problems) ? [...current.problems] : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
-    if (!problems[problem_index]) return res.status(404).json({ error: 'Problem record not found' });
+    const imageRow = db
+      .prepare(
+        `SELECT id
+         FROM wrong_answer_images
+         WHERE id=? AND student_id=? AND week_id=? AND problem_index=? AND deleted_at IS NULL`
+      )
+      .get(image_id, student_id, week_id, problem_index);
+    if (!imageRow?.id) return res.status(404).json({ error: 'Image not found' });
 
-    const target = normalizeWrongAnswerItem(problems[problem_index]);
-    const nextImages = target.images.filter((img) => String(img?.id || '').trim() !== image_id);
-    if (nextImages.length === target.images.length) {
-      return res.status(404).json({ error: 'Image metadata not found' });
-    }
-    problems[problem_index] = { ...target, images: nextImages };
-    const next = { ...current, problems };
+    db.prepare("UPDATE wrong_answer_images SET deleted_at=datetime('now') WHERE id=?").run(image_id);
 
-    const tx = db.transaction(() => {
-      db.prepare("UPDATE week_records SET e_wrong_answer_distribution=?, updated_at=datetime('now'), updated_by=? WHERE id=?")
-        .run(JSON.stringify(next), req.user.id, weekRecord.id);
-      db.prepare("UPDATE wrong_answer_images SET deleted_at=datetime('now') WHERE id=?")
-        .run(image_id);
-    });
-    tx();
+    const next = mergeWrongAnswerDistributionWithImages(
+      db,
+      student_id,
+      week_id,
+      safeJson(weekRecord.e_wrong_answer_distribution, {})
+    );
 
     writeAudit(db, {
       user_id: req.user.id,
@@ -982,6 +1055,23 @@ export default function mentoringRoutes(db) {
       const sessionDateLabel = assignment.session_month && assignment.session_day
         ? `${assignment.session_month}/${assignment.session_day}`
         : '-';
+      const sessionMonth = String(assignment.session_month || '').trim();
+      const sessionDay = String(assignment.session_day || '').trim();
+
+      const problemItems = (Array.isArray(dist.problems) ? dist.problems : [])
+        .map((problem) => normalizeWrongAnswerItem(problem))
+        .filter((problem) => (
+          problem.subject ||
+          problem.material ||
+          problem.problem_name ||
+          problem.problem_type
+        ))
+        .map((problem) => ({
+          subject: String(problem.subject || '').trim(),
+          material: String(problem.material || '').trim(),
+          problem_name: String(problem.problem_name || '').trim(),
+          problem_type: String(problem.problem_type || '').trim()
+        }));
 
       assignments.push({
         week_record_id: row.week_record_id,
@@ -991,11 +1081,15 @@ export default function mentoringRoutes(db) {
         mentor_name: mentorName,
         mentor_role: mentorRole,
         day_label: dayLabel,
+        session_month: sessionMonth,
+        session_day: sessionDay,
         session_date_label: sessionDateLabel,
         session_start_time: startTime,
         session_end_time: endTime,
         session_duration_minutes: duration,
         session_range_text: startTime && endTime ? `${startTime} ~ ${endTime}` : '-',
+        problem_count: problemItems.length,
+        problem_items: problemItems,
         assigned_at: String(assignment.assigned_at || '').trim()
       });
     }
@@ -1003,9 +1097,34 @@ export default function mentoringRoutes(db) {
     assignments.sort((a, b) => {
       const mentorCmp = String(a.mentor_name || '').localeCompare(String(b.mentor_name || ''));
       if (mentorCmp !== 0) return mentorCmp;
-      const dayCmp = String(a.day_label || '').localeCompare(String(b.day_label || ''));
-      if (dayCmp !== 0) return dayCmp;
-      return String(a.student_name || '').localeCompare(String(b.student_name || ''));
+
+      const aMonth = Number(a.session_month || 0);
+      const bMonth = Number(b.session_month || 0);
+      const aDayNum = Number(a.session_day || 0);
+      const bDayNum = Number(b.session_day || 0);
+      const aHasDate = Number.isInteger(aMonth) && Number.isInteger(aDayNum) && aMonth >= 1 && aMonth <= 12 && aDayNum >= 1 && aDayNum <= 31;
+      const bHasDate = Number.isInteger(bMonth) && Number.isInteger(bDayNum) && bMonth >= 1 && bMonth <= 12 && bDayNum >= 1 && bDayNum <= 31;
+
+      if (aHasDate && bHasDate) {
+        if (aMonth !== bMonth) return aMonth - bMonth;
+        if (aDayNum !== bDayNum) return aDayNum - bDayNum;
+      } else if (aHasDate !== bHasDate) {
+        return aHasDate ? -1 : 1;
+      } else {
+        const aDayOrder = dayOrderValue(a.day_label);
+        const bDayOrder = dayOrderValue(b.day_label);
+        if (aDayOrder !== bDayOrder) return aDayOrder - bDayOrder;
+      }
+
+      const aStart = parseTimePart(a.session_start_time);
+      const bStart = parseTimePart(b.session_start_time);
+      const aStartValue = aStart == null ? 9999 : aStart;
+      const bStartValue = bStart == null ? 9999 : bStart;
+      if (aStartValue !== bStartValue) return aStartValue - bStartValue;
+
+      const studentCmp = String(a.student_name || '').localeCompare(String(b.student_name || ''));
+      if (studentCmp !== 0) return studentCmp;
+      return String(a.external_id || '').localeCompare(String(b.external_id || ''));
     });
 
     return res.json({
