@@ -28,6 +28,17 @@ const ROLE_ORDER = {
   parent: 4
 };
 
+function wrongAnswerRoleLabel(role) {
+  if (role === 'mentor') return '클리닉 멘토';
+  return ROLE_KO[role] || role || '멘토';
+}
+
+function wrongAnswerRoleRowTone(role) {
+  if (role === 'mentor') return 'bg-emerald-50/70';
+  if (role === 'lead') return 'bg-sky-50/70';
+  return 'bg-white/70';
+}
+
 const SUBJECT_FIELD_KEYS = ['a_curriculum', 'a_last_hw', 'a_hw_exec', 'a_progress', 'a_this_hw', 'a_comment'];
 const SUBJECT_TONES = [
   'border-emerald-200/60 bg-emerald-50/35',
@@ -226,6 +237,9 @@ function normalizeWrongAnswerDistribution(value) {
               .map((v) => String(v || '').trim())
               .filter(Boolean)
           : [],
+        session_month: String(value.assignment.session_month || '').trim(),
+        session_day: String(value.assignment.session_day || '').trim(),
+        session_time: String(value.assignment.session_time || '').trim(),
         assigned_at: String(value.assignment.assigned_at || '').trim(),
         assigned_by: String(value.assignment.assigned_by || '').trim()
       }
@@ -1063,31 +1077,66 @@ export default function Mentoring() {
     }));
   }
 
+  function toggleWrongAnswerSection() {
+    setShowWrongAnswerSection((prev) => {
+      const next = !prev;
+      if (next && typeof window !== 'undefined' && typeof window.alert === 'function') {
+        window.alert('오답 배분 섹션이 활성화되었습니다.');
+      }
+      return next;
+    });
+  }
+
   function assignWrongAnswerMentor(candidate) {
     if (!candidate) return;
-    setWrongAnswerDistributionDraft((prev) => ({
-      ...normalizeWrongAnswerDistribution(prev),
-      assignment: {
-        mentor_id: String(candidate.mentor_id || '').trim(),
-        mentor_name: String(candidate.mentor_name || '').trim(),
-        mentor_role: String(candidate.mentor_role || '').trim(),
-        mentor_subjects: Array.isArray(candidate.mentor_subjects) ? candidate.mentor_subjects : [],
-        mentor_work_slots: Array.isArray(candidate.mentor_work_slots)
-          ? candidate.mentor_work_slots
-              .map((slot) => ({
-                day: String(slot?.day || ''),
-                time: String(slot?.time || '')
-              }))
-              .filter((slot) => slot.day && slot.time)
-          : [],
-        overlap_count: Number(candidate.overlaps?.length || 0),
-        overlap_preview: (candidate.overlaps || [])
-          .slice(0, 4)
-          .map((item) => `${DAY_LABELS[item.day] || item.day} ${item.student_time}`),
-        assigned_at: new Date().toISOString(),
-        assigned_by: user?.role || ''
-      }
-    }));
+    setWrongAnswerDistributionDraft((prev) => {
+      const base = normalizeWrongAnswerDistribution(prev);
+      const previousAssignment = base.assignment && typeof base.assignment === 'object' ? base.assignment : {};
+      return {
+        ...base,
+        assignment: {
+          mentor_id: String(candidate.mentor_id || '').trim(),
+          mentor_name: String(candidate.mentor_name || '').trim(),
+          mentor_role: String(candidate.mentor_role || '').trim(),
+          mentor_subjects: Array.isArray(candidate.mentor_subjects) ? candidate.mentor_subjects : [],
+          mentor_work_slots: Array.isArray(candidate.mentor_work_slots)
+            ? candidate.mentor_work_slots
+                .map((slot) => ({
+                  day: String(slot?.day || ''),
+                  time: String(slot?.time || '')
+                }))
+                .filter((slot) => slot.day && slot.time)
+            : [],
+          overlap_count: Number(candidate.overlaps?.length || 0),
+          overlap_preview: (candidate.overlaps || [])
+            .slice(0, 4)
+            .map((item) => `${DAY_LABELS[item.day] || item.day} ${item.student_time}`),
+          session_month: String(previousAssignment.session_month || '').trim(),
+          session_day: String(previousAssignment.session_day || '').trim(),
+          session_time: String(previousAssignment.session_time || '').trim(),
+          assigned_at: new Date().toISOString(),
+          assigned_by: user?.role || ''
+        }
+      };
+    });
+    setWrongAnswerSearched(false);
+  }
+
+  function updateWrongAnswerAssignment(patch) {
+    setWrongAnswerDistributionDraft((prev) => {
+      const base = normalizeWrongAnswerDistribution(prev);
+      const current = base.assignment && typeof base.assignment === 'object' ? base.assignment : {};
+      return {
+        ...base,
+        assignment: {
+          ...current,
+          session_month: String(current.session_month || '').trim(),
+          session_day: String(current.session_day || '').trim(),
+          session_time: String(current.session_time || '').trim(),
+          ...patch
+        }
+      };
+    });
   }
 
   async function saveWrongAnswerDistribution() {
@@ -1425,7 +1474,7 @@ export default function Mentoring() {
                 <button
                   className="btn-ghost"
                   type="button"
-                  onClick={() => setShowWrongAnswerSection((v) => !v)}
+                  onClick={toggleWrongAnswerSection}
                 >
                   {showWrongAnswerSection ? '오답 배분 닫기' : '오답 배분하기'}
                 </button>
@@ -1535,15 +1584,91 @@ export default function Mentoring() {
                         disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
                       />
                     </div>
-                    <div className="col-span-12">
-                      <div className="text-xs text-slate-800">상세 메모</div>
-                      <textarea
-                        className="textarea mt-1 min-h-[76px]"
-                        value={item.note || ''}
-                        onChange={(e) => updateWrongAnswerProblem(idx, { note: e.target.value })}
-                        disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                      />
-                    </div>
+                    {idx === 0 ? (
+                      <>
+                        <div className="col-span-12 md:col-span-8">
+                          <div className="text-xs text-slate-800">전달사항</div>
+                          <textarea
+                            className="textarea mt-1 min-h-[40px]"
+                            value={item.note || ''}
+                            onChange={(e) => updateWrongAnswerProblem(idx, { note: e.target.value })}
+                            disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                          />
+                        </div>
+                        <div className="col-span-12 md:col-span-4">
+                          <div className="h-full rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                            <div className="text-xs font-semibold text-slate-800">배정된 멘토</div>
+                            {wrongAnswerDistributionDraft?.assignment?.mentor_name ? (
+                              <>
+                                <div className="mt-1 text-sm font-semibold text-slate-900">
+                                  {wrongAnswerDistributionDraft.assignment.mentor_name}
+                                </div>
+                                <div className="text-xs text-slate-700">
+                                  {wrongAnswerRoleLabel(wrongAnswerDistributionDraft.assignment.mentor_role)}
+                                </div>
+                                <div className="mt-1 text-xs text-slate-600">
+                                  {(wrongAnswerDistributionDraft.assignment.mentor_work_slots || []).length
+                                    ? wrongAnswerDistributionDraft.assignment.mentor_work_slots
+                                        .map((slot) => `${DAY_LABELS[slot.day] || slot.day} ${slot.time}`)
+                                        .join(' / ')
+                                    : '근무 시간 정보 없음'}
+                                </div>
+                              </>
+                            ) : (
+                              <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
+                            )}
+                            <div className="mt-3 grid grid-cols-3 gap-2">
+                              <div>
+                                <div className="text-[11px] text-slate-600">월</div>
+                                <input
+                                  className="input mt-1 h-9"
+                                  type="number"
+                                  min={1}
+                                  max={12}
+                                  placeholder="3"
+                                  value={wrongAnswerDistributionDraft?.assignment?.session_month || ''}
+                                  onChange={(e) => updateWrongAnswerAssignment({ session_month: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) })}
+                                  disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                                />
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-slate-600">일</div>
+                                <input
+                                  className="input mt-1 h-9"
+                                  type="number"
+                                  min={1}
+                                  max={31}
+                                  placeholder="10"
+                                  value={wrongAnswerDistributionDraft?.assignment?.session_day || ''}
+                                  onChange={(e) => updateWrongAnswerAssignment({ session_day: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) })}
+                                  disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                                />
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-slate-600">시간</div>
+                                <input
+                                  className="input mt-1 h-9"
+                                  type="time"
+                                  value={wrongAnswerDistributionDraft?.assignment?.session_time || ''}
+                                  onChange={(e) => updateWrongAnswerAssignment({ session_time: e.target.value })}
+                                  disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="col-span-12">
+                        <div className="text-xs text-slate-800">전달사항</div>
+                        <textarea
+                          className="textarea mt-1 min-h-[40px]"
+                          value={item.note || ''}
+                          onChange={(e) => updateWrongAnswerProblem(idx, { note: e.target.value })}
+                          disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1587,10 +1712,13 @@ export default function Mentoring() {
                           const selectedMentorId = String(wrongAnswerDistributionDraft?.assignment?.mentor_id || '');
                           const isSelected = selectedMentorId && selectedMentorId === String(candidate.mentor_id || '');
                           return (
-                            <tr key={`${candidate.mentor_id || candidate.mentor_name}-${idx}`} className="border-t border-slate-200">
+                            <tr
+                              key={`${candidate.mentor_id || candidate.mentor_name}-${idx}`}
+                              className={`border-t border-slate-200 ${wrongAnswerRoleRowTone(candidate.mentor_role)}`}
+                            >
                               <td className="px-3 py-2">
                                 <div className="font-medium text-slate-900">{candidate.mentor_name}</div>
-                                <div className="text-xs text-slate-500">{ROLE_KO[candidate.mentor_role] || candidate.mentor_role}</div>
+                                <div className="text-xs text-slate-600">{wrongAnswerRoleLabel(candidate.mentor_role)}</div>
                               </td>
                               <td className="px-3 py-2">
                                 <div className="text-xs text-slate-700">총 {candidate.overlaps.length}개 (30분 이상)</div>
@@ -1647,17 +1775,6 @@ export default function Mentoring() {
               </div>
             ) : null}
 
-            {wrongAnswerDistributionDraft?.assignment?.mentor_name ? (
-              <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3">
-                <div className="text-sm font-semibold text-emerald-900">현재 배정 멘토</div>
-                <div className="mt-1 text-sm text-emerald-900">
-                  {wrongAnswerDistributionDraft.assignment.mentor_name} ({ROLE_KO[wrongAnswerDistributionDraft.assignment.mentor_role] || wrongAnswerDistributionDraft.assignment.mentor_role || '멘토'})
-                </div>
-                <div className="mt-1 text-xs text-emerald-800">
-                  겹치는 일정 {wrongAnswerDistributionDraft.assignment.overlap_count || 0}개
-                </div>
-              </div>
-            ) : null}
           </GoldCard>
         ) : null}
 
