@@ -121,81 +121,223 @@ function renderUploadPage({ token = '', submitPath = '/api/problem-upload/mobile
     <title>문제 이미지 업로드</title>
     <style>
       body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Noto Sans KR',sans-serif;background:#f4f7fb;color:#122034}
-      .wrap{max-width:560px;margin:0 auto;padding:20px}
+      .wrap{max-width:620px;margin:0 auto;padding:20px}
       .card{background:#fff;border:1px solid #d8e2f2;border-radius:16px;padding:18px;box-shadow:0 8px 26px rgba(17,37,79,.08)}
       h1{margin:0;font-size:20px}
       p{margin:10px 0 0;color:#445d7a;font-size:14px;line-height:1.5}
       .error{margin-top:10px;color:#b42318;font-size:13px}
       .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
-      button{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-size:14px;font-weight:700;cursor:pointer}
+      button{appearance:none;border:0;border-radius:12px;padding:12px 14px;font-size:14px;font-weight:700;cursor:pointer}
       .primary{background:#2f6df6;color:#fff}
       .ghost{background:#e9efff;color:#1f3d8a}
+      .camera{background:#dff5e8;color:#13623a}
       input[type=file]{display:none}
       .status{margin-top:10px;color:#334f74;font-size:13px}
+      .preview{margin-top:12px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+      .thumb{border:1px solid #d8e2f2;border-radius:10px;background:#fff;overflow:hidden}
+      .thumb img{display:block;width:100%;height:84px;object-fit:cover;background:#f7f9fc}
+      .thumb-foot{padding:6px}
+      .row{display:flex;align-items:center;justify-content:space-between;gap:6px}
+      .muted{font-size:11px;color:#4f6482}
+      .remove{font-size:11px;border-radius:8px;border:1px solid #d8e2f2;background:#fff;color:#334f74;padding:2px 6px}
+      @media (max-width:420px){
+        .preview{grid-template-columns:repeat(2,minmax(0,1fr))}
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="card">
         <h1>문제 이미지 업로드</h1>
-        <p>질문할 문제 이미지를 여러 장 선택한 뒤 전송해 주세요. 새 촬영 또는 앨범 선택이 가능합니다.</p>
+        <p>촬영과 앨범 불러오기를 구분해서 사용할 수 있습니다. 촬영은 여러 번 반복해 누적한 뒤, 보낼 이미지만 선택해서 전송하세요.</p>
         ${escapedError ? `<div class="error">${escapedError}</div>` : ''}
         <form id="uploadForm" method="post" action="${escapedSubmitPath}" enctype="multipart/form-data">
-          <input type="hidden" name="token" value="${escapedToken}" />
-          <input id="images" type="file" name="images" accept="image/*" capture="environment" multiple />
+          <input type="hidden" id="token" name="token" value="${escapedToken}" />
+          <input id="cameraInput" type="file" accept="image/*" capture="environment" />
+          <input id="albumInput" type="file" accept="image/*" multiple />
           <div class="actions">
-            <button id="pickBtn" type="button" class="ghost">새 촬영/앨범 선택</button>
-            <button id="submitBtn" type="submit" class="primary">전송하기</button>
+            <button id="cameraBtn" type="button" class="camera">사진 촬영하기</button>
+            <button id="albumBtn" type="button" class="ghost">앨범에서 불러오기</button>
+            <button id="submitBtn" type="submit" class="primary">선택한 이미지 전송하기</button>
           </div>
         </form>
-        <div id="status" class="status">파일을 선택해 주세요.</div>
+        <div id="status" class="status">아직 선택된 이미지가 없습니다.</div>
+        <div id="preview" class="preview"></div>
       </div>
     </div>
     <script>
+      const MAX_COUNT = 12;
       const form = document.getElementById('uploadForm');
-      const fileInput = document.getElementById('images');
-      const pickBtn = document.getElementById('pickBtn');
+      const tokenInput = document.getElementById('token');
+      const cameraInput = document.getElementById('cameraInput');
+      const albumInput = document.getElementById('albumInput');
+      const cameraBtn = document.getElementById('cameraBtn');
+      const albumBtn = document.getElementById('albumBtn');
       const submitBtn = document.getElementById('submitBtn');
       const statusEl = document.getElementById('status');
+      const previewEl = document.getElementById('preview');
+
+      let pending = [];
 
       function setStatus(text) {
         statusEl.textContent = text;
       }
 
-      pickBtn.addEventListener('click', () => fileInput.click());
-      fileInput.addEventListener('change', () => {
-        const count = fileInput.files ? fileInput.files.length : 0;
-        setStatus(count ? count + '장 선택됨' : '파일을 선택해 주세요.');
+      function buildId() {
+        return 'f_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+      }
+
+      function escapeText(text) {
+        return String(text || '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
+      }
+
+      function addFiles(fileList, source) {
+        const list = Array.from(fileList || []);
+        if (!list.length) return;
+
+        let added = 0;
+        for (const file of list) {
+          if (!file || !String(file.type || '').startsWith('image/')) continue;
+          if (pending.length >= MAX_COUNT) break;
+          pending.push({
+            id: buildId(),
+            file,
+            source,
+            selected: true,
+            previewUrl: URL.createObjectURL(file)
+          });
+          added += 1;
+        }
+        if (!added) {
+          setStatus('추가된 이미지가 없습니다. (최대 ' + MAX_COUNT + '장)');
+        }
+      }
+
+      function removeItem(id) {
+        const idx = pending.findIndex((x) => x.id === id);
+        if (idx < 0) return;
+        try { URL.revokeObjectURL(pending[idx].previewUrl); } catch (_) {}
+        pending.splice(idx, 1);
+      }
+
+      function renderPreview() {
+        const selectedCount = pending.filter((x) => x.selected).length;
+        if (!pending.length) {
+          previewEl.innerHTML = '';
+          setStatus('아직 선택된 이미지가 없습니다.');
+          submitBtn.disabled = true;
+          return;
+        }
+
+        previewEl.innerHTML = pending.map((item, index) => {
+          const safeName = escapeText(String(item.file && item.file.name ? item.file.name : 'image'));
+          const sourceLabel = item.source === 'camera' ? '촬영' : '앨범';
+          return '<div class="thumb" data-id="' + item.id + '">' +
+            '<img src="' + item.previewUrl + '" alt="preview" />' +
+            '<div class="thumb-foot">' +
+              '<div class="row">' +
+                '<label class="muted"><input data-action="toggle" type="checkbox" ' + (item.selected ? 'checked' : '') + ' /> 선택</label>' +
+                '<button data-action="remove" type="button" class="remove">삭제</button>' +
+              '</div>' +
+              '<div class="muted">#' + (index + 1) + ' · ' + sourceLabel + '</div>' +
+              '<div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + safeName + '</div>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+
+        setStatus('총 ' + pending.length + '장 준비됨 / 전송 선택 ' + selectedCount + '장');
+        submitBtn.disabled = selectedCount === 0;
+      }
+
+      cameraBtn.addEventListener('click', () => cameraInput.click());
+      albumBtn.addEventListener('click', () => albumInput.click());
+
+      cameraInput.addEventListener('change', () => {
+        addFiles(cameraInput.files, 'camera');
+        cameraInput.value = '';
+        renderPreview();
+      });
+
+      albumInput.addEventListener('change', () => {
+        addFiles(albumInput.files, 'album');
+        albumInput.value = '';
+        renderPreview();
+      });
+
+      previewEl.addEventListener('click', (e) => {
+        const target = e.target;
+        const action = target && target.dataset ? target.dataset.action : '';
+        if (!action) return;
+        const card = target.closest('.thumb');
+        if (!card) return;
+        const id = card.dataset.id;
+        if (!id) return;
+        if (action === 'remove') {
+          removeItem(id);
+          renderPreview();
+        }
+      });
+
+      previewEl.addEventListener('change', (e) => {
+        const target = e.target;
+        const action = target && target.dataset ? target.dataset.action : '';
+        if (action !== 'toggle') return;
+        const card = target.closest('.thumb');
+        if (!card) return;
+        const id = card.dataset.id;
+        const item = pending.find((x) => x.id === id);
+        if (!item) return;
+        item.selected = !!target.checked;
+        renderPreview();
       });
 
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const files = fileInput.files;
-        if (!files || !files.length) {
-          setStatus('이미지를 먼저 선택해 주세요.');
+        const selected = pending.filter((x) => x.selected);
+        if (!selected.length) {
+          setStatus('전송할 이미지를 최소 1장 선택해 주세요.');
           return;
         }
+
         submitBtn.disabled = true;
-        pickBtn.disabled = true;
+        cameraBtn.disabled = true;
+        albumBtn.disabled = true;
         setStatus('업로드 중입니다...');
+        let uploadedOk = false;
         try {
-          const formData = new FormData(form);
+          const formData = new FormData();
+          formData.append('token', tokenInput.value || '');
+          for (const item of selected) {
+            formData.append('images', item.file, item.file.name || 'upload.jpg');
+          }
+
           const res = await fetch(form.action, { method: 'POST', body: formData });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+
+          for (const item of pending) {
+            try { URL.revokeObjectURL(item.previewUrl); } catch (_) {}
+          }
+          pending = [];
+          previewEl.innerHTML = '';
           setStatus('업로드 완료: ' + (data.uploaded_count || 0) + '장');
+          uploadedOk = true;
         } catch (err) {
           setStatus('업로드 실패: ' + (err && err.message ? err.message : '오류'));
         } finally {
           submitBtn.disabled = false;
-          pickBtn.disabled = false;
+          cameraBtn.disabled = false;
+          albumBtn.disabled = false;
+          if (!uploadedOk) renderPreview();
         }
       });
 
-      // Attempt to open picker automatically on mobile browsers.
-      window.setTimeout(() => {
-        try { fileInput.click(); } catch (_) {}
-      }, 250);
+      renderPreview();
     </script>
   </body>
 </html>`;
