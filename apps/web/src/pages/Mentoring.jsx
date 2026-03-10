@@ -189,8 +189,25 @@ const DEFAULT_WRONG_ANSWER_ITEM = {
   material: '',
   problem_name: '',
   problem_type: '',
-  note: ''
+  note: '',
+  images: []
 };
+
+function normalizeWrongAnswerImage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const url = String(raw.url || '').trim();
+  if (!url) return null;
+  return {
+    id: String(raw.id || '').trim() || `img_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`,
+    filename: String(raw.filename || '').trim(),
+    stored_name: String(raw.stored_name || '').trim(),
+    url,
+    mime_type: String(raw.mime_type || '').trim(),
+    size: Number(raw.size || 0) || 0,
+    uploaded_at: String(raw.uploaded_at || '').trim(),
+    uploaded_via: String(raw.uploaded_via || '').trim()
+  };
+}
 
 function normalizeWrongAnswerItem(raw) {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_WRONG_ANSWER_ITEM };
@@ -199,8 +216,17 @@ function normalizeWrongAnswerItem(raw) {
     material: String(raw.material || '').trim(),
     problem_name: String(raw.problem_name || '').trim(),
     problem_type: String(raw.problem_type || '').trim(),
-    note: String(raw.note || '').trim()
+    note: String(raw.note || '').trim(),
+    images: Array.isArray(raw.images) ? raw.images.map(normalizeWrongAnswerImage).filter(Boolean) : []
   };
+}
+
+function wrongAnswerImageUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) return `${API_BASE}${raw}`;
+  return `${API_BASE}/${raw}`;
 }
 
 function normalizeWrongAnswerDistribution(value) {
@@ -704,6 +730,13 @@ export default function Mentoring() {
   const [showWrongAnswerSection, setShowWrongAnswerSection] = useState(false);
   const [showLegacyRecordsModal, setShowLegacyRecordsModal] = useState(false);
   const [showEntryNotice, setShowEntryNotice] = useState(true);
+  const [wrongAnswerUploadModal, setWrongAnswerUploadModal] = useState({
+    open: false,
+    loading: false,
+    error: '',
+    uploadUrl: '',
+    problemIndex: -1
+  });
   const weeksDesc = useMemo(() => [...(weeks || [])].reverse(), [weeks]);
 
   // 과목 ?�력 보존/?�동?�?�용 draft
@@ -1085,6 +1118,54 @@ export default function Mentoring() {
       }
       return next;
     });
+  }
+
+  function closeWrongAnswerUploadModal() {
+    setWrongAnswerUploadModal({
+      open: false,
+      loading: false,
+      error: '',
+      uploadUrl: '',
+      problemIndex: -1
+    });
+  }
+
+  async function openWrongAnswerImageUpload(problemIndex) {
+    if (!studentId || !weekId) return;
+    setWrongAnswerUploadModal({
+      open: true,
+      loading: true,
+      error: '',
+      uploadUrl: '',
+      problemIndex
+    });
+    try {
+      const data = await api('/api/mentoring/wrong-answer/upload-link', {
+        method: 'POST',
+        body: {
+          student_id: Number(studentId),
+          week_id: Number(weekId),
+          problem_index: Number(problemIndex)
+        }
+      });
+      const uploadUrl = String(data?.upload_url || '').trim();
+      if (!uploadUrl) throw new Error('업로드 링크를 만들지 못했습니다.');
+      setWrongAnswerUploadModal({
+        open: true,
+        loading: false,
+        error: '',
+        uploadUrl,
+        problemIndex
+      });
+    } catch (e) {
+      setWrongAnswerUploadModal({
+        open: true,
+        loading: false,
+        error: e?.message || '업로드 링크 생성에 실패했습니다.',
+        uploadUrl: '',
+        problemIndex
+      });
+    }
   }
 
   function assignWrongAnswerMentor(candidate) {
@@ -1472,7 +1553,7 @@ export default function Mentoring() {
               </button>
               {user?.role !== 'mentor' && canViewA('e_wrong_answer_distribution') ? (
                 <button
-                  className="btn-ghost"
+                  className="btn text-white border border-blue-700 bg-gradient-to-b from-blue-500 to-blue-600 shadow-sm hover:from-blue-600 hover:to-blue-700"
                   type="button"
                   onClick={toggleWrongAnswerSection}
                 >
@@ -1537,14 +1618,23 @@ export default function Mentoring() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold text-slate-900">오답 기록 {idx + 1}</div>
                     {canEditA('e_wrong_answer_distribution') && !parentMode ? (
-                      <button
-                        className="btn-ghost"
-                        type="button"
-                        onClick={() => removeWrongAnswerProblem(idx)}
-                        disabled={(wrongAnswerDistributionDraft?.problems || []).length <= 1}
-                      >
-                        삭제
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="btn-ghost border-blue-200 text-blue-700 hover:border-blue-300 hover:text-blue-800"
+                          type="button"
+                          onClick={() => openWrongAnswerImageUpload(idx)}
+                        >
+                          문제 이미지 업로드하기
+                        </button>
+                        <button
+                          className="btn-ghost"
+                          type="button"
+                          onClick={() => removeWrongAnswerProblem(idx)}
+                          disabled={(wrongAnswerDistributionDraft?.problems || []).length <= 1}
+                        >
+                          삭제
+                        </button>
+                      </div>
                     ) : null}
                   </div>
                   <div className="mt-3 grid grid-cols-12 gap-3">
@@ -1672,6 +1762,30 @@ export default function Mentoring() {
                       </div>
                     )}
                   </div>
+                  {Array.isArray(item.images) && item.images.length ? (
+                    <div className="mt-3">
+                      <div className="text-xs text-slate-700">업로드된 문제 이미지 ({item.images.length}장)</div>
+                      <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+                        {item.images.map((img) => (
+                          <a
+                            key={img.id || img.url}
+                            href={wrongAnswerImageUrl(img.url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block shrink-0 rounded-lg border border-slate-200 bg-white p-1"
+                            title={img.filename || '문제 이미지'}
+                          >
+                            <img
+                              src={wrongAnswerImageUrl(img.url)}
+                              alt={img.filename || '문제 이미지'}
+                              className="h-20 w-20 rounded-md object-cover"
+                              loading="lazy"
+                            />
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ))}
 
@@ -2201,6 +2315,17 @@ export default function Mentoring() {
         </div>
       ) : null}
 
+      {wrongAnswerUploadModal.open ? (
+        <WrongAnswerImageUploadModal
+          loading={wrongAnswerUploadModal.loading}
+          error={wrongAnswerUploadModal.error}
+          uploadUrl={wrongAnswerUploadModal.uploadUrl}
+          problemIndex={wrongAnswerUploadModal.problemIndex}
+          onClose={closeWrongAnswerUploadModal}
+          onRefresh={loadAll}
+        />
+      ) : null}
+
       {showLegacyRecordsModal && rec?.student?.id ? (
         <LegacyMentoringRecordsModal
           studentId={rec.student.id}
@@ -2208,6 +2333,74 @@ export default function Mentoring() {
           onClose={() => setShowLegacyRecordsModal(false)}
         />
       ) : null}
+    </div>
+  );
+}
+
+function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, onClose, onRefresh }) {
+  const qrImageUrl = uploadUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=420x420&data=${encodeURIComponent(uploadUrl)}`
+    : '';
+
+  async function copyUploadUrl() {
+    if (!uploadUrl) return;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(uploadUrl);
+        window.alert('링크를 복사했습니다.');
+      }
+    } catch {
+      window.alert('링크 복사에 실패했습니다.');
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 p-4">
+      <div className="card w-full max-w-xl border border-blue-200 bg-white p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-base font-semibold text-slate-900">문제 이미지 업로드 QR</div>
+            <div className="text-xs text-slate-600">오답 기록 {Number(problemIndex) + 1}에 이미지가 저장됩니다.</div>
+          </div>
+          <button className="btn-ghost" type="button" onClick={onClose}>
+            닫기
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+          {loading ? (
+            <div className="text-sm text-slate-700">QR 링크를 생성하는 중입니다...</div>
+          ) : error ? (
+            <div className="text-sm text-red-600">{error}</div>
+          ) : uploadUrl ? (
+            <div className="space-y-3">
+              <div className="mx-auto w-fit rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+                <img src={qrImageUrl} alt="문제 이미지 업로드 QR" className="h-72 w-72" />
+              </div>
+              <div className="text-xs leading-5 text-slate-700">
+                1) 휴대폰으로 QR을 스캔합니다.
+                <br />
+                2) 열린 페이지에서 새 촬영/앨범 선택 후 여러 장 전송합니다.
+                <br />
+                3) 업로드 뒤 이 화면에서 새로고침을 누르면 목록에 반영됩니다.
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 break-all">
+                {uploadUrl}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn-ghost" type="button" onClick={copyUploadUrl}>
+                  링크 복사
+                </button>
+                <button className="btn-primary" type="button" onClick={onRefresh}>
+                  업로드 반영 새로고침
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-slate-700">업로드 링크를 불러오지 못했습니다.</div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

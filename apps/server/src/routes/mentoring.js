@@ -1,6 +1,7 @@
 import express from 'express';
 import { canEditField, filterObjectByView } from '../lib/permissions.js';
 import { writeAudit } from '../lib/audit.js';
+import { signWrongAnswerUploadToken } from '../lib/problemUploadToken.js';
 
 function ensureWeekRecord(db, student_id, week_id) {
   const existing = db.prepare('SELECT id FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
@@ -307,6 +308,14 @@ function safeJson(text, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function requestPublicBaseUrl(req) {
+  const protoRaw = String(req.headers['x-forwarded-proto'] || req.protocol || 'http');
+  const hostRaw = String(req.headers['x-forwarded-host'] || req.get('host') || '');
+  const proto = protoRaw.split(',')[0].trim() || 'http';
+  const host = hostRaw.split(',')[0].trim();
+  return host ? `${proto}://${host}` : '';
 }
 
 function getMentorInfoSetting(db) {
@@ -672,6 +681,40 @@ export default function mentoringRoutes(db) {
 
     writeAudit(db, { user_id: req.user.id, action: 'update', entity: 'week_record', entity_id: id, details: { fields: allowed } });
     res.json({ ok: true, updated_fields: allowed });
+  });
+
+  router.post('/wrong-answer/upload-link', (req, res) => {
+    const student_id = Number(req.body?.student_id || 0);
+    const week_id = Number(req.body?.week_id || 0);
+    const problem_index = Number(req.body?.problem_index ?? -1);
+    if (!student_id || !week_id || !Number.isInteger(problem_index) || problem_index < 0 || problem_index > 99) {
+      return res.status(400).json({ error: 'Missing or invalid student_id/week_id/problem_index' });
+    }
+    if (req.user.role === 'parent' || req.user.role === 'mentor') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const student = db.prepare('SELECT id FROM students WHERE id=?').get(student_id);
+    const week = db.prepare('SELECT id FROM weeks WHERE id=?').get(week_id);
+    if (!student || !week) return res.status(404).json({ error: 'Not found' });
+
+    ensureWeekRecord(db, student_id, week_id);
+
+    const token = signWrongAnswerUploadToken({
+      student_id,
+      week_id,
+      problem_index,
+      issued_by: req.user.id
+    });
+    const baseUrl = requestPublicBaseUrl(req);
+    const uploadPath = `/api/problem-upload/mobile?token=${encodeURIComponent(token)}`;
+    const upload_url = baseUrl ? `${baseUrl}${uploadPath}` : uploadPath;
+
+    return res.json({
+      ok: true,
+      upload_url,
+      token
+    });
   });
 
   router.post('/workflow/submit', (req, res) => {

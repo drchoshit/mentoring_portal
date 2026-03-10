@@ -22,6 +22,7 @@ import printRoutes from './routes/print.js';
 import backupRoutes from './routes/backups.js';
 import settingsRoutes from './routes/settings.js';
 import mentorAssignmentsRoutes from './routes/mentorAssignments.js';
+import problemUploadRoutes from './routes/problemUploads.js';
 
 dotenv.config();
 
@@ -30,8 +31,10 @@ const BACKUP_DIR = process.env.BACKUP_DIR
   ? (path.isAbsolute(process.env.BACKUP_DIR) ? process.env.BACKUP_DIR : path.resolve(process.cwd(), process.env.BACKUP_DIR))
   : path.join(path.dirname(DB_PATH), 'backups');
 const BACKUP_KEEP_MAX = Math.max(10, Number(process.env.BACKUP_KEEP_MAX || 200));
+const PROBLEM_IMAGE_DIR = path.resolve(process.cwd(), 'data', 'problem-images');
 
 if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+if (!fs.existsSync(PROBLEM_IMAGE_DIR)) fs.mkdirSync(PROBLEM_IMAGE_DIR, { recursive: true });
 
 function listBackupFiles() {
   try {
@@ -114,6 +117,8 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+app.use('/uploads/problem-images', express.static(PROBLEM_IMAGE_DIR));
+app.use('/api/problem-upload', problemUploadRoutes(db));
 
 app.use('/api/auth', authRoutes(db));
 app.use('/api/users', requireAuth(db), userRoutes(db));
