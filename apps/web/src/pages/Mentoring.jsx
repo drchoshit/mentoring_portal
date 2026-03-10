@@ -173,6 +173,238 @@ function parseClinicEntries(value) {
   return [];
 }
 
+const DEFAULT_WRONG_ANSWER_ITEM = {
+  subject: '',
+  material: '',
+  problem_name: '',
+  problem_type: '',
+  note: ''
+};
+
+function normalizeWrongAnswerItem(raw) {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_WRONG_ANSWER_ITEM };
+  return {
+    subject: String(raw.subject || '').trim(),
+    material: String(raw.material || '').trim(),
+    problem_name: String(raw.problem_name || '').trim(),
+    problem_type: String(raw.problem_type || '').trim(),
+    note: String(raw.note || '').trim()
+  };
+}
+
+function normalizeWrongAnswerDistribution(value) {
+  if (!value || typeof value !== 'object') {
+    return { problems: [{ ...DEFAULT_WRONG_ANSWER_ITEM }], assignment: null, searched_at: '' };
+  }
+  const problemsRaw = Array.isArray(value.problems)
+    ? value.problems
+    : Array.isArray(value.items)
+      ? value.items
+      : [];
+  const problems = problemsRaw.length
+    ? problemsRaw.map(normalizeWrongAnswerItem)
+    : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
+  const assignment = value.assignment && typeof value.assignment === 'object'
+    ? {
+        mentor_id: String(value.assignment.mentor_id || '').trim(),
+        mentor_name: String(value.assignment.mentor_name || '').trim(),
+        mentor_role: String(value.assignment.mentor_role || '').trim(),
+        mentor_subjects: Array.isArray(value.assignment.mentor_subjects)
+          ? value.assignment.mentor_subjects.map((v) => String(v || '').trim()).filter(Boolean)
+          : [],
+        mentor_work_slots: Array.isArray(value.assignment.mentor_work_slots)
+          ? value.assignment.mentor_work_slots
+              .map((slot) => ({
+                day: String(slot?.day || '').trim(),
+                time: String(slot?.time || '').trim()
+              }))
+              .filter((slot) => slot.day && slot.time)
+          : [],
+        overlap_count: Number(value.assignment.overlap_count || 0),
+        overlap_preview: Array.isArray(value.assignment.overlap_preview)
+          ? value.assignment.overlap_preview
+              .map((v) => String(v || '').trim())
+              .filter(Boolean)
+          : [],
+        assigned_at: String(value.assignment.assigned_at || '').trim(),
+        assigned_by: String(value.assignment.assigned_by || '').trim()
+      }
+    : null;
+  return {
+    problems,
+    assignment,
+    searched_at: String(value.searched_at || '').trim()
+  };
+}
+
+const KO_TO_EN_DAY = {
+  월: 'Mon',
+  화: 'Tue',
+  수: 'Wed',
+  목: 'Thu',
+  금: 'Fri',
+  토: 'Sat',
+  일: 'Sun',
+  월요일: 'Mon',
+  화요일: 'Tue',
+  수요일: 'Wed',
+  목요일: 'Thu',
+  금요일: 'Fri',
+  토요일: 'Sat',
+  일요일: 'Sun'
+};
+
+function normalizeDayKey(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (DAYS.includes(raw)) return raw;
+  const lowered = raw.toLowerCase();
+  if (lowered === 'mon' || lowered === 'monday') return 'Mon';
+  if (lowered === 'tue' || lowered === 'tuesday') return 'Tue';
+  if (lowered === 'wed' || lowered === 'wednesday') return 'Wed';
+  if (lowered === 'thu' || lowered === 'thursday') return 'Thu';
+  if (lowered === 'fri' || lowered === 'friday') return 'Fri';
+  if (lowered === 'sat' || lowered === 'saturday') return 'Sat';
+  if (lowered === 'sun' || lowered === 'sunday') return 'Sun';
+  return KO_TO_EN_DAY[raw] || '';
+}
+
+function normalizeMentorScheduleMap(schedule) {
+  const parsed = typeof schedule === 'string' ? safeJson(schedule, {}) : (schedule || {});
+  const out = {};
+  for (const day of DAYS) out[day] = [];
+  if (!parsed || typeof parsed !== 'object') return out;
+
+  for (const [key, value] of Object.entries(parsed)) {
+    const day = normalizeDayKey(key);
+    if (!day) continue;
+    const list = Array.isArray(value) ? value : [value];
+    const normalized = list
+      .map((item) => {
+        if (!item) return null;
+        if (typeof item === 'string') return { time: item.trim(), title: '', type: '' };
+        const timeDirect = String(item.time || item.time_range || item.timeRange || '').trim();
+        const start = String(item.start || item.start_time || item.startTime || '').trim();
+        const end = String(item.end || item.end_time || item.endTime || '').trim();
+        const time = timeDirect || (start && end ? `${start}~${end}` : '');
+        if (!time) return null;
+        return {
+          time,
+          title: String(item.title || item.description || item.memo || '').trim(),
+          type: String(item.type || item.kind || '').trim()
+        };
+      })
+      .filter(Boolean);
+    out[day] = normalized;
+  }
+  return out;
+}
+
+function normalizeMentorInfo(value) {
+  const info = value && typeof value === 'object' ? value : {};
+  const mentors = Array.isArray(info.mentors) ? info.mentors : [];
+  return {
+    updated_at: String(info.updated_at || info.updatedAt || '').trim(),
+    mentors: mentors
+      .map((mentor) => ({
+        mentor_id: String(mentor?.mentor_id || mentor?.id || mentor?.user_id || '').trim(),
+        name: String(mentor?.name || mentor?.display_name || '').trim(),
+        role: String(mentor?.role || 'mentor').trim(),
+        subjects: Array.isArray(mentor?.subjects)
+          ? mentor.subjects.map((s) => String(s || '').trim()).filter(Boolean)
+          : [],
+        schedule: normalizeMentorScheduleMap(mentor?.schedule)
+      }))
+      .filter((mentor) => mentor.name || mentor.mentor_id)
+  };
+}
+
+function parseTimePart(value) {
+  const m = String(value || '').match(/(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm)) return null;
+  if (hh < 0 || hh > 24 || mm < 0 || mm > 59) return null;
+  return hh * 60 + mm;
+}
+
+function parseTimeRange(value) {
+  const text = String(value || '').trim().replace(/\s+/g, '');
+  if (!text) return null;
+  const m = text.match(/(\d{1,2}:\d{2})[-~](\d{1,2}:\d{2})/);
+  if (!m) return null;
+  const start = parseTimePart(m[1]);
+  const end = parseTimePart(m[2]);
+  if (start == null || end == null || end <= start) return null;
+  return { start, end };
+}
+
+function getOverlapMinutes(a, b) {
+  if (!a || !b) return 0;
+  const start = Math.max(a.start, b.start);
+  const end = Math.min(a.end, b.end);
+  if (end <= start) return 0;
+  return end - start;
+}
+
+function buildOverlapCandidates(studentSchedule, mentorInfo) {
+  const candidates = [];
+  const mentors = Array.isArray(mentorInfo?.mentors) ? mentorInfo.mentors : [];
+  for (const mentor of mentors) {
+    const overlaps = [];
+    for (const day of DAYS) {
+      const studentItems = Array.isArray(studentSchedule?.[day]) ? studentSchedule[day] : [];
+      const mentorItems = Array.isArray(mentor?.schedule?.[day]) ? mentor.schedule[day] : [];
+      if (!studentItems.length || !mentorItems.length) continue;
+
+      for (const s of studentItems) {
+        if (classifySchedule(s) !== 'center') continue;
+        const sRange = parseTimeRange(s?.time);
+        if (!sRange) continue;
+        for (const m of mentorItems) {
+          const mRange = parseTimeRange(m?.time);
+          if (!mRange) continue;
+          const overlapMinutes = getOverlapMinutes(sRange, mRange);
+          if (overlapMinutes >= 30) {
+            overlaps.push({
+              day,
+              student_time: String(s?.time || ''),
+              mentor_time: String(m?.time || ''),
+              student_title: String(s?.title || ''),
+              mentor_title: String(m?.title || ''),
+              overlap_minutes: overlapMinutes
+            });
+          }
+        }
+      }
+    }
+    if (!overlaps.length) continue;
+    const mentorWorkSlots = DAYS.flatMap((day) =>
+      (Array.isArray(mentor?.schedule?.[day]) ? mentor.schedule[day] : []).map((slot) => ({
+        day,
+        time: String(slot?.time || '').trim()
+      }))
+    ).filter((slot) => slot.time);
+
+    candidates.push({
+      mentor_id: mentor.mentor_id || mentor.name,
+      mentor_name: mentor.name || mentor.mentor_id || '멘토',
+      mentor_role: mentor.role || 'mentor',
+      mentor_subjects: Array.isArray(mentor.subjects) ? mentor.subjects : [],
+      mentor_work_slots: mentorWorkSlots,
+      overlaps
+    });
+  }
+
+  candidates.sort((a, b) => {
+    const byCount = Number(b.overlaps?.length || 0) - Number(a.overlaps?.length || 0);
+    if (byCount !== 0) return byCount;
+    return String(a.mentor_name || '').localeCompare(String(b.mentor_name || ''));
+  });
+  return candidates;
+}
+
 function getPerm(perms, field_key) {
   const p = (perms || []).find((x) => x.field_key === field_key);
   const roles_view = p?.roles_view || safeJson(p?.roles_view_json, []);
@@ -455,6 +687,7 @@ export default function Mentoring() {
   const [curriculumSourceSelection, setCurriculumSourceSelection] = useState('auto');
   const [curriculumSourceEffectiveWeekId, setCurriculumSourceEffectiveWeekId] = useState('');
   const [showCalendar, setShowCalendar] = useState(true);
+  const [showWrongAnswerSection, setShowWrongAnswerSection] = useState(false);
   const [showLegacyRecordsModal, setShowLegacyRecordsModal] = useState(false);
   const [showEntryNotice, setShowEntryNotice] = useState(true);
   const weeksDesc = useMemo(() => [...(weeks || [])].reverse(), [weeks]);
@@ -641,6 +874,7 @@ export default function Mentoring() {
   }
 
   const schedule = useMemo(() => safeJson(rec?.student?.schedule_json, {}), [rec]);
+  const mentorInfo = useMemo(() => normalizeMentorInfo(rec?.mentor_info), [rec?.mentor_info]);
   const scheduleWeekStart = schedule?.week_start || rec?.week?.start_date || '';
   const currentWeekRound = useMemo(() => getWeekRound(rec?.week), [rec?.week?.id, rec?.week?.label]);
   const showClinicSection = currentWeekRound >= 5;
@@ -652,10 +886,17 @@ export default function Mentoring() {
   const dailyTasksThisWeekValue = useMemo(() => safeJson(rec?.week_record?.b_daily_tasks_this_week, {}), [rec]);
   const dailyFeedbackValue = useMemo(() => safeJson(rec?.week_record?.b_lead_daily_feedback, {}), [rec]);
   const clinicEntriesValue = useMemo(() => parseClinicEntries(rec?.week_record?.d_clinic_records), [rec]);
+  const wrongAnswerDistributionValue = useMemo(
+    () => normalizeWrongAnswerDistribution(safeJson(rec?.week_record?.e_wrong_answer_distribution, {})),
+    [rec]
+  );
   const [dailyTasksLastWeekDraft, setDailyTasksLastWeekDraft] = useState(dailyTasksLastWeekValue);
   const [dailyTasksThisWeekDraft, setDailyTasksThisWeekDraft] = useState(dailyTasksThisWeekValue);
   const [dailyFeedbackDraft, setDailyFeedbackDraft] = useState(dailyFeedbackValue);
   const [clinicEntriesDraft, setClinicEntriesDraft] = useState(clinicEntriesValue);
+  const [wrongAnswerDistributionDraft, setWrongAnswerDistributionDraft] = useState(wrongAnswerDistributionValue);
+  const [wrongAnswerCandidates, setWrongAnswerCandidates] = useState([]);
+  const [wrongAnswerSearched, setWrongAnswerSearched] = useState(false);
   const [leadWeeklyDraft, setLeadWeeklyDraft] = useState(rec?.week_record?.c_lead_weekly_feedback || '');
   const [directorCommentDraft, setDirectorCommentDraft] = useState(rec?.week_record?.c_director_commentary || '');
 
@@ -663,8 +904,13 @@ export default function Mentoring() {
   useEffect(() => setDailyTasksThisWeekDraft(dailyTasksThisWeekValue), [dailyTasksThisWeekValue]);
   useEffect(() => setDailyFeedbackDraft(dailyFeedbackValue), [dailyFeedbackValue]);
   useEffect(() => setClinicEntriesDraft(clinicEntriesValue), [clinicEntriesValue]);
+  useEffect(() => setWrongAnswerDistributionDraft(wrongAnswerDistributionValue), [wrongAnswerDistributionValue]);
   useEffect(() => setLeadWeeklyDraft(rec?.week_record?.c_lead_weekly_feedback || ''), [rec?.week_record?.c_lead_weekly_feedback]);
   useEffect(() => setDirectorCommentDraft(rec?.week_record?.c_director_commentary || ''), [rec?.week_record?.c_director_commentary]);
+  useEffect(() => {
+    setWrongAnswerCandidates([]);
+    setWrongAnswerSearched(false);
+  }, [weekId, studentId]);
 
   // 보기 ?�책: parent�?server-permission 기반, �??�는 "?�션?� ?�출"
   const canEditA = (field) => canEdit(perms, user?.role, field);
@@ -773,6 +1019,91 @@ export default function Mentoring() {
       await api(`/api/mentoring/week-record/${weekRecordId}`, { method: 'PUT', body: patch });
     } catch (e) {
       setError(e?.message || '주간 기록 저장에 실패했습니다.');
+    }
+  }
+
+  function updateWrongAnswerProblem(index, patch) {
+    setWrongAnswerDistributionDraft((prev) => {
+      const base = normalizeWrongAnswerDistribution(prev);
+      const list = Array.isArray(base.problems) ? [...base.problems] : [];
+      if (!list[index]) list[index] = { ...DEFAULT_WRONG_ANSWER_ITEM };
+      list[index] = { ...list[index], ...patch };
+      return { ...base, problems: list };
+    });
+  }
+
+  function addWrongAnswerProblem() {
+    setWrongAnswerDistributionDraft((prev) => {
+      const base = normalizeWrongAnswerDistribution(prev);
+      return {
+        ...base,
+        problems: [...(base.problems || []), { ...DEFAULT_WRONG_ANSWER_ITEM }]
+      };
+    });
+  }
+
+  function removeWrongAnswerProblem(index) {
+    setWrongAnswerDistributionDraft((prev) => {
+      const base = normalizeWrongAnswerDistribution(prev);
+      const next = (base.problems || []).filter((_, idx) => idx !== index);
+      return {
+        ...base,
+        problems: next.length ? next : [{ ...DEFAULT_WRONG_ANSWER_ITEM }]
+      };
+    });
+  }
+
+  function findWrongAnswerCandidates() {
+    const candidates = buildOverlapCandidates(schedule, mentorInfo);
+    setWrongAnswerCandidates(candidates);
+    setWrongAnswerSearched(true);
+    setWrongAnswerDistributionDraft((prev) => ({
+      ...normalizeWrongAnswerDistribution(prev),
+      searched_at: new Date().toISOString()
+    }));
+  }
+
+  function assignWrongAnswerMentor(candidate) {
+    if (!candidate) return;
+    setWrongAnswerDistributionDraft((prev) => ({
+      ...normalizeWrongAnswerDistribution(prev),
+      assignment: {
+        mentor_id: String(candidate.mentor_id || '').trim(),
+        mentor_name: String(candidate.mentor_name || '').trim(),
+        mentor_role: String(candidate.mentor_role || '').trim(),
+        mentor_subjects: Array.isArray(candidate.mentor_subjects) ? candidate.mentor_subjects : [],
+        mentor_work_slots: Array.isArray(candidate.mentor_work_slots)
+          ? candidate.mentor_work_slots
+              .map((slot) => ({
+                day: String(slot?.day || ''),
+                time: String(slot?.time || '')
+              }))
+              .filter((slot) => slot.day && slot.time)
+          : [],
+        overlap_count: Number(candidate.overlaps?.length || 0),
+        overlap_preview: (candidate.overlaps || [])
+          .slice(0, 4)
+          .map((item) => `${DAY_LABELS[item.day] || item.day} ${item.student_time}`),
+        assigned_at: new Date().toISOString(),
+        assigned_by: user?.role || ''
+      }
+    }));
+  }
+
+  async function saveWrongAnswerDistribution() {
+    if (!weekRecordId || !canEditA('e_wrong_answer_distribution')) return;
+    setBusy(true);
+    try {
+      confirmOrThrow('오답 배분 기록을 저장할까요?');
+      await api(`/api/mentoring/week-record/${weekRecordId}`, {
+        method: 'PUT',
+        body: { e_wrong_answer_distribution: wrongAnswerDistributionDraft }
+      });
+      await loadAll();
+    } catch (e) {
+      if (e?.message !== '__CANCEL__') setError(e?.message || '오답 배분 저장에 실패했습니다.');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -996,6 +1327,9 @@ export default function Mentoring() {
       if (!mentorMode && canEditA('c_lead_weekly_feedback')) patch.c_lead_weekly_feedback = leadWeeklyDraft;
       if (!mentorMode && canEditA('c_director_commentary')) patch.c_director_commentary = directorCommentDraft;
       if (showClinicSection && canEditA('d_clinic_records')) patch.d_clinic_records = clinicEntriesDraft;
+      if (!mentorMode && canEditA('e_wrong_answer_distribution')) {
+        patch.e_wrong_answer_distribution = wrongAnswerDistributionDraft;
+      }
 
       if (Object.keys(patch).length) {
         await api(`/api/mentoring/week-record/${weekRecordId}`, {
@@ -1087,6 +1421,15 @@ export default function Mentoring() {
               <button className="btn-primary" onClick={saveAll} disabled={busy}>
                 전체 저장
               </button>
+              {user?.role !== 'mentor' && canViewA('e_wrong_answer_distribution') ? (
+                <button
+                  className="btn-ghost"
+                  type="button"
+                  onClick={() => setShowWrongAnswerSection((v) => !v)}
+                >
+                  {showWrongAnswerSection ? '오답 배분 닫기' : '오답 배분하기'}
+                </button>
+              ) : null}
             </div>
           </div>
           <div className="mt-2 text-xs text-rose-600">
@@ -1122,6 +1465,201 @@ export default function Mentoring() {
 
           {showCalendar ? <WeeklyCalendar schedule={schedule} weekStart={scheduleWeekStart} /> : null}
         </GoldCard>
+
+        {user?.role !== 'mentor' && canViewA('e_wrong_answer_distribution') && showWrongAnswerSection ? (
+          <GoldCard className="p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-brand-900">오답 배분하기</div>
+                <div className="text-xs text-slate-700">
+                  학생이 어려워하는 문제를 기록하고, 학생 일정과 겹치는 멘토에게 배정합니다.
+                </div>
+              </div>
+              {canEditA('e_wrong_answer_distribution') && !parentMode ? (
+                <button className="btn-primary" type="button" disabled={busy} onClick={saveWrongAnswerDistribution}>
+                  저장
+                </button>
+              ) : null}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {(Array.isArray(wrongAnswerDistributionDraft?.problems) ? wrongAnswerDistributionDraft.problems : []).map((item, idx) => (
+                <div key={idx} className="rounded-2xl border border-slate-200 bg-white/70 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-semibold text-slate-900">오답 기록 {idx + 1}</div>
+                    {canEditA('e_wrong_answer_distribution') && !parentMode ? (
+                      <button
+                        className="btn-ghost"
+                        type="button"
+                        onClick={() => removeWrongAnswerProblem(idx)}
+                        disabled={(wrongAnswerDistributionDraft?.problems || []).length <= 1}
+                      >
+                        삭제
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 grid grid-cols-12 gap-3">
+                    <div className="col-span-12 md:col-span-3">
+                      <div className="text-xs text-slate-800">과목</div>
+                      <input
+                        className="input mt-1"
+                        value={item.subject || ''}
+                        onChange={(e) => updateWrongAnswerProblem(idx, { subject: e.target.value })}
+                        disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                      />
+                    </div>
+                    <div className="col-span-12 md:col-span-3">
+                      <div className="text-xs text-slate-800">교재명</div>
+                      <input
+                        className="input mt-1"
+                        value={item.material || ''}
+                        onChange={(e) => updateWrongAnswerProblem(idx, { material: e.target.value })}
+                        disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                      />
+                    </div>
+                    <div className="col-span-12 md:col-span-3">
+                      <div className="text-xs text-slate-800">문제명</div>
+                      <input
+                        className="input mt-1"
+                        value={item.problem_name || ''}
+                        onChange={(e) => updateWrongAnswerProblem(idx, { problem_name: e.target.value })}
+                        disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                      />
+                    </div>
+                    <div className="col-span-12 md:col-span-3">
+                      <div className="text-xs text-slate-800">유형</div>
+                      <input
+                        className="input mt-1"
+                        value={item.problem_type || ''}
+                        onChange={(e) => updateWrongAnswerProblem(idx, { problem_type: e.target.value })}
+                        disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                      />
+                    </div>
+                    <div className="col-span-12">
+                      <div className="text-xs text-slate-800">상세 메모</div>
+                      <textarea
+                        className="textarea mt-1 min-h-[76px]"
+                        value={item.note || ''}
+                        onChange={(e) => updateWrongAnswerProblem(idx, { note: e.target.value })}
+                        disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {canEditA('e_wrong_answer_distribution') && !parentMode ? (
+                <button className="btn-ghost text-brand-800" type="button" onClick={addWrongAnswerProblem}>
+                  + 오답 기록 추가
+                </button>
+              ) : null}
+            </div>
+
+            <div className="mt-4 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+              <button
+                className="btn-primary"
+                type="button"
+                onClick={findWrongAnswerCandidates}
+                disabled={busy}
+              >
+                멘토 배정하기
+              </button>
+              <div className="text-xs text-slate-600">
+                업로드된 멘토 정보 기준 · 현재 멘토 수 {mentorInfo?.mentors?.length || 0}명
+              </div>
+            </div>
+
+            {wrongAnswerSearched ? (
+              <div className="mt-4">
+                {wrongAnswerCandidates.length ? (
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white/70">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-slate-700">
+                        <tr>
+                          <th className="px-3 py-2 text-left">멘토</th>
+                          <th className="px-3 py-2 text-left">겹치는 일정</th>
+                          <th className="px-3 py-2 text-left">근무 요일/시간 · 선택과목</th>
+                          <th className="px-3 py-2 text-right">배정</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {wrongAnswerCandidates.map((candidate, idx) => {
+                          const selectedMentorId = String(wrongAnswerDistributionDraft?.assignment?.mentor_id || '');
+                          const isSelected = selectedMentorId && selectedMentorId === String(candidate.mentor_id || '');
+                          return (
+                            <tr key={`${candidate.mentor_id || candidate.mentor_name}-${idx}`} className="border-t border-slate-200">
+                              <td className="px-3 py-2">
+                                <div className="font-medium text-slate-900">{candidate.mentor_name}</div>
+                                <div className="text-xs text-slate-500">{ROLE_KO[candidate.mentor_role] || candidate.mentor_role}</div>
+                              </td>
+                              <td className="px-3 py-2">
+                                <div className="text-xs text-slate-700">총 {candidate.overlaps.length}개 (30분 이상)</div>
+                                <div className="text-xs text-slate-500">
+                                  {candidate.overlaps.slice(0, 3).map((item, i) => (
+                                    <span key={`${item.day}-${item.student_time}-${i}`}>
+                                      {i > 0 ? ' / ' : ''}
+                                      {(DAY_LABELS[item.day] || item.day)} {item.student_time}
+                                      {item.overlap_minutes ? ` (${item.overlap_minutes}분)` : ''}
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 text-slate-700">
+                                <div className="text-xs text-slate-500">이름</div>
+                                <div className="text-sm text-slate-900">{candidate.mentor_name}</div>
+                                <div className="mt-1 text-xs text-slate-500">근무</div>
+                                <div className="text-xs text-slate-700">
+                                  {(candidate.mentor_work_slots || []).length
+                                    ? candidate.mentor_work_slots
+                                        .map((slot) => `${DAY_LABELS[slot.day] || slot.day} ${slot.time}`)
+                                        .join(' / ')
+                                    : '-'}
+                                </div>
+                                <div className="mt-1 text-xs text-slate-500">선택과목</div>
+                                <div className="text-xs text-slate-700">
+                                  {(candidate.mentor_subjects || []).length
+                                    ? candidate.mentor_subjects.join(', ')
+                                    : '-'}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {canEditA('e_wrong_answer_distribution') && !parentMode ? (
+                                  <button
+                                    className={isSelected ? 'btn-primary' : 'btn-ghost'}
+                                    type="button"
+                                    onClick={() => assignWrongAnswerMentor(candidate)}
+                                  >
+                                    {isSelected ? '배정됨' : '배정'}
+                                  </button>
+                                ) : null}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-sm text-slate-700">
+                    학생 센터 일정과 30분 이상 겹치는 멘토가 없습니다. 멘토 정보 파일을 확인해 주세요.
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {wrongAnswerDistributionDraft?.assignment?.mentor_name ? (
+              <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3">
+                <div className="text-sm font-semibold text-emerald-900">현재 배정 멘토</div>
+                <div className="mt-1 text-sm text-emerald-900">
+                  {wrongAnswerDistributionDraft.assignment.mentor_name} ({ROLE_KO[wrongAnswerDistributionDraft.assignment.mentor_role] || wrongAnswerDistributionDraft.assignment.mentor_role || '멘토'})
+                </div>
+                <div className="mt-1 text-xs text-emerald-800">
+                  겹치는 일정 {wrongAnswerDistributionDraft.assignment.overlap_count || 0}개
+                </div>
+              </div>
+            ) : null}
+          </GoldCard>
+        ) : null}
 
         {showClinicSection ? (
           <GoldCard className="p-5">

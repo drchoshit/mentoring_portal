@@ -208,6 +208,7 @@ function ensureWeekRecordsColumns() {
       c_lead_weekly_feedback TEXT,
       c_director_commentary TEXT,
       d_clinic_records TEXT,
+      e_wrong_answer_distribution TEXT,
       scores_json TEXT,
       shared_with_parent INTEGER NOT NULL DEFAULT 0,
       shared_at TEXT,
@@ -232,6 +233,7 @@ function ensureWeekRecordsColumns() {
   if (!cols.has('c_lead_weekly_feedback')) db.exec(`ALTER TABLE week_records ADD COLUMN c_lead_weekly_feedback TEXT;`);
   if (!cols.has('c_director_commentary')) db.exec(`ALTER TABLE week_records ADD COLUMN c_director_commentary TEXT;`);
   if (!cols.has('d_clinic_records')) db.exec(`ALTER TABLE week_records ADD COLUMN d_clinic_records TEXT;`);
+  if (!cols.has('e_wrong_answer_distribution')) db.exec(`ALTER TABLE week_records ADD COLUMN e_wrong_answer_distribution TEXT;`);
   if (!cols.has('scores_json')) db.exec(`ALTER TABLE week_records ADD COLUMN scores_json TEXT;`);
   if (!cols.has('shared_with_parent')) db.exec(`ALTER TABLE week_records ADD COLUMN shared_with_parent INTEGER NOT NULL DEFAULT 0;`);
   if (!cols.has('shared_at')) db.exec(`ALTER TABLE week_records ADD COLUMN shared_at TEXT;`);
@@ -254,6 +256,12 @@ function ensureWeekRecordsColumns() {
     UPDATE week_records
     SET d_clinic_records = COALESCE(NULLIF(d_clinic_records, ''), '[]')
     WHERE d_clinic_records IS NULL OR TRIM(d_clinic_records) = '';
+  `);
+
+  db.exec(`
+    UPDATE week_records
+    SET e_wrong_answer_distribution = COALESCE(NULLIF(e_wrong_answer_distribution, ''), '{}')
+    WHERE e_wrong_answer_distribution IS NULL OR TRIM(e_wrong_answer_distribution) = '';
   `);
 
   // Migration safety: apply only to round 4+ so legacy rounds (1~3) remain unchanged.
@@ -426,6 +434,7 @@ function ensurePermissionAndConfigTables() {
     { key: 'c_lead_weekly_feedback', label: '주간 총괄멘토 피드백', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
     { key: 'c_director_commentary', label: '원장 코멘터리', view: ['director', 'lead', 'admin'], edit: ['director'], parent: 0 },
     { key: 'd_clinic_records', label: '클리닉 섹션', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
+    { key: 'e_wrong_answer_distribution', label: '오답 배분하기', view: ['director', 'lead', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
     { key: 'scores_json', label: '점수/성적', view: ['director', 'lead', 'mentor', 'admin'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 0 }
   ];
 
@@ -460,6 +469,26 @@ function ensurePermissionAndConfigTables() {
       'd_clinic_records'
     ),
     'field_permissions sync d_clinic_records'
+  );
+
+  runBestEffort(
+    () => db.prepare(`
+      UPDATE field_permissions
+      SET
+        label = ?,
+        roles_view_json = ?,
+        roles_edit_json = ?,
+        parent_visible = ?,
+        updated_at = datetime('now')
+      WHERE field_key = ?
+    `).run(
+      '오답 배분하기',
+      JSON.stringify(['director', 'lead', 'admin', 'parent']),
+      JSON.stringify(['director', 'lead', 'admin']),
+      1,
+      'e_wrong_answer_distribution'
+    ),
+    'field_permissions sync e_wrong_answer_distribution'
   );
 }
 

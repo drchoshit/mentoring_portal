@@ -6,8 +6,17 @@ function ensureWeekRecord(db, student_id, week_id) {
   const existing = db.prepare('SELECT id FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
   if (existing) return existing.id;
   const info = db.prepare(
-    'INSERT INTO week_records (student_id, week_id, b_daily_tasks, b_daily_tasks_this_week, b_lead_daily_feedback, d_clinic_records, scores_json) VALUES (?,?,?,?,?,?,?)'
-  ).run(student_id, week_id, JSON.stringify({}), JSON.stringify({}), JSON.stringify({}), JSON.stringify([]), JSON.stringify([]));
+    'INSERT INTO week_records (student_id, week_id, b_daily_tasks, b_daily_tasks_this_week, b_lead_daily_feedback, d_clinic_records, e_wrong_answer_distribution, scores_json) VALUES (?,?,?,?,?,?,?,?)'
+  ).run(
+    student_id,
+    week_id,
+    JSON.stringify({}),
+    JSON.stringify({}),
+    JSON.stringify({}),
+    JSON.stringify([]),
+    JSON.stringify({}),
+    JSON.stringify([])
+  );
   return info.lastInsertRowid;
 }
 
@@ -281,6 +290,38 @@ function assertParentOwnsStudent(req, student_id) {
   if (Number(req.user.student_id) !== Number(student_id)) throw new Error('Forbidden');
 }
 
+function ensureAppSettingsTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+function safeJson(text, fallback) {
+  try {
+    if (!text) return fallback;
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
+function getMentorInfoSetting(db) {
+  ensureAppSettingsTable(db);
+  const row = db.prepare('SELECT value_json, updated_at FROM app_settings WHERE key=?').get('mentor_info');
+  if (!row?.value_json) return { mentors: [], updated_at: row?.updated_at || null };
+
+  const parsed = safeJson(row.value_json, null);
+  const mentors = Array.isArray(parsed?.mentors) ? parsed.mentors : [];
+  return {
+    mentors,
+    updated_at: parsed?.updatedAt || row?.updated_at || null
+  };
+}
+
 export default function mentoringRoutes(db) {
   const router = express.Router();
 
@@ -444,6 +485,7 @@ export default function mentoringRoutes(db) {
     ).all(student_id, week_id, week_id);
 
     const weekRecord = db.prepare('SELECT * FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
+    const mentorInfo = getMentorInfoSetting(db);
 
     const parentMode = req.user.role === 'parent';
 
@@ -468,6 +510,7 @@ export default function mentoringRoutes(db) {
       subjects,
       subject_records,
       week_record,
+      mentor_info: mentorInfo,
       use_new_daily_task_layout: useNewDailyTaskLayout,
       curriculum_source_week_id: curriculumSourceWeekId || null,
       curriculum_source_preference_week_id: preferenceWeekId || null
@@ -581,7 +624,7 @@ export default function mentoringRoutes(db) {
     const clinicEnabled = weekRound >= 5;
 
     const updates = {};
-    for (const key of ['b_daily_tasks','b_daily_tasks_this_week','b_lead_daily_feedback','c_lead_weekly_feedback','c_director_commentary','d_clinic_records','scores_json']) {
+    for (const key of ['b_daily_tasks','b_daily_tasks_this_week','b_lead_daily_feedback','c_lead_weekly_feedback','c_director_commentary','d_clinic_records','e_wrong_answer_distribution','scores_json']) {
       if (key === 'd_clinic_records' && !clinicEnabled) continue;
       if (key in (req.body || {})) updates[key] = req.body[key];
     }
@@ -604,7 +647,7 @@ export default function mentoringRoutes(db) {
 
     const normalized = {};
     for (const k of allowed) {
-      if (k === 'scores_json' || k === 'b_daily_tasks' || k === 'b_daily_tasks_this_week' || k === 'b_lead_daily_feedback') {
+      if (k === 'scores_json' || k === 'b_daily_tasks' || k === 'b_daily_tasks_this_week' || k === 'b_lead_daily_feedback' || k === 'e_wrong_answer_distribution') {
         normalized[k] = JSON.stringify(updates[k] ?? {});
       } else if (k === 'd_clinic_records') {
         normalized[k] = JSON.stringify(Array.isArray(updates[k]) ? updates[k] : []);

@@ -103,6 +103,8 @@ CREATE TABLE IF NOT EXISTS week_records (
   b_lead_daily_feedback TEXT,
   c_lead_weekly_feedback TEXT,
   c_director_commentary TEXT,
+  d_clinic_records TEXT,
+  e_wrong_answer_distribution TEXT,
   scores_json TEXT,
   shared_with_parent INTEGER NOT NULL DEFAULT 0,
   shared_at TEXT,

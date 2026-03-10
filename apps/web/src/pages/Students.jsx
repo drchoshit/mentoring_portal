@@ -656,7 +656,7 @@ export default function Students() {
   const [query, setQuery] = useState('');
   const [error, setError] = useState('');
 
-  const [studentInfoFile, setStudentInfoFile] = useState(null);
+  const [mentorInfoFile, setMentorInfoFile] = useState(null);
   const [scheduleFile, setScheduleFile] = useState(null);
   const [penaltyFile, setPenaltyFile] = useState(null);
   const [mentorFile, setMentorFile] = useState(null);
@@ -1248,21 +1248,21 @@ export default function Students() {
       {canImport ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="card p-5">
-            <div className="text-sm font-semibold text-brand-800">학생 정보 불러오기</div>
-            <div className="mt-1 text-xs text-slate-500">학생 리스트/상세 정보 JSON 파일을 업로드합니다.</div>
+            <div className="text-sm font-semibold text-brand-800">멘토 정보 불러오기</div>
+            <div className="mt-1 text-xs text-slate-500">총괄/클리닉 멘토 일정과 선택과목 JSON 파일을 업로드합니다.</div>
             <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
               <input
                 className="input flex-1"
                 type="file"
                 accept=".json,application/json"
-                onChange={(e) => setStudentInfoFile(e.target.files?.[0] || null)}
+                onChange={(e) => setMentorInfoFile(e.target.files?.[0] || null)}
               />
               <button
                 className="btn-primary whitespace-nowrap"
                 disabled={busyImport}
                 onClick={() => {
-                  if (!confirmImportAction('학생 정보 불러오기')) return;
-                  uploadFile('/api/import/students', studentInfoFile);
+                  if (!confirmImportAction('멘토 정보 불러오기')) return;
+                  uploadFile('/api/import/mentor-info', mentorInfoFile);
                 }}
               >
                 불러오기
