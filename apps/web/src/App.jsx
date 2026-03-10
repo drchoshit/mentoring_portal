@@ -8,6 +8,7 @@ import Login from './pages/Login.jsx';
 import Feeds from './pages/Feeds.jsx';
 import Students from './pages/Students.jsx';
 import Mentoring from './pages/Mentoring.jsx';
+import AssignmentStatus from './pages/AssignmentStatus.jsx';
 import Settings from './pages/Settings.jsx';
 import Parent from './pages/Parent.jsx';
 
@@ -61,6 +62,15 @@ export default function App() {
         element={
           <Guard roles={['director','lead','mentor','admin']}>
             <Shell><Mentoring /></Shell>
+          </Guard>
+        }
+      />
+
+      <Route
+        path="/assignment-status"
+        element={
+          <Guard roles={['director','lead','mentor','admin']}>
+            <Shell><AssignmentStatus /></Shell>
           </Guard>
         }
       />

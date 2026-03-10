@@ -2,6 +2,14 @@ import React from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider.jsx';
 
+const ROLE_LABEL = {
+  director: '원장',
+  lead: '총괄멘토',
+  mentor: '클리닉 멘토',
+  admin: '관리자',
+  parent: '학부모'
+};
+
 function Item({ to, children }) {
   return (
     <NavLink
@@ -28,9 +36,10 @@ export default function AppShell({ children }) {
   if (user?.role !== 'parent') {
     menu.push({ to: '/', label: '피드' });
     menu.push({ to: '/students', label: '학생' });
+    menu.push({ to: '/assignment-status', label: '배정현황' });
     if (user?.role === 'director') menu.push({ to: '/settings', label: '설정' });
   } else {
-    menu.push({ to: '/parent', label: '내 아이' });
+    menu.push({ to: '/parent', label: '마이페이지' });
   }
 
   return (
@@ -46,7 +55,7 @@ export default function AppShell({ children }) {
 
           <div className="flex items-center gap-3 text-sm">
             <div className="text-slate-700">
-              {user?.display_name} ({user?.role})
+              {user?.display_name} ({ROLE_LABEL[user?.role] || user?.role})
             </div>
             <button className="btn-ghost" onClick={logout}>
               로그아웃

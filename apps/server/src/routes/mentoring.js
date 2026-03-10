@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import { canEditField, filterObjectByView } from '../lib/permissions.js';
 import { writeAudit } from '../lib/audit.js';
 import { signWrongAnswerUploadToken } from '../lib/problemUploadToken.js';
@@ -316,6 +316,133 @@ function requestPublicBaseUrl(req) {
   const proto = protoRaw.split(',')[0].trim() || 'http';
   const host = hostRaw.split(',')[0].trim();
   return host ? `${proto}://${host}` : '';
+}
+
+const DEFAULT_WRONG_ANSWER_ITEM = {
+  subject: '',
+  material: '',
+  problem_name: '',
+  problem_type: '',
+  note: '',
+  images: []
+};
+
+const KO_DAY = ['일', '월', '화', '수', '목', '금', '토'];
+
+function ensureWrongAnswerImagesTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS wrong_answer_images (
+      id TEXT PRIMARY KEY,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      week_id INTEGER NOT NULL REFERENCES weeks(id) ON DELETE CASCADE,
+      problem_index INTEGER NOT NULL,
+      filename TEXT,
+      mime_type TEXT,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      data_blob BLOB NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_wrong_answer_images_student_week
+      ON wrong_answer_images(student_id, week_id, problem_index, created_at);
+  `);
+}
+
+function normalizeWrongAnswerItem(raw) {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_WRONG_ANSWER_ITEM };
+  return {
+    subject: String(raw.subject || '').trim(),
+    material: String(raw.material || '').trim(),
+    problem_name: String(raw.problem_name || '').trim(),
+    problem_type: String(raw.problem_type || '').trim(),
+    note: String(raw.note || '').trim(),
+    images: Array.isArray(raw.images)
+      ? raw.images
+          .map((img) => ({
+            id: String(img?.id || '').trim(),
+            url: String(img?.url || '').trim(),
+            filename: String(img?.filename || '').trim(),
+            stored_name: String(img?.stored_name || '').trim(),
+            mime_type: String(img?.mime_type || '').trim(),
+            size: Number(img?.size || 0) || 0,
+            uploaded_at: String(img?.uploaded_at || '').trim(),
+            uploaded_via: String(img?.uploaded_via || '').trim()
+          }))
+          .filter((img) => img.id || img.url)
+      : []
+  };
+}
+
+function normalizeWrongAnswerDistribution(value) {
+  if (!value || typeof value !== 'object') {
+    return { problems: [{ ...DEFAULT_WRONG_ANSWER_ITEM }], assignment: null, searched_at: '' };
+  }
+  const problemsRaw = Array.isArray(value.problems)
+    ? value.problems
+    : Array.isArray(value.items)
+      ? value.items
+      : [];
+  const problems = problemsRaw.length
+    ? problemsRaw.map(normalizeWrongAnswerItem)
+    : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
+  const assignment = value.assignment && typeof value.assignment === 'object'
+    ? {
+        ...value.assignment,
+        mentor_id: String(value.assignment.mentor_id || '').trim(),
+        mentor_name: String(value.assignment.mentor_name || '').trim(),
+        mentor_role: String(value.assignment.mentor_role || '').trim(),
+        session_month: String(value.assignment.session_month || '').trim(),
+        session_day: String(value.assignment.session_day || '').trim(),
+        session_start_time: String(value.assignment.session_start_time || value.assignment.session_time || '').trim(),
+        session_duration_minutes: Number(value.assignment.session_duration_minutes || 20) || 20,
+        session_time: String(value.assignment.session_time || '').trim()
+      }
+    : null;
+  return {
+    problems,
+    assignment,
+    searched_at: String(value.searched_at || '').trim()
+  };
+}
+
+function parseTimePart(value) {
+  const raw = String(value || '').trim();
+  const m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return hh * 60 + mm;
+}
+
+function toHHMM(totalMinutes) {
+  const mins = Number(totalMinutes || 0);
+  const hh = Math.floor(mins / 60);
+  const mm = mins % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function normalizeMentorName(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
+function resolveSessionDayLabel(week, assignment) {
+  const month = Number(assignment?.session_month || 0);
+  const day = Number(assignment?.session_day || 0);
+  const weekStart = String(week?.start_date || '').trim();
+  const ym = weekStart.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ym && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+    const y = Number(ym[1]);
+    const d = new Date(y, month - 1, day);
+    if (!Number.isNaN(d.getTime())) return KO_DAY[d.getDay()] || '';
+  }
+
+  const preview = Array.isArray(assignment?.overlap_preview) ? assignment.overlap_preview : [];
+  const first = String(preview[0] || '').trim();
+  const ch = first ? first.slice(0, 1) : '';
+  if (['월', '화', '수', '목', '금', '토', '일'].includes(ch)) return ch;
+  return '';
 }
 
 function getMentorInfoSetting(db) {
@@ -667,6 +794,19 @@ export default function mentoringRoutes(db) {
       }
     }
 
+    let wrongAnswerImageKeepIds = null;
+    if (allowed.includes('e_wrong_answer_distribution')) {
+      const parsedWrongAnswer = normalizeWrongAnswerDistribution(safeJson(normalized.e_wrong_answer_distribution, {}));
+      const keepIds = new Set();
+      for (const problem of Array.isArray(parsedWrongAnswer.problems) ? parsedWrongAnswer.problems : []) {
+        for (const img of Array.isArray(problem?.images) ? problem.images : []) {
+          const id = String(img?.id || '').trim();
+          if (id) keepIds.add(id);
+        }
+      }
+      wrongAnswerImageKeepIds = Array.from(keepIds);
+    }
+
     let setSql = allowed.map((k) => `${k}=?`).join(', ');
     const values = allowed.map((k) => normalized[k]);
     if (allowed.includes('shared_with_parent')) {
@@ -676,8 +816,30 @@ export default function mentoringRoutes(db) {
         setSql += `, shared_at=NULL`;
       }
     }
-    db.prepare(`UPDATE week_records SET ${setSql}, updated_at=datetime('now'), updated_by=? WHERE id=?`)
-      .run(...values, req.user.id, id);
+    const tx = db.transaction(() => {
+      db.prepare(`UPDATE week_records SET ${setSql}, updated_at=datetime('now'), updated_by=? WHERE id=?`)
+        .run(...values, req.user.id, id);
+
+      if (Array.isArray(wrongAnswerImageKeepIds)) {
+        ensureWrongAnswerImagesTable(db);
+        if (wrongAnswerImageKeepIds.length) {
+          const placeholders = wrongAnswerImageKeepIds.map(() => '?').join(', ');
+          db.prepare(
+            `UPDATE wrong_answer_images
+             SET deleted_at=datetime('now')
+             WHERE student_id=? AND week_id=? AND deleted_at IS NULL
+               AND id NOT IN (${placeholders})`
+          ).run(row.student_id, row.week_id, ...wrongAnswerImageKeepIds);
+        } else {
+          db.prepare(
+            `UPDATE wrong_answer_images
+             SET deleted_at=datetime('now')
+             WHERE student_id=? AND week_id=? AND deleted_at IS NULL`
+          ).run(row.student_id, row.week_id);
+        }
+      }
+    });
+    tx();
 
     writeAudit(db, { user_id: req.user.id, action: 'update', entity: 'week_record', entity_id: id, details: { fields: allowed } });
     res.json({ ok: true, updated_fields: allowed });
@@ -717,6 +879,145 @@ export default function mentoringRoutes(db) {
     });
   });
 
+  router.post('/wrong-answer/delete-image', (req, res) => {
+    const student_id = Number(req.body?.student_id || 0);
+    const week_id = Number(req.body?.week_id || 0);
+    const problem_index = Number(req.body?.problem_index ?? -1);
+    const image_id = String(req.body?.image_id || '').trim();
+    if (!student_id || !week_id || !Number.isInteger(problem_index) || problem_index < 0 || !image_id) {
+      return res.status(400).json({ error: 'Missing or invalid student_id/week_id/problem_index/image_id' });
+    }
+    if (req.user.role === 'parent' || req.user.role === 'mentor') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    ensureWrongAnswerImagesTable(db);
+
+    const weekRecord = db
+      .prepare('SELECT id, e_wrong_answer_distribution FROM week_records WHERE student_id=? AND week_id=?')
+      .get(student_id, week_id);
+    if (!weekRecord?.id) return res.status(404).json({ error: 'Week record not found' });
+
+    const current = normalizeWrongAnswerDistribution(safeJson(weekRecord.e_wrong_answer_distribution, {}));
+    const problems = Array.isArray(current.problems) ? [...current.problems] : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
+    if (!problems[problem_index]) return res.status(404).json({ error: 'Problem record not found' });
+
+    const target = normalizeWrongAnswerItem(problems[problem_index]);
+    const nextImages = target.images.filter((img) => String(img?.id || '').trim() !== image_id);
+    if (nextImages.length === target.images.length) {
+      return res.status(404).json({ error: 'Image metadata not found' });
+    }
+    problems[problem_index] = { ...target, images: nextImages };
+    const next = { ...current, problems };
+
+    const tx = db.transaction(() => {
+      db.prepare("UPDATE week_records SET e_wrong_answer_distribution=?, updated_at=datetime('now'), updated_by=? WHERE id=?")
+        .run(JSON.stringify(next), req.user.id, weekRecord.id);
+      db.prepare("UPDATE wrong_answer_images SET deleted_at=datetime('now') WHERE id=?")
+        .run(image_id);
+    });
+    tx();
+
+    writeAudit(db, {
+      user_id: req.user.id,
+      action: 'delete',
+      entity: 'wrong_answer_image',
+      details: { student_id, week_id, problem_index, image_id }
+    });
+
+    return res.json({ ok: true, e_wrong_answer_distribution: next });
+  });
+
+  router.get('/assignment-status', (req, res) => {
+    const week_id = Number(req.query.weekId || 0);
+    if (!week_id) return res.status(400).json({ error: 'Missing weekId' });
+
+    const week = db.prepare('SELECT id, label, start_date, end_date FROM weeks WHERE id=?').get(week_id);
+    if (!week?.id) return res.status(404).json({ error: 'Week not found' });
+
+    const rows = db
+      .prepare(
+        `SELECT wr.id AS week_record_id, wr.student_id, wr.e_wrong_answer_distribution, s.external_id, s.name AS student_name
+         FROM week_records wr
+         JOIN students s ON s.id = wr.student_id
+         WHERE wr.week_id = ?
+         ORDER BY s.name`
+      )
+      .all(week_id);
+
+    const isMentorRole = req.user.role === 'mentor';
+    const meNameRaw = String(req.user?.display_name || '').trim();
+    const meUserRaw = String(req.user?.username || '').trim();
+    const meName = normalizeMentorName(meNameRaw);
+    const meUser = normalizeMentorName(meUserRaw);
+
+    const assignments = [];
+    for (const row of rows) {
+      const dist = normalizeWrongAnswerDistribution(safeJson(row.e_wrong_answer_distribution, {}));
+      const assignment = dist.assignment && typeof dist.assignment === 'object' ? dist.assignment : null;
+      if (!assignment?.mentor_name) continue;
+
+      const mentorName = String(assignment.mentor_name || '').trim();
+      const mentorRole = String(assignment.mentor_role || '').trim();
+      const normalizedMentorName = normalizeMentorName(mentorName);
+      const normalizedMentorId = normalizeMentorName(String(assignment.mentor_id || '').trim());
+
+      if (isMentorRole) {
+        if (mentorRole !== 'mentor') continue;
+        const matched =
+          (meName && (normalizedMentorName.includes(meName) || meName.includes(normalizedMentorName))) ||
+          (meUser && (
+            normalizedMentorName.includes(meUser) ||
+            meUser.includes(normalizedMentorName) ||
+            normalizedMentorId === meUser
+          ));
+        if (!matched) continue;
+      }
+
+      const startTime = String(assignment.session_start_time || assignment.session_time || '').trim();
+      const duration = Math.max(5, Math.min(240, Number(assignment.session_duration_minutes || 20) || 20));
+      const startMinutes = parseTimePart(startTime);
+      const endTime = startMinutes == null ? '' : toHHMM(startMinutes + duration);
+      const dayLabel = resolveSessionDayLabel(week, assignment) || '-';
+      const sessionDateLabel = assignment.session_month && assignment.session_day
+        ? `${assignment.session_month}/${assignment.session_day}`
+        : '-';
+
+      assignments.push({
+        week_record_id: row.week_record_id,
+        student_id: row.student_id,
+        student_name: String(row.student_name || '').trim(),
+        external_id: String(row.external_id || '').trim(),
+        mentor_name: mentorName,
+        mentor_role: mentorRole,
+        day_label: dayLabel,
+        session_date_label: sessionDateLabel,
+        session_start_time: startTime,
+        session_end_time: endTime,
+        session_duration_minutes: duration,
+        session_range_text: startTime && endTime ? `${startTime} ~ ${endTime}` : '-',
+        assigned_at: String(assignment.assigned_at || '').trim()
+      });
+    }
+
+    assignments.sort((a, b) => {
+      const mentorCmp = String(a.mentor_name || '').localeCompare(String(b.mentor_name || ''));
+      if (mentorCmp !== 0) return mentorCmp;
+      const dayCmp = String(a.day_label || '').localeCompare(String(b.day_label || ''));
+      if (dayCmp !== 0) return dayCmp;
+      return String(a.student_name || '').localeCompare(String(b.student_name || ''));
+    });
+
+    return res.json({
+      week,
+      assignments,
+      viewer: {
+        role: req.user.role,
+        display_name: req.user.display_name || req.user.username || ''
+      }
+    });
+  });
+
   router.post('/workflow/submit', (req, res) => {
     const { student_id, week_id } = req.body || {};
     if (!student_id || !week_id) return res.status(400).json({ error: 'Missing student_id/week_id' });
@@ -726,7 +1027,7 @@ export default function mentoringRoutes(db) {
     const week = db.prepare('SELECT label FROM weeks WHERE id=?').get(Number(week_id));
     const leads = db.prepare("SELECT id FROM users WHERE role IN ('lead','director') AND is_active=1").all();
 
-    const body = `${student?.name || '학생'} ${week?.label || ''} 멘토링 기록이 학습멘토에 의해 제출되었습니다.`;
+    const body = `${student?.name || '학생'} ${week?.label || ''} 멘토링 기록이 클리닉 멘토에 의해 제출되었습니다.`;
     const tx = db.transaction(() => {
       for (const u of leads) {
         db.prepare('INSERT INTO feeds (from_user_id, to_user_id, student_id, target_field, title, body) VALUES (?,?,?,?,?,?)')
@@ -1060,3 +1361,4 @@ export default function mentoringRoutes(db) {
 
   return router;
 }
+

@@ -5,7 +5,7 @@ import { useAuth } from '../auth/AuthProvider.jsx';
 const ROLE_LABEL = {
   director: '원장',
   lead: '총괄멘토',
-  mentor: '학습멘토',
+  mentor: '클리닉 멘토',
   admin: '관리자',
   parent: '학부모'
 };

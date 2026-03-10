@@ -1,31 +1,14 @@
 import express from 'express';
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
 import crypto from 'crypto';
 
 import { verifyWrongAnswerUploadToken } from '../lib/problemUploadToken.js';
 
-const UPLOAD_DIR = path.resolve(process.cwd(), 'data', 'problem-images');
 const MAX_IMAGE_COUNT = 12;
 const MAX_FILE_SIZE = 12 * 1024 * 1024;
 
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination(req, file, cb) {
-    cb(null, UPLOAD_DIR);
-  },
-  filename(req, file, cb) {
-    const ext = String(path.extname(file?.originalname || '') || '.jpg').slice(0, 8).toLowerCase();
-    const safeExt = /^[.][a-z0-9]+$/.test(ext) ? ext : '.jpg';
-    const name = `wa_${Date.now()}_${crypto.randomBytes(6).toString('hex')}${safeExt}`;
-    cb(null, name);
-  }
-});
-
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_SIZE, files: MAX_IMAGE_COUNT },
   fileFilter(req, file, cb) {
     const mime = String(file?.mimetype || '').toLowerCase();
@@ -98,6 +81,25 @@ function normalizeWrongAnswerDistribution(value) {
     assignment,
     searched_at: String(value.searched_at || '').trim()
   };
+}
+
+function ensureWrongAnswerImagesTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS wrong_answer_images (
+      id TEXT PRIMARY KEY,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      week_id INTEGER NOT NULL REFERENCES weeks(id) ON DELETE CASCADE,
+      problem_index INTEGER NOT NULL,
+      filename TEXT,
+      mime_type TEXT,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      data_blob BLOB NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_wrong_answer_images_student_week
+      ON wrong_answer_images(student_id, week_id, problem_index, created_at);
+  `);
 }
 
 function escapeHtml(value) {
@@ -346,6 +348,22 @@ function renderUploadPage({ token = '', submitPath = '/api/problem-upload/mobile
 export default function problemUploadRoutes(db) {
   const router = express.Router();
 
+  ensureWrongAnswerImagesTable(db);
+
+  router.get('/image/:imageId', (req, res) => {
+    const imageId = String(req.params?.imageId || '').trim();
+    if (!imageId) return res.status(400).json({ error: 'Missing image id' });
+
+    const row = db
+      .prepare('SELECT mime_type, data_blob FROM wrong_answer_images WHERE id=? AND deleted_at IS NULL')
+      .get(imageId);
+    if (!row?.data_blob) return res.status(404).json({ error: 'Image not found' });
+
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('Content-Type', String(row.mime_type || 'image/jpeg'));
+    return res.send(row.data_blob);
+  });
+
   router.get('/mobile', (req, res) => {
     const token = String(req.query.token || '').trim();
     if (!token) {
@@ -394,19 +412,40 @@ export default function problemUploadRoutes(db) {
 
       const target = normalizeWrongAnswerItem(problems[problemIndex] || {});
       const now = new Date().toISOString();
-      const uploaded = files.map((file) => {
-        const storedName = String(path.basename(file.filename || '')).trim();
-        return {
-          id: `img_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
-          filename: String(file.originalname || '').trim(),
-          stored_name: storedName,
-          url: `/uploads/problem-images/${storedName}`,
-          mime_type: String(file.mimetype || '').trim(),
-          size: Number(file.size || 0),
-          uploaded_at: now,
-          uploaded_via: 'qr_mobile'
-        };
+      const insertImage = db.prepare(`
+        INSERT INTO wrong_answer_images
+          (id, student_id, week_id, problem_index, filename, mime_type, size_bytes, data_blob, created_at, deleted_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), NULL)
+      `);
+      const uploaded = [];
+
+      const tx = db.transaction(() => {
+        for (const file of files) {
+          const imageId = `img_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`;
+          insertImage.run(
+            imageId,
+            studentId,
+            weekId,
+            problemIndex,
+            String(file.originalname || '').trim(),
+            String(file.mimetype || '').trim(),
+            Number(file.size || 0),
+            file.buffer
+          );
+
+          uploaded.push({
+            id: imageId,
+            filename: String(file.originalname || '').trim(),
+            stored_name: imageId,
+            url: `/api/problem-upload/image/${imageId}`,
+            mime_type: String(file.mimetype || '').trim(),
+            size: Number(file.size || 0),
+            uploaded_at: now,
+            uploaded_via: 'qr_mobile'
+          });
+        }
       });
+      tx();
 
       target.images = [...(Array.isArray(target.images) ? target.images : []), ...uploaded];
       problems[problemIndex] = target;

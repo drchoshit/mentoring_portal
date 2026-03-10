@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, downloadFile } from '../api.js';
 import { useAuth } from '../auth/AuthProvider.jsx';
@@ -1498,15 +1498,15 @@ export default function Students() {
                   <th className="px-3 whitespace-nowrap border-b border-slate-200" colSpan={2}>이번주 멘토명 / 멘토링 요일</th>
                   <th className="px-3 whitespace-nowrap border-b border-slate-200" colSpan={canForceShareParents ? 4 : 3}>
                     {canForceShareParents
-                      ? '학습멘토링 기록 제출일 / 총괄멘토링 기록 제출일 / 학부모 공유일 / 작업'
-                      : '학습멘토링 기록 제출일 / 총괄멘토링 기록 제출일 / 학부모 공유일'}
+                      ? '클리닉 멘토링 기록 제출일 / 총괄멘토링 기록 제출일 / 학부모 공유일 / 작업'
+                      : '클리닉 멘토링 기록 제출일 / 총괄멘토링 기록 제출일 / 학부모 공유일'}
                   </th>
                 </tr>
                 <tr className="text-left text-slate-700 bg-white/80">
                   <th className="py-2.5 px-3 whitespace-nowrap border-b border-slate-200">학생</th>
                   <th className="px-3 whitespace-nowrap border-b border-slate-200">이번주 멘토명</th>
                   <th className="px-3 whitespace-nowrap border-b border-slate-200">멘토링 요일</th>
-                  <th className="px-3 whitespace-nowrap border-b border-slate-200">학습멘토링 기록 제출일</th>
+                  <th className="px-3 whitespace-nowrap border-b border-slate-200">클리닉 멘토링 기록 제출일</th>
                   <th className="px-3 whitespace-nowrap border-b border-slate-200">총괄멘토링 기록 제출일</th>
                   <th className="px-3 whitespace-nowrap border-b border-slate-200">학부모 공유일</th>
                   {canForceShareParents ? <th className="px-3 whitespace-nowrap border-b border-slate-200">작업</th> : null}
@@ -1630,3 +1630,4 @@ export default function Students() {
     </div>
   );
 }
+

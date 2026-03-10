@@ -16,7 +16,7 @@ const DAY_LABELS = { Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금',
 const ROLE_KO = {
   director: '원장',
   lead: '총괄멘토',
-  mentor: '학습멘토',
+  mentor: '클리닉 멘토',
   admin: '관리자',
   parent: '학부모'
 };
@@ -265,7 +265,8 @@ function normalizeWrongAnswerDistribution(value) {
           : [],
         session_month: String(value.assignment.session_month || '').trim(),
         session_day: String(value.assignment.session_day || '').trim(),
-        session_time: String(value.assignment.session_time || '').trim(),
+        session_start_time: String(value.assignment.session_start_time || value.assignment.session_time || '').trim(),
+        session_duration_minutes: Math.max(5, Math.min(240, Number(value.assignment.session_duration_minutes || 20) || 20)),
         assigned_at: String(value.assignment.assigned_at || '').trim(),
         assigned_by: String(value.assignment.assigned_by || '').trim()
       }
@@ -367,6 +368,21 @@ function parseTimePart(value) {
   if (!Number.isInteger(hh) || !Number.isInteger(mm)) return null;
   if (hh < 0 || hh > 24 || mm < 0 || mm > 59) return null;
   return hh * 60 + mm;
+}
+
+function formatTimePart(totalMinutes) {
+  const mins = Number(totalMinutes || 0);
+  const hh = Math.floor(mins / 60);
+  const mm = mins % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function makeSessionRangeText(startTime, durationMinutes) {
+  const start = parseTimePart(startTime);
+  const duration = Math.max(5, Math.min(240, Number(durationMinutes || 20) || 20));
+  if (start == null) return '';
+  const end = start + duration;
+  return `${formatTimePart(start)} ~ ${formatTimePart(end)} (${duration}분)`;
 }
 
 function parseTimeRange(value) {
@@ -1100,7 +1116,7 @@ export default function Mentoring() {
     });
   }
 
-  function removeWrongAnswerImage(problemIndex, targetImage, imageIndex = -1) {
+  function removeWrongAnswerImageLocal(problemIndex, targetImage, imageIndex = -1) {
     setWrongAnswerDistributionDraft((prev) => {
       const base = normalizeWrongAnswerDistribution(prev);
       const list = Array.isArray(base.problems) ? [...base.problems] : [];
@@ -1122,6 +1138,34 @@ export default function Mentoring() {
       };
       return { ...base, problems: list };
     });
+  }
+
+  async function removeWrongAnswerImage(problemIndex, targetImage, imageIndex = -1) {
+    const imageId = String(targetImage?.id || '').trim();
+    const canServerDelete = Boolean(weekRecordId && weekId && studentId && imageId);
+    if (!canServerDelete) {
+      removeWrongAnswerImageLocal(problemIndex, targetImage, imageIndex);
+      return;
+    }
+
+    try {
+      const result = await api('/api/mentoring/wrong-answer/delete-image', {
+        method: 'POST',
+        body: {
+          student_id: Number(studentId),
+          week_id: Number(weekId),
+          problem_index: Number(problemIndex),
+          image_id: imageId
+        }
+      });
+      if (result?.e_wrong_answer_distribution) {
+        setWrongAnswerDistributionDraft(normalizeWrongAnswerDistribution(result.e_wrong_answer_distribution));
+      } else {
+        removeWrongAnswerImageLocal(problemIndex, targetImage, imageIndex);
+      }
+    } catch (e) {
+      setError(e?.message || '문제 이미지 삭제에 실패했습니다.');
+    }
   }
 
   function findWrongAnswerCandidates() {
@@ -1218,7 +1262,11 @@ export default function Mentoring() {
             .map((item) => `${DAY_LABELS[item.day] || item.day} ${item.student_time}`),
           session_month: String(previousAssignment.session_month || '').trim(),
           session_day: String(previousAssignment.session_day || '').trim(),
-          session_time: String(previousAssignment.session_time || '').trim(),
+          session_start_time: String(previousAssignment.session_start_time || previousAssignment.session_time || '').trim(),
+          session_duration_minutes: Math.max(
+            5,
+            Math.min(240, Number(previousAssignment.session_duration_minutes || 20) || 20)
+          ),
           assigned_at: new Date().toISOString(),
           assigned_by: user?.role || ''
         }
@@ -1237,7 +1285,11 @@ export default function Mentoring() {
           ...current,
           session_month: String(current.session_month || '').trim(),
           session_day: String(current.session_day || '').trim(),
-          session_time: String(current.session_time || '').trim(),
+          session_start_time: String(current.session_start_time || current.session_time || '').trim(),
+          session_duration_minutes: Math.max(
+            5,
+            Math.min(240, Number(current.session_duration_minutes || 20) || 20)
+          ),
           ...patch
         }
       };
@@ -1264,7 +1316,7 @@ export default function Mentoring() {
   async function doMentorSubmit() {
     setBusy(true);
     try {
-      confirmOrThrow('학습멘토 제출을 진행할까요?');
+      confirmOrThrow('클리닉 멘토 제출을 진행할까요?');
       await api('/api/mentoring/workflow/submit', {
         method: 'POST',
         body: { student_id: Number(studentId), week_id: Number(weekId) }
@@ -1351,7 +1403,7 @@ export default function Mentoring() {
       out.unshift({
         id: user.id,
         role: 'mentor',
-        display_name: '학습멘토(전체기록)'
+        display_name: '클리닉 멘토(전체기록)'
       });
     }
     return out;
@@ -1733,7 +1785,7 @@ export default function Mentoring() {
                             ) : (
                               <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
                             )}
-                            <div className="mt-1 grid grid-cols-3 gap-2">
+                            <div className="mt-1 grid grid-cols-4 gap-2">
                               <div>
                                 <div className="text-[11px] text-slate-600">월</div>
                                 <input
@@ -1761,16 +1813,44 @@ export default function Mentoring() {
                                 />
                               </div>
                               <div>
-                                <div className="text-[11px] text-slate-600">시간</div>
+                                <div className="text-[11px] text-slate-600">시작</div>
                                 <input
                                   className="input mt-1 h-9"
                                   type="time"
-                                  value={wrongAnswerDistributionDraft?.assignment?.session_time || ''}
-                                  onChange={(e) => updateWrongAnswerAssignment({ session_time: e.target.value })}
+                                  value={wrongAnswerDistributionDraft?.assignment?.session_start_time || ''}
+                                  onChange={(e) => updateWrongAnswerAssignment({ session_start_time: e.target.value })}
+                                  disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                                />
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-slate-600">분</div>
+                                <input
+                                  className="input mt-1 h-9"
+                                  type="number"
+                                  min={5}
+                                  max={240}
+                                  step={5}
+                                  value={wrongAnswerDistributionDraft?.assignment?.session_duration_minutes || 20}
+                                  onChange={(e) =>
+                                    updateWrongAnswerAssignment({
+                                      session_duration_minutes: Math.max(
+                                        5,
+                                        Math.min(240, Number(e.target.value || 20) || 20)
+                                      )
+                                    })
+                                  }
                                   disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
                                 />
                               </div>
                             </div>
+                            {wrongAnswerDistributionDraft?.assignment?.session_start_time ? (
+                              <div className="mt-2 text-[11px] text-slate-600">
+                                범위: {makeSessionRangeText(
+                                  wrongAnswerDistributionDraft.assignment.session_start_time,
+                                  wrongAnswerDistributionDraft.assignment.session_duration_minutes
+                                )}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                       </>
@@ -1813,7 +1893,7 @@ export default function Mentoring() {
                                   e.stopPropagation();
                                   const ok = window.confirm('이 문제 이미지를 삭제할까요?');
                                   if (!ok) return;
-                                  removeWrongAnswerImage(idx, img, imageIdx);
+                                  void removeWrongAnswerImage(idx, img, imageIdx);
                                 }}
                               >
                                 삭제
@@ -2195,13 +2275,13 @@ export default function Mentoring() {
         {/* 피드백 공유 */}
         <GoldCard className="p-5">
           <div className="text-sm font-semibold text-brand-900">피드백 공유</div>
-            <div className="mt-2 text-xs text-slate-700">학습멘토링 및 총괄멘토링 작성 → 원장/관리자 검토 → 학부모 공유</div>
+            <div className="mt-2 text-xs text-slate-700">클리닉 멘토링 및 총괄멘토링 작성 → 원장/관리자 검토 → 학부모 공유</div>
 
           <div className="mt-4 flex flex-col gap-3">
             {user?.role === 'mentor' ? (
               <div className="flex items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-violet-50/70 p-4 shadow-sm">
                 <div>
-                  <div className="text-sm font-semibold text-slate-900">학습멘토링 제출</div>
+                  <div className="text-sm font-semibold text-slate-900">클리닉 멘토링 제출</div>
                   <div className="text-xs text-slate-700">총괄/원장에게 완료 피드 전송</div>
                 </div>
                 <button className="btn-primary" disabled={busy} onClick={doMentorSubmit}>
@@ -2285,7 +2365,7 @@ export default function Mentoring() {
                     </option>
                   ))}
                 </select>
-                <div className="mt-1 text-[11px] text-slate-600">학습멘토(전체기록)는 본인에게 전송되지 않습니다.</div>
+                <div className="mt-1 text-[11px] text-slate-600">클리닉 멘토(전체기록)는 본인에게 전송되지 않습니다.</div>
               </div>
 
               <div className="col-span-12 md:col-span-3">
@@ -3173,7 +3253,7 @@ function ClinicSectionCard({ value, visible, editable, onSave, onAutoSave, onCha
   return (
     <FieldShell
       title="클리닉 섹션"
-      subtitle="학습멘토가 학생 질문 문제를 해설한 내용을 기록합니다."
+      subtitle="클리닉 멘토가 학생 질문 문제를 해설한 내용을 기록합니다."
       editRoles={editRoles}
       currentRole={currentRole}
       right={
@@ -3404,7 +3484,7 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
           </div>
 
           <div className="col-span-12 md:col-span-4">
-            <div className="text-xs text-slate-800">학습멘토</div>
+            <div className="text-xs text-slate-800">클리닉 멘토</div>
             <input className="input mt-1" value={profile?.student_info?.mentor_name || ''} onChange={(e) => updateInfo({ mentor_name: e.target.value })} disabled={isReadOnly} />
           </div>
           <div className="col-span-12 md:col-span-4">
@@ -3520,3 +3600,4 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
     </div>
   );
 });
+

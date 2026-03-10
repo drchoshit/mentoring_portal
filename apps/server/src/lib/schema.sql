@@ -149,3 +149,19 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value_json TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS wrong_answer_images (
+  id TEXT PRIMARY KEY,
+  student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  week_id INTEGER NOT NULL REFERENCES weeks(id) ON DELETE CASCADE,
+  problem_index INTEGER NOT NULL,
+  filename TEXT,
+  mime_type TEXT,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  data_blob BLOB NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_wrong_answer_images_student_week
+  ON wrong_answer_images(student_id, week_id, problem_index, created_at);

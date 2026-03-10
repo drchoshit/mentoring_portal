@@ -1,4 +1,4 @@
-// apps/server/src/lib/db.js
+﻿// apps/server/src/lib/db.js
 // SQLite DB helper (better-sqlite3)
 
 import fs from 'node:fs';
@@ -668,7 +668,7 @@ function seedDemoUsers() {
   const demo = [
     { username: 'admin', role: 'director', password: 'admin1234', display_name: '원장' },
     { username: 'lead1', role: 'lead', password: 'pass1234', display_name: '총괄멘토' },
-    { username: 'mentor1', role: 'mentor', password: 'pass1234', display_name: '학습멘토' },
+    { username: 'mentor1', role: 'mentor', password: 'pass1234', display_name: '클리닉 멘토' },
     { username: 'staff1', role: 'admin', password: 'pass1234', display_name: '관리자' },
     { username: 'parent1', role: 'parent', password: 'pass1234', display_name: '학부모' }
   ];
@@ -869,3 +869,4 @@ export function upsertWeek({ label, start_date = null, end_date = null }) {
 export { db };
 export const dbFilePath = dbFile;
 export default db;
+

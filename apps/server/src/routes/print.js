@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import { canViewField, safeJson } from '../lib/permissions.js';
 
 function isEnabledPrint(db, key) {
@@ -401,7 +401,7 @@ export default function printRoutes(db) {
               <th>학교</th><td>${esc(studentInfo.school_name || '-')}</td>
             </tr>
             <tr>
-              <th>학습멘토</th><td>${esc(studentInfo.mentor_name || '-')}</td>
+              <th>클리닉 멘토</th><td>${esc(studentInfo.mentor_name || '-')}</td>
               <th>총괄멘토</th><td>${esc(studentInfo.lead_name || '-')}</td>
             </tr>
             <tr>
@@ -498,3 +498,4 @@ export default function printRoutes(db) {
 
   return router;
 }
+

@@ -1,4 +1,4 @@
-// apps/web/src/pages/Settings.jsx
+﻿// apps/web/src/pages/Settings.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, downloadFile } from '../api.js';
 
@@ -6,7 +6,7 @@ const ADMIN_ROLES = ['director','lead','mentor','admin'];
 const ROLE_LABEL = {
   director: '원장',
   lead: '총괄멘토',
-  mentor: '학습멘토',
+  mentor: '클리닉 멘토',
   admin: '관리자',
   parent: '학부모'
 };
@@ -122,7 +122,7 @@ function AdminUsersTab() {
   }
 
   return (
-    <Section title="관리자 권한 (원장/총괄멘토/학습멘토/관리자)">
+    <Section title="관리자 권한 (원장/총괄멘토/클리닉 멘토/관리자)">
       {error ? <div className="text-sm text-red-600">{error}</div> : null}
 
       <form className="grid grid-cols-12 gap-3" onSubmit={create}>
@@ -397,7 +397,7 @@ function FieldsTab() {
   const roleOptions = [
     { key: 'director', label: '원장' },
     { key: 'lead', label: '총괄멘토' },
-    { key: 'mentor', label: '학습멘토' },
+    { key: 'mentor', label: '클리닉 멘토' },
     { key: 'admin', label: '관리자' },
     { key: 'parent', label: '학부모' }
   ];
@@ -802,3 +802,4 @@ function BackupTab() {
     </Section>
   );
 } 
+
