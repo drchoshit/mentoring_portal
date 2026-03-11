@@ -238,6 +238,106 @@ function resolveRecoveredDbPath(primaryDbFile) {
   return path.join(dir, 'db.recovered.sqlite');
 }
 
+function quoteIdent(name) {
+  return `"${String(name || '').replace(/"/g, '""')}"`;
+}
+
+function tryCreateRecoveredDbByTableCopy(primaryDbFile, recoveredPath) {
+  const source = String(primaryDbFile || '').trim();
+  const output = String(recoveredPath || '').trim();
+  if (!source || !output) return null;
+
+  let src = null;
+  let dst = null;
+  try {
+    src = new Database(source, { readonly: true, fileMustExist: true });
+    dst = new Database(output);
+    dst.pragma('foreign_keys = OFF');
+
+    const tables = src.prepare(`
+      SELECT name, sql
+      FROM sqlite_master
+      WHERE type='table'
+        AND name NOT LIKE 'sqlite_%'
+      ORDER BY name
+    `).all();
+
+    let copiedTables = 0;
+    let copiedRows = 0;
+    for (const table of tables) {
+      const tableName = String(table?.name || '').trim();
+      const createSql = String(table?.sql || '').trim();
+      if (!tableName || !createSql) continue;
+
+      try {
+        dst.exec(createSql);
+      } catch {
+        continue;
+      }
+
+      let cols = [];
+      try {
+        cols = src.prepare(`PRAGMA table_info(${quoteIdent(tableName)})`).all().map((c) => c.name);
+      } catch {
+        cols = [];
+      }
+
+      if (!cols.length) {
+        copiedTables += 1;
+        continue;
+      }
+
+      const colSql = cols.map((c) => quoteIdent(c)).join(', ');
+      const insertSql = `INSERT INTO ${quoteIdent(tableName)} (${colSql}) VALUES (${cols.map((c) => `@${c}`).join(', ')})`;
+      const insertStmt = dst.prepare(insertSql);
+
+      try {
+        for (const row of src.prepare(`SELECT ${colSql} FROM ${quoteIdent(tableName)}`).iterate()) {
+          insertStmt.run(row);
+          copiedRows += 1;
+        }
+      } catch {
+        // Corruption may affect only some tables/pages. Keep whatever was copied.
+      }
+
+      copiedTables += 1;
+    }
+
+    // Best-effort index recreation.
+    try {
+      const indexes = src.prepare(`
+        SELECT sql
+        FROM sqlite_master
+        WHERE type='index'
+          AND sql IS NOT NULL
+      `).all();
+      for (const idx of indexes) {
+        const sql = String(idx?.sql || '').trim();
+        if (!sql) continue;
+        try { dst.exec(sql); } catch {}
+      }
+    } catch {}
+
+    if (copiedTables < 1) {
+      try { dst.close(); } catch {}
+      try { src.close(); } catch {}
+      try { fs.unlinkSync(output); } catch {}
+      return null;
+    }
+
+    try { dst.close(); } catch {}
+    try { src.close(); } catch {}
+    console.warn(`[db bootstrap] Table-copy recovery created "${output}" (tables=${copiedTables}, rows=${copiedRows}).`);
+    return output;
+  } catch (e) {
+    try { if (dst) dst.close(); } catch {}
+    try { if (src) src.close(); } catch {}
+    try { fs.unlinkSync(output); } catch {}
+    console.warn(`[db bootstrap] Table-copy recovery failed for "${source}" (${String(e?.code || e?.message || e)}).`);
+    return null;
+  }
+}
+
 function tryCreateRecoveredDb(primaryDbFile) {
   if (!canAttemptSqliteRecover()) return null;
   const source = String(primaryDbFile || '').trim();
@@ -256,12 +356,12 @@ function tryCreateRecoveredDb(primaryDbFile) {
       console.warn(
         `[db bootstrap] sqlite3 .recover failed for "${source}" (${String(recoverDump.error?.message || recoverDump.stderr || recoverDump.status)})`
       );
-      return null;
+      return tryCreateRecoveredDbByTableCopy(source, recoveredPath);
     }
     const sqlDump = String(recoverDump.stdout || '');
     if (!sqlDump.trim()) {
       console.warn(`[db bootstrap] sqlite3 .recover returned empty output for "${source}".`);
-      return null;
+      return tryCreateRecoveredDbByTableCopy(source, recoveredPath);
     }
 
     try { fs.unlinkSync(recoveredPath); } catch {}
@@ -276,14 +376,14 @@ function tryCreateRecoveredDb(primaryDbFile) {
         `[db bootstrap] failed to materialize recovered DB "${recoveredPath}" (${String(loadRecovered.error?.message || loadRecovered.stderr || loadRecovered.status)})`
       );
       try { fs.unlinkSync(recoveredPath); } catch {}
-      return null;
+      return tryCreateRecoveredDbByTableCopy(source, recoveredPath);
     }
 
     console.warn(`[db bootstrap] Created recovered DB candidate "${recoveredPath}" from "${source}".`);
     return recoveredPath;
   } catch (e) {
     console.warn(`[db bootstrap] sqlite recover attempt crashed for "${source}" (${String(e?.message || e)}).`);
-    return null;
+    return tryCreateRecoveredDbByTableCopy(source, recoveredPath);
   }
 }
 
