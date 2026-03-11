@@ -4,6 +4,7 @@ import { API_BASE, api } from '../api.js';
 
 const DAY_ORDER = ['월', '화', '수', '목', '금', '토', '일', '-'];
 const DAY_OPTIONS = ['월', '화', '수', '목', '금', '토', '일'];
+const JS_DAY_TO_KO = ['일', '월', '화', '수', '목', '금', '토'];
 
 const ROLE_LABEL = {
   director: '원장',
@@ -36,6 +37,62 @@ function parseTimeToMinutes(value) {
   if (!Number.isInteger(hh) || !Number.isInteger(mm)) return null;
   if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
   return hh * 60 + mm;
+}
+
+function toPadded2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function normalizeNumberText(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function buildDateTimeInputValue(month, day, time) {
+  const m = Number(month);
+  const d = Number(day);
+  const t = String(time || '').trim();
+  if (!Number.isInteger(m) || !Number.isInteger(d)) return '';
+  if (m < 1 || m > 12 || d < 1 || d > 31) return '';
+  if (!/^\d{1,2}:\d{2}$/.test(t)) return '';
+  const currentYear = new Date().getFullYear();
+  return `${currentYear}-${toPadded2(m)}-${toPadded2(d)}T${t}`;
+}
+
+function parseDateTimeInput(value) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute)
+  ) {
+    return null;
+  }
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return {
+    year,
+    month,
+    day,
+    time: `${toPadded2(hour)}:${toPadded2(minute)}`,
+    dayLabel: JS_DAY_TO_KO[date.getDay()] || ''
+  };
 }
 
 function scheduleSortValue(item) {
@@ -151,6 +208,7 @@ export default function AssignmentStatus() {
     session_month: '',
     session_day: '',
     session_start_time: '',
+    session_datetime: '',
     session_duration_minutes: 20
   });
   const isDirector = viewer?.role === 'director';
@@ -213,13 +271,17 @@ export default function AssignmentStatus() {
   function beginEdit(item) {
     if (!item) return;
     setEditingKey(assignmentRowKey(item));
+    const sessionMonth = String(item.session_month || '').trim();
+    const sessionDay = String(item.session_day || '').trim();
+    const sessionStartTime = String(item.session_start_time || '').trim();
     setEditForm({
       mentor_name: String(item.mentor_name || '').trim(),
       mentor_role: String(item.mentor_role || 'mentor').trim() || 'mentor',
       session_day_label: String(item.session_day_label || item.day_label || '').trim(),
-      session_month: String(item.session_month || '').trim(),
-      session_day: String(item.session_day || '').trim(),
-      session_start_time: String(item.session_start_time || '').trim(),
+      session_month: sessionMonth,
+      session_day: sessionDay,
+      session_start_time: sessionStartTime,
+      session_datetime: buildDateTimeInputValue(sessionMonth, sessionDay, sessionStartTime),
       session_duration_minutes: Math.max(5, Math.min(240, Number(item.session_duration_minutes || 20) || 20))
     });
   }
@@ -386,8 +448,51 @@ export default function AssignmentStatus() {
                             onChange={(e) => setEditForm((prev) => ({ ...prev, mentor_name: e.target.value }))}
                           />
                         </div>
+                        <div className="md:col-span-2">
+                          <div className="text-[11px] text-slate-500">일정 (날짜/시간)</div>
+                          <input
+                            className="input mt-1 h-8"
+                            type="datetime-local"
+                            value={editForm.session_datetime || ''}
+                            onChange={(e) => {
+                              const nextDateTime = String(e.target.value || '');
+                              if (!nextDateTime) {
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  session_datetime: '',
+                                  session_month: '',
+                                  session_day: '',
+                                  session_start_time: '',
+                                  session_day_label: ''
+                                }));
+                                return;
+                              }
+                              const parsed = parseDateTimeInput(nextDateTime);
+                              if (!parsed) {
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  session_datetime: nextDateTime
+                                }));
+                                return;
+                              }
+                              setEditForm((prev) => ({
+                                ...prev,
+                                session_datetime: nextDateTime,
+                                session_month: String(parsed.month),
+                                session_day: String(parsed.day),
+                                session_day_label: parsed.dayLabel,
+                                session_start_time: parsed.time
+                              }));
+                            }}
+                          />
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            자동 반영: {editForm.session_day_label || '-'}요일 ·{' '}
+                            {editForm.session_month || '-'}월 {editForm.session_day || '-'}일 ·{' '}
+                            {editForm.session_start_time || '--:--'}
+                          </div>
+                        </div>
                         <div>
-                          <div className="text-[11px] text-slate-500">요일</div>
+                          <div className="text-[11px] text-slate-500">요일 (수동)</div>
                           <select
                             className="input mt-1 h-8"
                             value={editForm.session_day_label}
@@ -400,38 +505,7 @@ export default function AssignmentStatus() {
                           </select>
                         </div>
                         <div>
-                          <div className="text-[11px] text-slate-500">월/일</div>
-                          <div className="mt-1 flex items-center gap-1">
-                            <input
-                              className="input h-8 w-14"
-                              type="number"
-                              min={1}
-                              max={12}
-                              value={editForm.session_month}
-                              onChange={(e) => setEditForm((prev) => ({ ...prev, session_month: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) }))}
-                            />
-                            <span className="text-xs text-slate-500">/</span>
-                            <input
-                              className="input h-8 w-14"
-                              type="number"
-                              min={1}
-                              max={31}
-                              value={editForm.session_day}
-                              onChange={(e) => setEditForm((prev) => ({ ...prev, session_day: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) }))}
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[11px] text-slate-500">시작</div>
-                          <input
-                            className="input mt-1 h-8"
-                            type="time"
-                            value={editForm.session_start_time}
-                            onChange={(e) => setEditForm((prev) => ({ ...prev, session_start_time: e.target.value }))}
-                          />
-                        </div>
-                        <div>
-                          <div className="text-[11px] text-slate-500">분</div>
+                          <div className="text-[11px] text-slate-500">진행 시간(분)</div>
                           <input
                             className="input mt-1 h-8"
                             type="number"
