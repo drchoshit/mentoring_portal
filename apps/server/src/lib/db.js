@@ -3,6 +3,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 
@@ -224,6 +225,68 @@ function cleanupSqliteSidecars(filePath) {
   return removed;
 }
 
+function canAttemptSqliteRecover() {
+  const disabled = isTruthyEnv(process.env.DISABLE_SQLITE_RECOVER);
+  if (disabled) return false;
+  return isRenderRuntime() || process.env.NODE_ENV === 'production';
+}
+
+function resolveRecoveredDbPath(primaryDbFile) {
+  const target = String(primaryDbFile || '').trim();
+  if (!target || target === ':memory:' || /^file:/i.test(target)) return '';
+  const dir = path.dirname(target);
+  return path.join(dir, 'db.recovered.sqlite');
+}
+
+function tryCreateRecoveredDb(primaryDbFile) {
+  if (!canAttemptSqliteRecover()) return null;
+  const source = String(primaryDbFile || '').trim();
+  if (!source || source === ':memory:' || /^file:/i.test(source)) return null;
+  if (!fs.existsSync(source)) return null;
+
+  const recoveredPath = resolveRecoveredDbPath(source);
+  if (!recoveredPath) return null;
+
+  try {
+    const recoverDump = spawnSync('sqlite3', [source, '.recover'], {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024 * 256
+    });
+    if (recoverDump.error || recoverDump.status !== 0) {
+      console.warn(
+        `[db bootstrap] sqlite3 .recover failed for "${source}" (${String(recoverDump.error?.message || recoverDump.stderr || recoverDump.status)})`
+      );
+      return null;
+    }
+    const sqlDump = String(recoverDump.stdout || '');
+    if (!sqlDump.trim()) {
+      console.warn(`[db bootstrap] sqlite3 .recover returned empty output for "${source}".`);
+      return null;
+    }
+
+    try { fs.unlinkSync(recoveredPath); } catch {}
+
+    const loadRecovered = spawnSync('sqlite3', [recoveredPath], {
+      input: sqlDump,
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024 * 256
+    });
+    if (loadRecovered.error || loadRecovered.status !== 0) {
+      console.warn(
+        `[db bootstrap] failed to materialize recovered DB "${recoveredPath}" (${String(loadRecovered.error?.message || loadRecovered.stderr || loadRecovered.status)})`
+      );
+      try { fs.unlinkSync(recoveredPath); } catch {}
+      return null;
+    }
+
+    console.warn(`[db bootstrap] Created recovered DB candidate "${recoveredPath}" from "${source}".`);
+    return recoveredPath;
+  } catch (e) {
+    console.warn(`[db bootstrap] sqlite recover attempt crashed for "${source}" (${String(e?.message || e)}).`);
+    return null;
+  }
+}
+
 function runPragmaBestEffort(dbInstance, source, fileLabel = 'unknown') {
   try {
     return dbInstance.pragma(source);
@@ -386,6 +449,7 @@ function isEphemeralFallbackPath(filePath) {
 function createDatabaseWithFallback() {
   const primaryDbFile = resolveDbFile();
   const candidates = [primaryDbFile, ...resolveFallbackDbFiles(primaryDbFile)];
+  const seenCandidates = new Set(candidates.map((c) => String(c || '').trim()).filter(Boolean));
   let lastRecoverableError = null;
   let bestFallback = null;
 
@@ -424,6 +488,15 @@ function createDatabaseWithFallback() {
       }
     } catch (e) {
       if (!isRecoverableDbOpenError(e)) throw e;
+      if (candidate === primaryDbFile && isSqliteCorruptError(e)) {
+        const recoveredCandidate = tryCreateRecoveredDb(primaryDbFile);
+        const key = String(recoveredCandidate || '').trim();
+        if (key && !seenCandidates.has(key)) {
+          candidates.splice(1, 0, key);
+          seenCandidates.add(key);
+          console.warn(`[db bootstrap] Added recovered DB candidate "${key}" to fallback queue.`);
+        }
+      }
       lastRecoverableError = e;
       console.warn(
         `[db bootstrap] DB open failure on "${candidate}" (${String(e.code || e.message || e)}). Trying next fallback.`
