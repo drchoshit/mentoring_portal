@@ -205,6 +205,7 @@ function analyzeCandidate(filePath) {
     path: filePath,
     openError: '',
     schemaKnown: false,
+    hasRecoverableTables: false,
     marker: '',
     fileMtime: '',
     tableMarkers: {},
@@ -220,6 +221,12 @@ function analyzeCandidate(filePath) {
     db = new Database(filePath, { readonly: true, fileMustExist: true });
     const tables = getTableNames(db);
     result.schemaKnown = tables.has('users') && tables.has('students') && tables.has('weeks');
+    result.hasRecoverableTables =
+      tables.has('week_records') ||
+      tables.has('subject_records') ||
+      tables.has('feeds') ||
+      tables.has('penalties') ||
+      tables.has('students');
 
     const tableTsColumns = {
       mentor_assignments: ['assigned_at', 'created_at', 'updated_at'],
@@ -346,7 +353,7 @@ function main() {
     return (b.fileMtime || '').localeCompare(a.fileMtime || '');
   });
 
-  const healthy = analyzed.filter((x) => !x.openError && x.schemaKnown);
+  const healthy = analyzed.filter((x) => !x.openError && (x.schemaKnown || x.hasRecoverableTables));
   const top = healthy.slice(0, Math.max(1, opts.top));
   const extracts = top.map((x) => extractRowsForCandidate(x.path, opts));
 

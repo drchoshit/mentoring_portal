@@ -449,7 +449,6 @@ export default function backupRoutes(db) {
       const args = [FORENSIC_SCRIPT_PATH, '--top', String(top), '--limit', String(limit)];
       if (recoverPrimary) {
         recoveredMeta = buildRecoveredDbFromPrimary(PRIMARY_DB_PATH);
-        args.push('--candidate', recoveredMeta.recoveredPath);
       }
       if (since) args.push('--since', since);
       if (cutoff) args.push('--cutoff', cutoff);
