@@ -4,10 +4,30 @@ import path from 'path';
 import multer from 'multer';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { requireRole } from '../lib/auth.js';
 import { dbFilePath } from '../lib/db.js';
 
 const execFileAsync = promisify(execFile);
+const ROUTE_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+function resolveForensicScriptPath() {
+  const envPath = String(process.env.FORENSIC_SCRIPT_PATH || '').trim();
+  const candidates = [];
+  if (envPath) {
+    candidates.push(path.isAbsolute(envPath) ? envPath : path.resolve(process.cwd(), envPath));
+  }
+  candidates.push(path.resolve(process.cwd(), 'scripts/forensic-dump.mjs'));
+  candidates.push(path.resolve(process.cwd(), 'apps/server/scripts/forensic-dump.mjs'));
+  candidates.push(path.resolve(ROUTE_DIR, '../../scripts/forensic-dump.mjs'));
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {}
+  }
+  return candidates[0] || path.resolve(process.cwd(), 'scripts/forensic-dump.mjs');
+}
 
 export default function backupRoutes(db) {
   const router = express.Router();
@@ -25,7 +45,7 @@ export default function backupRoutes(db) {
   const FORENSIC_DIR = process.env.FORENSIC_DIR
     ? (path.isAbsolute(process.env.FORENSIC_DIR) ? process.env.FORENSIC_DIR : path.resolve(process.cwd(), process.env.FORENSIC_DIR))
     : path.join(path.dirname(DB_PATH), 'forensics');
-  const FORENSIC_SCRIPT_PATH = path.resolve(process.cwd(), 'apps/server/scripts/forensic-dump.mjs');
+  const FORENSIC_SCRIPT_PATH = resolveForensicScriptPath();
   const FORENSIC_TIMEOUT_MS = Math.max(15000, Number(process.env.FORENSIC_TIMEOUT_MS || 120000));
   const BACKUP_KEEP_MAX = Math.max(10, Number(process.env.BACKUP_KEEP_MAX || 200));
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
