@@ -71,9 +71,36 @@ function resolveDbFile() {
 const dbFile = resolveDbFile();
 const db = new Database(dbFile);
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-db.pragma('busy_timeout = 5000');
+function isSqliteIoError(err) {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const msg = String(err.message || '');
+  return code.startsWith('SQLITE_IOERR') || /disk i\/o error/i.test(msg);
+}
+
+function applyDbPragmas() {
+  const requestedMode = String(process.env.SQLITE_JOURNAL_MODE || '').trim().toUpperCase();
+  const defaultMode = process.env.RENDER ? 'DELETE' : 'WAL';
+  const desiredMode = requestedMode || defaultMode;
+
+  const setJournalMode = (mode) => db.pragma(`journal_mode = ${mode}`);
+
+  try {
+    setJournalMode(desiredMode);
+  } catch (e) {
+    const canFallbackToDelete = desiredMode !== 'DELETE' && isSqliteIoError(e);
+    if (!canFallbackToDelete) throw e;
+    console.warn(
+      `[db bootstrap] journal_mode=${desiredMode} failed (${String(e.code || e.message || e)}). Falling back to DELETE.`
+    );
+    setJournalMode('DELETE');
+  }
+
+  db.pragma('foreign_keys = ON');
+  db.pragma('busy_timeout = 5000');
+}
+
+applyDbPragmas();
 
 function isSqliteFullError(err) {
   if (!err) return false;
