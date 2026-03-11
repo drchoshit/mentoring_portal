@@ -73,6 +73,15 @@ function resolveForensicDirs({ dbPath, explicitForensicDir }) {
   return uniqPaths(dirs);
 }
 
+function resolvePrimaryDbPath(activeDbPath) {
+  const explicit = String(process.env.DB_PATH || '').trim();
+  if (explicit) {
+    return path.isAbsolute(explicit) ? explicit : path.resolve(process.cwd(), explicit);
+  }
+  const persistentRoot = resolvePersistentRoot(activeDbPath);
+  return path.join(persistentRoot, 'db.sqlite');
+}
+
 export default function backupRoutes(db) {
   const router = express.Router();
   router.use(requireRole('director', 'admin'));
@@ -96,6 +105,7 @@ export default function backupRoutes(db) {
   const FORENSIC_DIR = FORENSIC_DIRS[0];
   const FORENSIC_SCRIPT_PATH = resolveForensicScriptPath();
   const FORENSIC_TIMEOUT_MS = Math.max(15000, Number(process.env.FORENSIC_TIMEOUT_MS || 120000));
+  const PRIMARY_DB_PATH = resolvePrimaryDbPath(DB_PATH);
   const BACKUP_KEEP_MAX = Math.max(10, Number(process.env.BACKUP_KEEP_MAX || 200));
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
   if (FORENSIC_DIR && !fs.existsSync(FORENSIC_DIR)) fs.mkdirSync(FORENSIC_DIR, { recursive: true });
@@ -438,7 +448,7 @@ export default function backupRoutes(db) {
 
       const args = [FORENSIC_SCRIPT_PATH, '--top', String(top), '--limit', String(limit)];
       if (recoverPrimary) {
-        recoveredMeta = buildRecoveredDbFromPrimary(DB_PATH);
+        recoveredMeta = buildRecoveredDbFromPrimary(PRIMARY_DB_PATH);
         args.push('--candidate', recoveredMeta.recoveredPath);
       }
       if (since) args.push('--since', since);
@@ -475,7 +485,7 @@ export default function backupRoutes(db) {
       const baseLogs = mergedLogs.split(/\r?\n/).filter(Boolean).slice(-30);
       if (recoverPrimary && recoveredMeta) {
         baseLogs.unshift(
-          `[forensic] recover_primary=1 source=${DB_PATH}`,
+          `[forensic] recover_primary=1 source=${PRIMARY_DB_PATH}`,
           `[forensic] recovered_candidate=${recoveredMeta.recoveredPath}`,
           `[forensic] sqlite3_recover_status=${recoveredMeta.recoverStatus}`,
           `[forensic] sqlite3_load_status=${recoveredMeta.loadStatus}`
