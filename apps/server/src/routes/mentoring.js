@@ -324,7 +324,8 @@ const DEFAULT_WRONG_ANSWER_ITEM = {
   problem_name: '',
   problem_type: '',
   note: '',
-  images: []
+  images: [],
+  assignment: null
 };
 
 const KO_DAY = ['일', '월', '화', '수', '목', '금', '토'];
@@ -357,7 +358,31 @@ function ensureWrongAnswerImagesTable(db) {
   `);
 }
 
-function normalizeWrongAnswerItem(raw) {
+function normalizeWrongAnswerAssignment(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const mentorName = String(raw.mentor_name || '').trim();
+  const mentorId = String(raw.mentor_id || '').trim();
+  const sessionMonth = String(raw.session_month || '').trim();
+  const sessionDay = String(raw.session_day || '').trim();
+  const sessionStart = String(raw.session_start_time || raw.session_time || '').trim();
+  const dayLabel = String(raw.session_day_label || '').trim();
+  if (!mentorName && !mentorId && !sessionMonth && !sessionDay && !sessionStart && !dayLabel) return null;
+
+  return {
+    ...raw,
+    mentor_id: mentorId,
+    mentor_name: mentorName,
+    mentor_role: String(raw.mentor_role || '').trim(),
+    session_day_label: dayLabel,
+    session_month: sessionMonth,
+    session_day: sessionDay,
+    session_start_time: sessionStart,
+    session_duration_minutes: Number(raw.session_duration_minutes || 20) || 20,
+    session_time: String(raw.session_time || '').trim()
+  };
+}
+
+function normalizeWrongAnswerItem(raw, fallbackAssignment = null) {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_WRONG_ANSWER_ITEM };
   return {
     subject: String(raw.subject || '').trim(),
@@ -365,6 +390,7 @@ function normalizeWrongAnswerItem(raw) {
     problem_name: String(raw.problem_name || '').trim(),
     problem_type: String(raw.problem_type || '').trim(),
     note: String(raw.note || '').trim(),
+    assignment: normalizeWrongAnswerAssignment(raw.assignment || fallbackAssignment),
     images: Array.isArray(raw.images)
       ? raw.images
           .map((img) => ({
@@ -391,22 +417,13 @@ function normalizeWrongAnswerDistribution(value) {
     : Array.isArray(value.items)
       ? value.items
       : [];
+  const topLevelAssignment = normalizeWrongAnswerAssignment(value.assignment);
   const problems = problemsRaw.length
-    ? problemsRaw.map(normalizeWrongAnswerItem)
-    : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
-  const assignment = value.assignment && typeof value.assignment === 'object'
-    ? {
-        ...value.assignment,
-        mentor_id: String(value.assignment.mentor_id || '').trim(),
-        mentor_name: String(value.assignment.mentor_name || '').trim(),
-        mentor_role: String(value.assignment.mentor_role || '').trim(),
-        session_month: String(value.assignment.session_month || '').trim(),
-        session_day: String(value.assignment.session_day || '').trim(),
-        session_start_time: String(value.assignment.session_start_time || value.assignment.session_time || '').trim(),
-        session_duration_minutes: Number(value.assignment.session_duration_minutes || 20) || 20,
-        session_time: String(value.assignment.session_time || '').trim()
-      }
-    : null;
+    ? problemsRaw.map((item) => normalizeWrongAnswerItem(item, topLevelAssignment))
+    : [{ ...DEFAULT_WRONG_ANSWER_ITEM, assignment: topLevelAssignment }];
+  const assignment = normalizeWrongAnswerAssignment(
+    topLevelAssignment || problems.find((item) => item?.assignment)?.assignment || null
+  );
   return {
     problems,
     assignment,
@@ -518,6 +535,9 @@ function dayOrderValue(day) {
 }
 
 function resolveSessionDayLabel(week, assignment) {
+  const explicitDay = String(assignment?.session_day_label || '').trim();
+  if (['월', '화', '수', '목', '금', '토', '일'].includes(explicitDay)) return explicitDay;
+
   const month = Number(assignment?.session_month || 0);
   const day = Number(assignment?.session_day || 0);
   const weekStart = String(week?.start_date || '').trim();
@@ -1070,6 +1090,7 @@ export default function mentoringRoutes(db) {
         external_id: String(row.external_id || '').trim(),
         mentor_name: mentorName,
         mentor_role: mentorRole,
+        session_day_label: String(assignment.session_day_label || '').trim(),
         day_label: dayLabel,
         session_month: sessionMonth,
         session_day: sessionDay,
@@ -1125,6 +1146,92 @@ export default function mentoringRoutes(db) {
         display_name: req.user.display_name || req.user.username || ''
       }
     });
+  });
+
+  router.put('/assignment-status/:weekRecordId', (req, res) => {
+    if (req.user.role !== 'director') return res.status(403).json({ error: 'Only director can update assignment status' });
+
+    const weekRecordId = Number(req.params.weekRecordId || 0);
+    if (!weekRecordId) return res.status(400).json({ error: 'Invalid weekRecordId' });
+
+    const weekRecord = db
+      .prepare('SELECT id, student_id, week_id, e_wrong_answer_distribution FROM week_records WHERE id=?')
+      .get(weekRecordId);
+    if (!weekRecord?.id) return res.status(404).json({ error: 'Week record not found' });
+
+    const dist = normalizeWrongAnswerDistribution(safeJson(weekRecord.e_wrong_answer_distribution, {}));
+    const currentAssignment = normalizeWrongAnswerAssignment(
+      dist.assignment || dist.problems?.[0]?.assignment || null
+    ) || {};
+
+    const mentorName = String(req.body?.mentor_name ?? currentAssignment.mentor_name ?? '').trim();
+    if (!mentorName) return res.status(400).json({ error: 'mentor_name is required' });
+
+    const dayLabelRaw = String(req.body?.session_day_label ?? currentAssignment.session_day_label ?? '').trim();
+    const dayLabel = ['월', '화', '수', '목', '금', '토', '일'].includes(dayLabelRaw) ? dayLabelRaw : '';
+
+    const monthRaw = String(req.body?.session_month ?? currentAssignment.session_month ?? '').replace(/\D/g, '').slice(0, 2);
+    const dayRaw = String(req.body?.session_day ?? currentAssignment.session_day ?? '').replace(/\D/g, '').slice(0, 2);
+    const startTime = String(req.body?.session_start_time ?? currentAssignment.session_start_time ?? '').trim();
+    const duration = Math.max(
+      5,
+      Math.min(240, Number(req.body?.session_duration_minutes ?? currentAssignment.session_duration_minutes ?? 20) || 20)
+    );
+
+    const nextAssignment = normalizeWrongAnswerAssignment({
+      ...currentAssignment,
+      mentor_id: String(req.body?.mentor_id ?? currentAssignment.mentor_id ?? mentorName).trim(),
+      mentor_name: mentorName,
+      mentor_role: String(req.body?.mentor_role ?? currentAssignment.mentor_role ?? 'mentor').trim() || 'mentor',
+      session_day_label: dayLabel,
+      session_month: monthRaw,
+      session_day: dayRaw,
+      session_start_time: startTime,
+      session_duration_minutes: duration,
+      assigned_at: new Date().toISOString(),
+      assigned_by: req.user.role
+    });
+    if (!nextAssignment) return res.status(400).json({ error: 'Invalid assignment payload' });
+
+    const problems = Array.isArray(dist.problems) ? [...dist.problems] : [];
+    if (!problems.length) {
+      problems.push({ ...DEFAULT_WRONG_ANSWER_ITEM, assignment: nextAssignment });
+    } else {
+      const first = normalizeWrongAnswerItem(problems[0]);
+      problems[0] = {
+        ...first,
+        assignment: nextAssignment
+      };
+    }
+
+    const nextDist = {
+      ...dist,
+      problems,
+      assignment: nextAssignment,
+      searched_at: String(dist.searched_at || '').trim() || new Date().toISOString()
+    };
+
+    db.prepare(
+      "UPDATE week_records SET e_wrong_answer_distribution=?, updated_at=datetime('now'), updated_by=? WHERE id=?"
+    ).run(JSON.stringify(nextDist), req.user.id, weekRecordId);
+
+    writeAudit(db, {
+      user_id: req.user.id,
+      action: 'update',
+      entity: 'assignment_status',
+      entity_id: weekRecordId,
+      details: {
+        student_id: weekRecord.student_id,
+        week_id: weekRecord.week_id,
+        mentor_name: mentorName,
+        session_day_label: dayLabel,
+        session_month: monthRaw,
+        session_day: dayRaw,
+        session_start_time: startTime
+      }
+    });
+
+    return res.json({ ok: true, assignment: nextAssignment });
   });
 
   router.post('/workflow/submit', (req, res) => {

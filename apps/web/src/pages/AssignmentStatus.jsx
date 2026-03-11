@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { API_BASE, api } from '../api.js';
 
 const DAY_ORDER = ['월', '화', '수', '목', '금', '토', '일', '-'];
+const DAY_OPTIONS = ['월', '화', '수', '목', '금', '토', '일'];
 
 const ROLE_LABEL = {
   director: '원장',
@@ -129,6 +130,10 @@ function groupAssignments(items) {
   return grouped;
 }
 
+function assignmentRowKey(item) {
+  return `${item?.week_record_id || ''}-${item?.student_id || ''}`;
+}
+
 export default function AssignmentStatus() {
   const [sp, setSp] = useSearchParams();
   const [weeks, setWeeks] = useState([]);
@@ -137,6 +142,18 @@ export default function AssignmentStatus() {
   const [viewer, setViewer] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [editingKey, setEditingKey] = useState('');
+  const [savingKey, setSavingKey] = useState('');
+  const [editForm, setEditForm] = useState({
+    mentor_name: '',
+    mentor_role: 'mentor',
+    session_day_label: '',
+    session_month: '',
+    session_day: '',
+    session_start_time: '',
+    session_duration_minutes: 20
+  });
+  const isDirector = viewer?.role === 'director';
 
   function setQueryParams(patch) {
     const cur = Object.fromEntries([...sp.entries()]);
@@ -155,6 +172,8 @@ export default function AssignmentStatus() {
       const data = await api(`/api/mentoring/assignment-status?weekId=${encodeURIComponent(targetWeekId)}`);
       setRows(Array.isArray(data?.assignments) ? data.assignments : []);
       setViewer(data?.viewer || null);
+      setEditingKey('');
+      setSavingKey('');
     } catch (e) {
       setError(e?.message || '배정현황을 불러오지 못했습니다.');
       setRows([]);
@@ -190,6 +209,55 @@ export default function AssignmentStatus() {
     void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function beginEdit(item) {
+    if (!item) return;
+    setEditingKey(assignmentRowKey(item));
+    setEditForm({
+      mentor_name: String(item.mentor_name || '').trim(),
+      mentor_role: String(item.mentor_role || 'mentor').trim() || 'mentor',
+      session_day_label: String(item.session_day_label || item.day_label || '').trim(),
+      session_month: String(item.session_month || '').trim(),
+      session_day: String(item.session_day || '').trim(),
+      session_start_time: String(item.session_start_time || '').trim(),
+      session_duration_minutes: Math.max(5, Math.min(240, Number(item.session_duration_minutes || 20) || 20))
+    });
+  }
+
+  function cancelEdit() {
+    setEditingKey('');
+    setSavingKey('');
+  }
+
+  async function saveEdit(item) {
+    const rowKey = assignmentRowKey(item);
+    if (!item?.week_record_id || !rowKey) return;
+    setSavingKey(rowKey);
+    setError('');
+    try {
+      await api(`/api/mentoring/assignment-status/${encodeURIComponent(String(item.week_record_id))}`, {
+        method: 'PUT',
+        body: {
+          mentor_name: String(editForm.mentor_name || '').trim(),
+          mentor_role: String(editForm.mentor_role || '').trim() || 'mentor',
+          session_day_label: String(editForm.session_day_label || '').trim(),
+          session_month: String(editForm.session_month || '').replace(/\D/g, '').slice(0, 2),
+          session_day: String(editForm.session_day || '').replace(/\D/g, '').slice(0, 2),
+          session_start_time: String(editForm.session_start_time || '').trim(),
+          session_duration_minutes: Math.max(
+            5,
+            Math.min(240, Number(editForm.session_duration_minutes || 20) || 20)
+          )
+        }
+      });
+      await loadStatus(weekId);
+      setEditingKey('');
+    } catch (e) {
+      setError(e?.message || '배정 수정에 실패했습니다.');
+    } finally {
+      setSavingKey('');
+    }
+  }
 
   const grouped = useMemo(() => groupAssignments(rows), [rows]);
   const weekLabel = useMemo(() => {
@@ -267,6 +335,8 @@ export default function AssignmentStatus() {
             <div className="mt-3 space-y-2">
               {mentorGroup.items.map((item) => {
                 const problems = Array.isArray(item.problem_items) ? item.problem_items : [];
+                const rowKey = assignmentRowKey(item);
+                const isEditing = isDirector && editingKey === rowKey;
                 return (
                   <div
                     key={`${item.week_record_id}-${item.student_id}`}
@@ -280,8 +350,103 @@ export default function AssignmentStatus() {
                         </div>
                         <div className="text-xs text-slate-600 mt-0.5">예정: {scheduleLabel(item)}</div>
                       </div>
-                      <div className="text-[11px] text-slate-500">배정일시: {fmtDateTime(item.assigned_at)}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-[11px] text-slate-500">배정일시: {fmtDateTime(item.assigned_at)}</div>
+                        {isDirector ? (
+                          isEditing ? (
+                            <>
+                              <button
+                                type="button"
+                                className="btn-primary h-8 px-2.5 text-xs"
+                                disabled={savingKey === rowKey}
+                                onClick={() => void saveEdit(item)}
+                              >
+                                {savingKey === rowKey ? '저장 중...' : '저장'}
+                              </button>
+                              <button type="button" className="btn-ghost h-8 px-2.5 text-xs" onClick={cancelEdit}>
+                                취소
+                              </button>
+                            </>
+                          ) : (
+                            <button type="button" className="btn-ghost h-8 px-2.5 text-xs" onClick={() => beginEdit(item)}>
+                              수정
+                            </button>
+                          )
+                        ) : null}
+                      </div>
                     </div>
+
+                    {isEditing ? (
+                      <div className="mt-2 grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 md:grid-cols-6">
+                        <div className="md:col-span-2">
+                          <div className="text-[11px] text-slate-500">멘토 이름</div>
+                          <input
+                            className="input mt-1 h-8"
+                            value={editForm.mentor_name}
+                            onChange={(e) => setEditForm((prev) => ({ ...prev, mentor_name: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-slate-500">요일</div>
+                          <select
+                            className="input mt-1 h-8"
+                            value={editForm.session_day_label}
+                            onChange={(e) => setEditForm((prev) => ({ ...prev, session_day_label: e.target.value }))}
+                          >
+                            <option value="">선택</option>
+                            {DAY_OPTIONS.map((day) => (
+                              <option key={`edit-day-${rowKey}-${day}`} value={day}>{day}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-slate-500">월/일</div>
+                          <div className="mt-1 flex items-center gap-1">
+                            <input
+                              className="input h-8 w-14"
+                              type="number"
+                              min={1}
+                              max={12}
+                              value={editForm.session_month}
+                              onChange={(e) => setEditForm((prev) => ({ ...prev, session_month: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) }))}
+                            />
+                            <span className="text-xs text-slate-500">/</span>
+                            <input
+                              className="input h-8 w-14"
+                              type="number"
+                              min={1}
+                              max={31}
+                              value={editForm.session_day}
+                              onChange={(e) => setEditForm((prev) => ({ ...prev, session_day: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) }))}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-slate-500">시작</div>
+                          <input
+                            className="input mt-1 h-8"
+                            type="time"
+                            value={editForm.session_start_time}
+                            onChange={(e) => setEditForm((prev) => ({ ...prev, session_start_time: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-slate-500">분</div>
+                          <input
+                            className="input mt-1 h-8"
+                            type="number"
+                            min={5}
+                            max={240}
+                            step={5}
+                            value={editForm.session_duration_minutes}
+                            onChange={(e) => setEditForm((prev) => ({
+                              ...prev,
+                              session_duration_minutes: Math.max(5, Math.min(240, Number(e.target.value || 20) || 20))
+                            }))}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
 
                     <div className="mt-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2">
                       <div className="text-[11px] font-medium text-slate-500">해결 예정 문제</div>

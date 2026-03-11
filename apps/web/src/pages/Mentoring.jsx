@@ -190,8 +190,55 @@ const DEFAULT_WRONG_ANSWER_ITEM = {
   problem_name: '',
   problem_type: '',
   note: '',
-  images: []
+  images: [],
+  assignment: null
 };
+
+const MIN_MENTOR_OVERLAP_MINUTES = 10;
+
+function normalizeWrongAnswerAssignment(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const mentorName = String(raw.mentor_name || '').trim();
+  const mentorId = String(raw.mentor_id || '').trim();
+  const role = String(raw.mentor_role || '').trim() || 'mentor';
+  const sessionMonth = String(raw.session_month || '').trim();
+  const sessionDay = String(raw.session_day || '').trim();
+  const sessionStart = String(raw.session_start_time || raw.session_time || '').trim();
+  const dayLabel = String(raw.session_day_label || '').trim();
+  const duration = Math.max(5, Math.min(240, Number(raw.session_duration_minutes || 20) || 20));
+
+  if (!mentorName && !mentorId && !sessionMonth && !sessionDay && !sessionStart && !dayLabel) return null;
+
+  return {
+    mentor_id: mentorId,
+    mentor_name: mentorName,
+    mentor_role: role,
+    mentor_subjects: Array.isArray(raw.mentor_subjects)
+      ? raw.mentor_subjects.map((v) => String(v || '').trim()).filter(Boolean)
+      : [],
+    mentor_work_slots: Array.isArray(raw.mentor_work_slots)
+      ? raw.mentor_work_slots
+          .map((slot) => ({
+            day: String(slot?.day || '').trim(),
+            time: String(slot?.time || '').trim()
+          }))
+          .filter((slot) => slot.day && slot.time)
+      : [],
+    overlap_count: Math.max(0, Number(raw.overlap_count || 0) || 0),
+    overlap_preview: Array.isArray(raw.overlap_preview)
+      ? raw.overlap_preview
+          .map((v) => String(v || '').trim())
+          .filter(Boolean)
+      : [],
+    session_day_label: dayLabel,
+    session_month: sessionMonth,
+    session_day: sessionDay,
+    session_start_time: sessionStart,
+    session_duration_minutes: duration,
+    assigned_at: String(raw.assigned_at || '').trim(),
+    assigned_by: String(raw.assigned_by || '').trim()
+  };
+}
 
 function normalizeWrongAnswerImage(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -217,7 +264,8 @@ function normalizeWrongAnswerItem(raw) {
     problem_name: String(raw.problem_name || '').trim(),
     problem_type: String(raw.problem_type || '').trim(),
     note: String(raw.note || '').trim(),
-    images: Array.isArray(raw.images) ? raw.images.map(normalizeWrongAnswerImage).filter(Boolean) : []
+    images: Array.isArray(raw.images) ? raw.images.map(normalizeWrongAnswerImage).filter(Boolean) : [],
+    assignment: normalizeWrongAnswerAssignment(raw.assignment)
   };
 }
 
@@ -238,43 +286,62 @@ function normalizeWrongAnswerDistribution(value) {
     : Array.isArray(value.items)
       ? value.items
       : [];
+  const topLevelAssignment = normalizeWrongAnswerAssignment(value.assignment);
   const problems = problemsRaw.length
-    ? problemsRaw.map(normalizeWrongAnswerItem)
-    : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
-  const assignment = value.assignment && typeof value.assignment === 'object'
-    ? {
-        mentor_id: String(value.assignment.mentor_id || '').trim(),
-        mentor_name: String(value.assignment.mentor_name || '').trim(),
-        mentor_role: String(value.assignment.mentor_role || '').trim(),
-        mentor_subjects: Array.isArray(value.assignment.mentor_subjects)
-          ? value.assignment.mentor_subjects.map((v) => String(v || '').trim()).filter(Boolean)
-          : [],
-        mentor_work_slots: Array.isArray(value.assignment.mentor_work_slots)
-          ? value.assignment.mentor_work_slots
-              .map((slot) => ({
-                day: String(slot?.day || '').trim(),
-                time: String(slot?.time || '').trim()
-              }))
-              .filter((slot) => slot.day && slot.time)
-          : [],
-        overlap_count: Number(value.assignment.overlap_count || 0),
-        overlap_preview: Array.isArray(value.assignment.overlap_preview)
-          ? value.assignment.overlap_preview
-              .map((v) => String(v || '').trim())
-              .filter(Boolean)
-          : [],
-        session_month: String(value.assignment.session_month || '').trim(),
-        session_day: String(value.assignment.session_day || '').trim(),
-        session_start_time: String(value.assignment.session_start_time || value.assignment.session_time || '').trim(),
-        session_duration_minutes: Math.max(5, Math.min(240, Number(value.assignment.session_duration_minutes || 20) || 20)),
-        assigned_at: String(value.assignment.assigned_at || '').trim(),
-        assigned_by: String(value.assignment.assigned_by || '').trim()
-      }
-    : null;
+    ? problemsRaw.map((item) => {
+        const normalized = normalizeWrongAnswerItem(item);
+        return {
+          ...normalized,
+          assignment: normalizeWrongAnswerAssignment(normalized.assignment || topLevelAssignment)
+        };
+      })
+    : [{ ...DEFAULT_WRONG_ANSWER_ITEM, assignment: topLevelAssignment }];
+  const assignment = normalizeWrongAnswerAssignment(
+    topLevelAssignment || problems.find((item) => item?.assignment)?.assignment || null
+  );
   return {
     problems,
     assignment,
     searched_at: String(value.searched_at || '').trim()
+  };
+}
+
+function pickSummaryAssignmentFromProblems(problems, fallback = null) {
+  const list = Array.isArray(problems) ? problems : [];
+  for (const item of list) {
+    const assignment = normalizeWrongAnswerAssignment(item?.assignment || null);
+    if (assignment) return assignment;
+  }
+  return normalizeWrongAnswerAssignment(fallback);
+}
+
+function normalizeWrongAnswerDraftWithSummary(value) {
+  const base = normalizeWrongAnswerDistribution(value);
+  const list = Array.isArray(base.problems) ? base.problems : [];
+  const firstAssignment = pickSummaryAssignmentFromProblems(list, base.assignment || null);
+  return {
+    ...base,
+    problems: list.map((item, idx) => ({
+      ...normalizeWrongAnswerItem(item),
+      assignment: normalizeWrongAnswerAssignment(item?.assignment || (idx === 0 ? firstAssignment : null))
+    })),
+    assignment: pickSummaryAssignmentFromProblems(list, firstAssignment || base.assignment || null)
+  };
+}
+
+function buildForcedAssignmentSeed(problem) {
+  const assignment = normalizeWrongAnswerAssignment(problem?.assignment || null);
+  return {
+    mentor_name: String(assignment?.mentor_name || '').trim(),
+    mentor_role: String(assignment?.mentor_role || 'mentor').trim() || 'mentor',
+    session_day_label: String(assignment?.session_day_label || '').trim(),
+    session_month: String(assignment?.session_month || '').trim(),
+    session_day: String(assignment?.session_day || '').trim(),
+    session_start_time: String(assignment?.session_start_time || '').trim(),
+    session_duration_minutes: Math.max(
+      5,
+      Math.min(240, Number(assignment?.session_duration_minutes || 20) || 20)
+    )
   };
 }
 
@@ -415,14 +482,15 @@ function buildOverlapCandidates(studentSchedule, mentorInfo) {
       if (!studentItems.length || !mentorItems.length) continue;
 
       for (const s of studentItems) {
-        if (classifySchedule(s) !== 'center') continue;
+        const scheduleType = classifySchedule(s);
+        if (scheduleType === 'external' || scheduleType === 'absence') continue;
         const sRange = parseTimeRange(s?.time);
         if (!sRange) continue;
         for (const m of mentorItems) {
           const mRange = parseTimeRange(m?.time);
           if (!mRange) continue;
           const overlapMinutes = getOverlapMinutes(sRange, mRange);
-          if (overlapMinutes >= 30) {
+          if (overlapMinutes >= MIN_MENTOR_OVERLAP_MINUTES) {
             overlaps.push({
               day,
               student_time: String(s?.time || ''),
@@ -940,7 +1008,7 @@ export default function Mentoring() {
   const mentorInfo = useMemo(() => normalizeMentorInfo(rec?.mentor_info), [rec?.mentor_info]);
   const scheduleWeekStart = schedule?.week_start || rec?.week?.start_date || '';
   const currentWeekRound = useMemo(() => getWeekRound(rec?.week), [rec?.week?.id, rec?.week?.label]);
-  const showClinicSection = currentWeekRound >= 5;
+  const showClinicSection = currentWeekRound >= 5 && user?.role !== 'lead';
   const useNewDailyTaskLayout = useMemo(() => {
     if (typeof rec?.use_new_daily_task_layout === 'boolean') return rec.use_new_daily_task_layout;
     return currentWeekRound >= 4;
@@ -950,7 +1018,7 @@ export default function Mentoring() {
   const dailyFeedbackValue = useMemo(() => safeJson(rec?.week_record?.b_lead_daily_feedback, {}), [rec]);
   const clinicEntriesValue = useMemo(() => parseClinicEntries(rec?.week_record?.d_clinic_records), [rec]);
   const wrongAnswerDistributionValue = useMemo(
-    () => normalizeWrongAnswerDistribution(safeJson(rec?.week_record?.e_wrong_answer_distribution, {})),
+    () => normalizeWrongAnswerDraftWithSummary(safeJson(rec?.week_record?.e_wrong_answer_distribution, {})),
     [rec]
   );
   const [dailyTasksLastWeekDraft, setDailyTasksLastWeekDraft] = useState(dailyTasksLastWeekValue);
@@ -960,6 +1028,13 @@ export default function Mentoring() {
   const [wrongAnswerDistributionDraft, setWrongAnswerDistributionDraft] = useState(wrongAnswerDistributionValue);
   const [wrongAnswerCandidates, setWrongAnswerCandidates] = useState([]);
   const [wrongAnswerSearched, setWrongAnswerSearched] = useState(false);
+  const [wrongAnswerTargetProblemIndex, setWrongAnswerTargetProblemIndex] = useState(0);
+  const [forcedWrongAnswerAssignment, setForcedWrongAnswerAssignment] = useState(buildForcedAssignmentSeed(null));
+  const wrongAnswerTargetProblem = useMemo(() => {
+    const list = Array.isArray(wrongAnswerDistributionDraft?.problems) ? wrongAnswerDistributionDraft.problems : [];
+    const safe = Math.max(0, Math.min(Number(wrongAnswerTargetProblemIndex || 0), Math.max(0, list.length - 1)));
+    return list[safe] || null;
+  }, [wrongAnswerDistributionDraft, wrongAnswerTargetProblemIndex]);
   const [leadWeeklyDraft, setLeadWeeklyDraft] = useState(rec?.week_record?.c_lead_weekly_feedback || '');
   const [directorCommentDraft, setDirectorCommentDraft] = useState(rec?.week_record?.c_director_commentary || '');
 
@@ -967,12 +1042,20 @@ export default function Mentoring() {
   useEffect(() => setDailyTasksThisWeekDraft(dailyTasksThisWeekValue), [dailyTasksThisWeekValue]);
   useEffect(() => setDailyFeedbackDraft(dailyFeedbackValue), [dailyFeedbackValue]);
   useEffect(() => setClinicEntriesDraft(clinicEntriesValue), [clinicEntriesValue]);
-  useEffect(() => setWrongAnswerDistributionDraft(wrongAnswerDistributionValue), [wrongAnswerDistributionValue]);
+  useEffect(() => {
+    setWrongAnswerDistributionDraft(wrongAnswerDistributionValue);
+    const problems = Array.isArray(wrongAnswerDistributionValue?.problems) ? wrongAnswerDistributionValue.problems : [];
+    const safeIdx = Math.max(0, Math.min(Number(wrongAnswerTargetProblemIndex || 0), Math.max(0, problems.length - 1)));
+    setWrongAnswerTargetProblemIndex(safeIdx);
+    setForcedWrongAnswerAssignment(buildForcedAssignmentSeed(problems[safeIdx]));
+  }, [wrongAnswerDistributionValue]);
   useEffect(() => setLeadWeeklyDraft(rec?.week_record?.c_lead_weekly_feedback || ''), [rec?.week_record?.c_lead_weekly_feedback]);
   useEffect(() => setDirectorCommentDraft(rec?.week_record?.c_director_commentary || ''), [rec?.week_record?.c_director_commentary]);
   useEffect(() => {
     setWrongAnswerCandidates([]);
     setWrongAnswerSearched(false);
+    setWrongAnswerTargetProblemIndex(0);
+    setForcedWrongAnswerAssignment(buildForcedAssignmentSeed(null));
   }, [weekId, studentId]);
 
   // 보기 ?�책: parent�?server-permission 기반, �??�는 "?�션?� ?�출"
@@ -1087,38 +1170,47 @@ export default function Mentoring() {
 
   function updateWrongAnswerProblem(index, patch) {
     setWrongAnswerDistributionDraft((prev) => {
-      const base = normalizeWrongAnswerDistribution(prev);
+      const base = normalizeWrongAnswerDraftWithSummary(prev);
       const list = Array.isArray(base.problems) ? [...base.problems] : [];
-      if (!list[index]) list[index] = { ...DEFAULT_WRONG_ANSWER_ITEM };
-      list[index] = { ...list[index], ...patch };
-      return { ...base, problems: list };
+      if (!list[index]) list[index] = { ...DEFAULT_WRONG_ANSWER_ITEM, assignment: null };
+      const currentItem = normalizeWrongAnswerItem(list[index]);
+      list[index] = { ...currentItem, ...patch };
+      return {
+        ...base,
+        problems: list,
+        assignment: pickSummaryAssignmentFromProblems(list, base.assignment || null)
+      };
     });
   }
 
   function addWrongAnswerProblem() {
     setWrongAnswerDistributionDraft((prev) => {
-      const base = normalizeWrongAnswerDistribution(prev);
+      const base = normalizeWrongAnswerDraftWithSummary(prev);
       return {
         ...base,
-        problems: [...(base.problems || []), { ...DEFAULT_WRONG_ANSWER_ITEM }]
+        problems: [...(base.problems || []), { ...DEFAULT_WRONG_ANSWER_ITEM, assignment: null }]
       };
     });
   }
 
   function removeWrongAnswerProblem(index) {
     setWrongAnswerDistributionDraft((prev) => {
-      const base = normalizeWrongAnswerDistribution(prev);
+      const base = normalizeWrongAnswerDraftWithSummary(prev);
       const next = (base.problems || []).filter((_, idx) => idx !== index);
+      const nextProblems = next.length ? next : [{ ...DEFAULT_WRONG_ANSWER_ITEM, assignment: base.assignment || null }];
+      const summaryAssignment = pickSummaryAssignmentFromProblems(nextProblems, base.assignment || null);
       return {
         ...base,
-        problems: next.length ? next : [{ ...DEFAULT_WRONG_ANSWER_ITEM }]
+        problems: nextProblems,
+        assignment: summaryAssignment
       };
     });
+    setWrongAnswerTargetProblemIndex((prev) => Math.max(0, Number(prev || 0) - (Number(prev || 0) > index ? 1 : 0)));
   }
 
   function removeWrongAnswerImageLocal(problemIndex, targetImage, imageIndex = -1) {
     setWrongAnswerDistributionDraft((prev) => {
-      const base = normalizeWrongAnswerDistribution(prev);
+      const base = normalizeWrongAnswerDraftWithSummary(prev);
       const list = Array.isArray(base.problems) ? [...base.problems] : [];
       if (!list[problemIndex]) return base;
 
@@ -1136,7 +1228,11 @@ export default function Mentoring() {
         ...current,
         images: nextImages
       };
-      return { ...base, problems: list };
+      return {
+        ...base,
+        problems: list,
+        assignment: pickSummaryAssignmentFromProblems(list, base.assignment || null)
+      };
     });
   }
 
@@ -1159,7 +1255,7 @@ export default function Mentoring() {
         }
       });
       if (result?.e_wrong_answer_distribution) {
-        setWrongAnswerDistributionDraft(normalizeWrongAnswerDistribution(result.e_wrong_answer_distribution));
+        setWrongAnswerDistributionDraft(normalizeWrongAnswerDraftWithSummary(result.e_wrong_answer_distribution));
       } else {
         removeWrongAnswerImageLocal(problemIndex, targetImage, imageIndex);
       }
@@ -1168,12 +1264,22 @@ export default function Mentoring() {
     }
   }
 
-  function findWrongAnswerCandidates() {
+  function selectWrongAnswerProblem(index) {
+    const safe = Math.max(0, Number(index || 0));
+    setWrongAnswerTargetProblemIndex(safe);
+    const base = normalizeWrongAnswerDraftWithSummary(wrongAnswerDistributionDraft);
+    const item = Array.isArray(base.problems) ? base.problems[safe] : null;
+    setForcedWrongAnswerAssignment(buildForcedAssignmentSeed(item));
+  }
+
+  function findWrongAnswerCandidates(problemIndex = wrongAnswerTargetProblemIndex) {
+    const safe = Math.max(0, Number(problemIndex || 0));
+    selectWrongAnswerProblem(safe);
     const candidates = buildOverlapCandidates(schedule, mentorInfo);
     setWrongAnswerCandidates(candidates);
     setWrongAnswerSearched(true);
     setWrongAnswerDistributionDraft((prev) => ({
-      ...normalizeWrongAnswerDistribution(prev),
+      ...normalizeWrongAnswerDraftWithSummary(prev),
       searched_at: new Date().toISOString()
     }));
   }
@@ -1236,63 +1342,129 @@ export default function Mentoring() {
     }
   }
 
-  function assignWrongAnswerMentor(candidate) {
+  function buildWrongAnswerAssignmentFromCandidate(candidate, previousAssignment = null, patch = {}) {
+    const previous = normalizeWrongAnswerAssignment(previousAssignment || null) || {};
+    return normalizeWrongAnswerAssignment({
+      mentor_id: String(candidate?.mentor_id || '').trim(),
+      mentor_name: String(candidate?.mentor_name || '').trim(),
+      mentor_role: String(candidate?.mentor_role || '').trim() || 'mentor',
+      mentor_subjects: Array.isArray(candidate?.mentor_subjects) ? candidate.mentor_subjects : [],
+      mentor_work_slots: Array.isArray(candidate?.mentor_work_slots)
+        ? candidate.mentor_work_slots
+            .map((slot) => ({
+              day: String(slot?.day || ''),
+              time: String(slot?.time || '')
+            }))
+            .filter((slot) => slot.day && slot.time)
+        : [],
+      overlap_count: Number(candidate?.overlaps?.length || 0),
+      overlap_preview: (candidate?.overlaps || [])
+        .slice(0, 4)
+        .map((item) => `${DAY_LABELS[item.day] || item.day} ${item.student_time}`),
+      session_day_label: String(patch.session_day_label ?? previous.session_day_label ?? '').trim(),
+      session_month: String(patch.session_month ?? previous.session_month ?? '').trim(),
+      session_day: String(patch.session_day ?? previous.session_day ?? '').trim(),
+      session_start_time: String(
+        patch.session_start_time ?? previous.session_start_time ?? previous.session_time ?? ''
+      ).trim(),
+      session_duration_minutes: Math.max(
+        5,
+        Math.min(
+          240,
+          Number(patch.session_duration_minutes ?? previous.session_duration_minutes ?? 20) || 20
+        )
+      ),
+      assigned_at: new Date().toISOString(),
+      assigned_by: user?.role || ''
+    });
+  }
+
+  function assignWrongAnswerMentor(candidate, problemIndex = wrongAnswerTargetProblemIndex, assignmentPatch = {}) {
     if (!candidate) return;
     setWrongAnswerDistributionDraft((prev) => {
-      const base = normalizeWrongAnswerDistribution(prev);
-      const previousAssignment = base.assignment && typeof base.assignment === 'object' ? base.assignment : {};
+      const base = normalizeWrongAnswerDraftWithSummary(prev);
+      const list = Array.isArray(base.problems) ? [...base.problems] : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
+      const safeIndex = Math.max(0, Math.min(Number(problemIndex || 0), Math.max(0, list.length - 1)));
+      const currentItem = normalizeWrongAnswerItem(list[safeIndex] || {});
+      const previousAssignment = normalizeWrongAnswerAssignment(currentItem.assignment || base.assignment || null);
+      const nextAssignment = buildWrongAnswerAssignmentFromCandidate(candidate, previousAssignment, assignmentPatch);
+      list[safeIndex] = {
+        ...currentItem,
+        assignment: nextAssignment
+      };
+
+      const summaryAssignment = pickSummaryAssignmentFromProblems(list, base.assignment || null);
       return {
         ...base,
-        assignment: {
-          mentor_id: String(candidate.mentor_id || '').trim(),
-          mentor_name: String(candidate.mentor_name || '').trim(),
-          mentor_role: String(candidate.mentor_role || '').trim(),
-          mentor_subjects: Array.isArray(candidate.mentor_subjects) ? candidate.mentor_subjects : [],
-          mentor_work_slots: Array.isArray(candidate.mentor_work_slots)
-            ? candidate.mentor_work_slots
-                .map((slot) => ({
-                  day: String(slot?.day || ''),
-                  time: String(slot?.time || '')
-                }))
-                .filter((slot) => slot.day && slot.time)
-            : [],
-          overlap_count: Number(candidate.overlaps?.length || 0),
-          overlap_preview: (candidate.overlaps || [])
-            .slice(0, 4)
-            .map((item) => `${DAY_LABELS[item.day] || item.day} ${item.student_time}`),
-          session_month: String(previousAssignment.session_month || '').trim(),
-          session_day: String(previousAssignment.session_day || '').trim(),
-          session_start_time: String(previousAssignment.session_start_time || previousAssignment.session_time || '').trim(),
-          session_duration_minutes: Math.max(
-            5,
-            Math.min(240, Number(previousAssignment.session_duration_minutes || 20) || 20)
-          ),
-          assigned_at: new Date().toISOString(),
-          assigned_by: user?.role || ''
-        }
+        problems: list,
+        assignment: summaryAssignment
       };
     });
     setWrongAnswerSearched(false);
   }
 
-  function updateWrongAnswerAssignment(patch) {
+  function updateWrongAnswerAssignment(problemIndex, patch) {
     setWrongAnswerDistributionDraft((prev) => {
-      const base = normalizeWrongAnswerDistribution(prev);
-      const current = base.assignment && typeof base.assignment === 'object' ? base.assignment : {};
+      const base = normalizeWrongAnswerDraftWithSummary(prev);
+      const list = Array.isArray(base.problems) ? [...base.problems] : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
+      const safeIndex = Math.max(0, Math.min(Number(problemIndex || 0), Math.max(0, list.length - 1)));
+      const currentItem = normalizeWrongAnswerItem(list[safeIndex] || {});
+      const current = normalizeWrongAnswerAssignment(currentItem.assignment || base.assignment || null) || {};
+      const nextAssignment = normalizeWrongAnswerAssignment({
+        ...current,
+        session_day_label: String(current.session_day_label || '').trim(),
+        session_month: String(current.session_month || '').trim(),
+        session_day: String(current.session_day || '').trim(),
+        session_start_time: String(current.session_start_time || current.session_time || '').trim(),
+        session_duration_minutes: Math.max(
+          5,
+          Math.min(240, Number(current.session_duration_minutes || 20) || 20)
+        ),
+        ...patch
+      });
+      list[safeIndex] = {
+        ...currentItem,
+        assignment: nextAssignment
+      };
+      const summaryAssignment = pickSummaryAssignmentFromProblems(list, base.assignment || null);
       return {
         ...base,
-        assignment: {
-          ...current,
-          session_month: String(current.session_month || '').trim(),
-          session_day: String(current.session_day || '').trim(),
-          session_start_time: String(current.session_start_time || current.session_time || '').trim(),
-          session_duration_minutes: Math.max(
-            5,
-            Math.min(240, Number(current.session_duration_minutes || 20) || 20)
-          ),
-          ...patch
-        }
+        problems: list,
+        assignment: summaryAssignment
       };
+    });
+  }
+
+  function applyForcedWrongAnswerAssignment(problemIndex = wrongAnswerTargetProblemIndex) {
+    const mentorName = String(forcedWrongAnswerAssignment?.mentor_name || '').trim();
+    const sessionMonth = String(forcedWrongAnswerAssignment?.session_month || '').trim();
+    const sessionDay = String(forcedWrongAnswerAssignment?.session_day || '').trim();
+    const sessionStart = String(forcedWrongAnswerAssignment?.session_start_time || '').trim();
+    if (!mentorName) {
+      setError('강제 배정 멘토 이름을 입력해 주세요.');
+      return;
+    }
+    if (!sessionMonth || !sessionDay || !sessionStart) {
+      setError('강제 배정 시 월/일/시작시간을 모두 입력해 주세요.');
+      return;
+    }
+    const forcedCandidate = {
+      mentor_id: mentorName,
+      mentor_name: mentorName,
+      mentor_role: String(forcedWrongAnswerAssignment?.mentor_role || 'mentor').trim() || 'mentor',
+      mentor_subjects: [],
+      mentor_work_slots: [],
+      overlaps: []
+    };
+    assignWrongAnswerMentor(forcedCandidate, problemIndex, {
+      session_day_label: String(forcedWrongAnswerAssignment?.session_day_label || '').trim(),
+      session_month: sessionMonth,
+      session_day: sessionDay,
+      session_start_time: sessionStart,
+      session_duration_minutes: Math.max(
+        5,
+        Math.min(240, Number(forcedWrongAnswerAssignment?.session_duration_minutes || 20) || 20)
+      )
     });
   }
 
@@ -1301,9 +1473,10 @@ export default function Mentoring() {
     setBusy(true);
     try {
       confirmOrThrow('오답 배분 기록을 저장할까요?');
+      const payload = normalizeWrongAnswerDraftWithSummary(wrongAnswerDistributionDraft);
       await api(`/api/mentoring/week-record/${weekRecordId}`, {
         method: 'PUT',
-        body: { e_wrong_answer_distribution: wrongAnswerDistributionDraft }
+        body: { e_wrong_answer_distribution: payload }
       });
       await loadAll();
       if (typeof window !== 'undefined' && typeof window.alert === 'function') {
@@ -1537,7 +1710,7 @@ export default function Mentoring() {
       if (!mentorMode && canEditA('c_director_commentary')) patch.c_director_commentary = directorCommentDraft;
       if (showClinicSection && canEditA('d_clinic_records')) patch.d_clinic_records = clinicEntriesDraft;
       if (!mentorMode && canEditA('e_wrong_answer_distribution')) {
-        patch.e_wrong_answer_distribution = wrongAnswerDistributionDraft;
+        patch.e_wrong_answer_distribution = normalizeWrongAnswerDraftWithSummary(wrongAnswerDistributionDraft);
       }
 
       if (Object.keys(patch).length) {
@@ -1692,12 +1865,27 @@ export default function Mentoring() {
             </div>
 
             <div className="mt-4 space-y-3">
-              {(Array.isArray(wrongAnswerDistributionDraft?.problems) ? wrongAnswerDistributionDraft.problems : []).map((item, idx) => (
-                <div key={idx} className="rounded-2xl border border-slate-200 bg-white/70 p-3">
+              {(Array.isArray(wrongAnswerDistributionDraft?.problems) ? wrongAnswerDistributionDraft.problems : []).map((item, idx) => {
+                const problemAssignment = normalizeWrongAnswerAssignment(
+                  item?.assignment || (idx === 0 ? wrongAnswerDistributionDraft?.assignment : null)
+                );
+                const isTargetProblem = Number(wrongAnswerTargetProblemIndex || 0) === idx;
+                return (
+                <div
+                  key={idx}
+                  className={`rounded-2xl border bg-white/70 p-3 ${isTargetProblem ? 'border-brand-300 ring-1 ring-brand-200' : 'border-slate-200'}`}
+                >
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold text-slate-900">오답 기록 {idx + 1}</div>
                     {canEditA('e_wrong_answer_distribution') && !parentMode ? (
                       <div className="flex items-center gap-2">
+                        <button
+                          className={isTargetProblem ? 'btn-primary' : 'btn-ghost'}
+                          type="button"
+                          onClick={() => findWrongAnswerCandidates(idx)}
+                        >
+                          멘토 배정하기
+                        </button>
                         <button
                           className="btn-ghost border-blue-200 text-blue-700 hover:border-blue-300 hover:text-blue-800"
                           type="button"
@@ -1753,121 +1941,121 @@ export default function Mentoring() {
                         disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
                       />
                     </div>
-                    {idx === 0 ? (
-                      <>
-                        <div className="col-span-12 md:col-span-6">
-                          <div className="h-full min-h-[110px] rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex flex-col">
-                            <div className="text-xs font-semibold text-slate-800">전달사항</div>
-                            <textarea
-                              className="textarea mt-2 min-h-[68px]"
-                              value={item.note || ''}
-                              onChange={(e) => updateWrongAnswerProblem(idx, { note: e.target.value })}
-                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                            />
-                          </div>
-                        </div>
-                        <div className="col-span-12 md:col-span-6">
-                          <div className="h-full min-h-[110px] rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex flex-col">
-                            <div className="text-xs font-semibold text-slate-800">배정된 멘토</div>
-                            {wrongAnswerDistributionDraft?.assignment?.mentor_name ? (
-                              <>
-                                <div className="mt-1 text-sm font-semibold text-slate-900">
-                                  {wrongAnswerDistributionDraft.assignment.mentor_name}
-                                </div>
-                                <div className="text-xs text-slate-700">
-                                  {wrongAnswerRoleLabel(wrongAnswerDistributionDraft.assignment.mentor_role)}
-                                </div>
-                                <div className="mt-1 text-xs text-slate-600">
-                                  {(wrongAnswerDistributionDraft.assignment.mentor_work_slots || []).length
-                                    ? wrongAnswerDistributionDraft.assignment.mentor_work_slots
-                                        .map((slot) => `${DAY_LABELS[slot.day] || slot.day} ${slot.time}`)
-                                        .join(' / ')
-                                    : '근무 시간 정보 없음'}
-                                </div>
-                              </>
-                            ) : (
-                              <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
-                            )}
-                            <div className="mt-1 grid grid-cols-4 gap-2">
-                              <div>
-                                <div className="text-[11px] text-slate-600">월</div>
-                                <input
-                                  className="input mt-1 h-9"
-                                  type="number"
-                                  min={1}
-                                  max={12}
-                                  placeholder="3"
-                                  value={wrongAnswerDistributionDraft?.assignment?.session_month || ''}
-                                  onChange={(e) => updateWrongAnswerAssignment({ session_month: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) })}
-                                  disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                                />
-                              </div>
-                              <div>
-                                <div className="text-[11px] text-slate-600">일</div>
-                                <input
-                                  className="input mt-1 h-9"
-                                  type="number"
-                                  min={1}
-                                  max={31}
-                                  placeholder="10"
-                                  value={wrongAnswerDistributionDraft?.assignment?.session_day || ''}
-                                  onChange={(e) => updateWrongAnswerAssignment({ session_day: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) })}
-                                  disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                                />
-                              </div>
-                              <div>
-                                <div className="text-[11px] text-slate-600">시작</div>
-                                <input
-                                  className="input mt-1 h-9"
-                                  type="time"
-                                  value={wrongAnswerDistributionDraft?.assignment?.session_start_time || ''}
-                                  onChange={(e) => updateWrongAnswerAssignment({ session_start_time: e.target.value })}
-                                  disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                                />
-                              </div>
-                              <div>
-                                <div className="text-[11px] text-slate-600">분</div>
-                                <input
-                                  className="input mt-1 h-9"
-                                  type="number"
-                                  min={5}
-                                  max={240}
-                                  step={5}
-                                  value={wrongAnswerDistributionDraft?.assignment?.session_duration_minutes || 20}
-                                  onChange={(e) =>
-                                    updateWrongAnswerAssignment({
-                                      session_duration_minutes: Math.max(
-                                        5,
-                                        Math.min(240, Number(e.target.value || 20) || 20)
-                                      )
-                                    })
-                                  }
-                                  disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                                />
-                              </div>
-                            </div>
-                            {wrongAnswerDistributionDraft?.assignment?.session_start_time ? (
-                              <div className="mt-2 text-[11px] text-slate-600">
-                                범위: {makeSessionRangeText(
-                                  wrongAnswerDistributionDraft.assignment.session_start_time,
-                                  wrongAnswerDistributionDraft.assignment.session_duration_minutes
-                                )}
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="col-span-12">
-                        <div className="text-xs text-slate-800">전달사항</div>
+                    <div className="col-span-12 md:col-span-6">
+                      <div className="h-full min-h-[110px] rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex flex-col">
+                        <div className="text-xs font-semibold text-slate-800">전달사항</div>
                         <textarea
-                          className="textarea mt-1 min-h-[40px]"
+                          className="textarea mt-2 min-h-[68px]"
                           value={item.note || ''}
                           onChange={(e) => updateWrongAnswerProblem(idx, { note: e.target.value })}
                           disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
                         />
                       </div>
-                    )}
+                    </div>
+                    <div className="col-span-12 md:col-span-6">
+                      <div className="h-full min-h-[110px] rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex flex-col">
+                        <div className="text-xs font-semibold text-slate-800">배정된 멘토</div>
+                        {problemAssignment?.mentor_name ? (
+                          <>
+                            <div className="mt-1 text-sm font-semibold text-slate-900">
+                              {problemAssignment.mentor_name}
+                            </div>
+                            <div className="text-xs text-slate-700">
+                              {wrongAnswerRoleLabel(problemAssignment.mentor_role)}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-600">
+                              {(problemAssignment.mentor_work_slots || []).length
+                                ? problemAssignment.mentor_work_slots
+                                    .map((slot) => `${DAY_LABELS[slot.day] || slot.day} ${slot.time}`)
+                                    .join(' / ')
+                                : '근무 시간 정보 없음'}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
+                        )}
+                        <div className="mt-1 grid grid-cols-5 gap-2">
+                          <div>
+                            <div className="text-[11px] text-slate-600">요일</div>
+                            <select
+                              className="input mt-1 h-9"
+                              value={problemAssignment?.session_day_label || ''}
+                              onChange={(e) => updateWrongAnswerAssignment(idx, { session_day_label: e.target.value })}
+                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                            >
+                              <option value="">선택</option>
+                              {Object.entries(DAY_LABELS).map(([dayKey, dayKo]) => (
+                                <option key={dayKey} value={dayKo}>{dayKo}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-slate-600">월</div>
+                            <input
+                              className="input mt-1 h-9"
+                              type="number"
+                              min={1}
+                              max={12}
+                              placeholder="3"
+                              value={problemAssignment?.session_month || ''}
+                              onChange={(e) => updateWrongAnswerAssignment(idx, { session_month: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) })}
+                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-slate-600">일</div>
+                            <input
+                              className="input mt-1 h-9"
+                              type="number"
+                              min={1}
+                              max={31}
+                              placeholder="10"
+                              value={problemAssignment?.session_day || ''}
+                              onChange={(e) => updateWrongAnswerAssignment(idx, { session_day: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) })}
+                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-slate-600">시작</div>
+                            <input
+                              className="input mt-1 h-9"
+                              type="time"
+                              value={problemAssignment?.session_start_time || ''}
+                              onChange={(e) => updateWrongAnswerAssignment(idx, { session_start_time: e.target.value })}
+                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-slate-600">분</div>
+                            <input
+                              className="input mt-1 h-9"
+                              type="number"
+                              min={5}
+                              max={240}
+                              step={5}
+                              value={problemAssignment?.session_duration_minutes || 20}
+                              onChange={(e) =>
+                                updateWrongAnswerAssignment(idx, {
+                                  session_duration_minutes: Math.max(
+                                    5,
+                                    Math.min(240, Number(e.target.value || 20) || 20)
+                                  )
+                                })
+                              }
+                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                            />
+                          </div>
+                        </div>
+                        {problemAssignment?.session_start_time ? (
+                          <div className="mt-2 text-[11px] text-slate-600">
+                            범위: {makeSessionRangeText(
+                              problemAssignment.session_start_time,
+                              problemAssignment.session_duration_minutes
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
                   {Array.isArray(item.images) && item.images.length ? (
                     <div className="mt-3">
@@ -1908,7 +2096,8 @@ export default function Mentoring() {
                     </div>
                   ) : null}
                 </div>
-              ))}
+              );
+              })}
 
               {canEditA('e_wrong_answer_distribution') && !parentMode ? (
                 <button className="btn-ghost text-brand-800" type="button" onClick={addWrongAnswerProblem}>
@@ -1921,18 +2110,21 @@ export default function Mentoring() {
               <button
                 className="btn-primary"
                 type="button"
-                onClick={findWrongAnswerCandidates}
+                onClick={() => findWrongAnswerCandidates(wrongAnswerTargetProblemIndex)}
                 disabled={busy}
               >
-                멘토 배정하기
+                선택 문제 멘토 배정하기
               </button>
               <div className="text-xs text-slate-600">
-                업로드된 멘토 정보 기준 · 현재 멘토 수 {mentorInfo?.mentors?.length || 0}명
+                대상: 오답 기록 {Number(wrongAnswerTargetProblemIndex) + 1} · 업로드된 멘토 정보 기준 · 현재 멘토 수 {mentorInfo?.mentors?.length || 0}명
               </div>
             </div>
 
             {wrongAnswerSearched ? (
               <div className="mt-4">
+                <div className="mb-2 text-xs text-slate-600">
+                  학생 일정과 10분 이상 겹치는 멘토를 최대한 많이 표시합니다. (대상: 오답 기록 {Number(wrongAnswerTargetProblemIndex) + 1})
+                </div>
                 {wrongAnswerCandidates.length ? (
                   <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white/70">
                     <table className="w-full text-sm">
@@ -1946,7 +2138,9 @@ export default function Mentoring() {
                       </thead>
                       <tbody>
                         {wrongAnswerCandidates.map((candidate, idx) => {
-                          const selectedMentorId = String(wrongAnswerDistributionDraft?.assignment?.mentor_id || '');
+                          const selectedMentorId = String(
+                            normalizeWrongAnswerAssignment(wrongAnswerTargetProblem?.assignment || null)?.mentor_id || ''
+                          );
                           const isSelected = selectedMentorId && selectedMentorId === String(candidate.mentor_id || '');
                           return (
                             <tr
@@ -1958,7 +2152,7 @@ export default function Mentoring() {
                                 <div className="text-xs text-slate-600">{wrongAnswerRoleLabel(candidate.mentor_role)}</div>
                               </td>
                               <td className="px-3 py-2">
-                                <div className="text-xs text-slate-700">총 {candidate.overlaps.length}개 (30분 이상)</div>
+                                <div className="text-xs text-slate-700">총 {candidate.overlaps.length}개 (10분 이상)</div>
                                 <div className="text-xs text-slate-500">
                                   {candidate.overlaps.slice(0, 3).map((item, i) => (
                                     <span key={`${item.day}-${item.student_time}-${i}`}>
@@ -1992,7 +2186,7 @@ export default function Mentoring() {
                                   <button
                                     className={isSelected ? 'btn-primary' : 'btn-ghost'}
                                     type="button"
-                                    onClick={() => assignWrongAnswerMentor(candidate)}
+                                    onClick={() => assignWrongAnswerMentor(candidate, wrongAnswerTargetProblemIndex)}
                                   >
                                     {isSelected ? '배정됨' : '배정'}
                                   </button>
@@ -2006,9 +2200,107 @@ export default function Mentoring() {
                   </div>
                 ) : (
                   <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-sm text-slate-700">
-                    학생 센터 일정과 30분 이상 겹치는 멘토가 없습니다. 멘토 정보 파일을 확인해 주세요.
+                    학생 일정과 10분 이상 겹치는 멘토가 없습니다. 멘토 정보 파일 또는 학생 일정 분류를 확인해 주세요.
                   </div>
                 )}
+
+                {canEditA('e_wrong_answer_distribution') && !parentMode ? (
+                  <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-3">
+                    <div className="text-sm font-semibold text-amber-900">리스트 외 멘토 강제 배정</div>
+                    <div className="mt-1 text-xs text-amber-800">
+                      후보 리스트에 없어도 멘토 이름을 직접 입력해 오답 기록 {Number(wrongAnswerTargetProblemIndex) + 1}에 배정할 수 있습니다.
+                    </div>
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-6">
+                      <div className="md:col-span-2">
+                        <div className="text-[11px] text-amber-900">멘토 이름</div>
+                        <input
+                          className="input mt-1 h-9"
+                          value={forcedWrongAnswerAssignment.mentor_name}
+                          onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, mentor_name: e.target.value }))}
+                          placeholder="예: 홍길동M"
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-amber-900">역할</div>
+                        <select
+                          className="input mt-1 h-9"
+                          value={forcedWrongAnswerAssignment.mentor_role}
+                          onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, mentor_role: e.target.value }))}
+                        >
+                          <option value="mentor">클리닉 멘토</option>
+                          <option value="lead">총괄멘토</option>
+                          <option value="director">원장</option>
+                          <option value="admin">관리자</option>
+                        </select>
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-amber-900">요일</div>
+                        <select
+                          className="input mt-1 h-9"
+                          value={forcedWrongAnswerAssignment.session_day_label}
+                          onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, session_day_label: e.target.value }))}
+                        >
+                          <option value="">선택</option>
+                          {Object.entries(DAY_LABELS).map(([, dayKo]) => (
+                            <option key={`forced-day-${dayKo}`} value={dayKo}>{dayKo}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-amber-900">월/일</div>
+                        <div className="mt-1 flex items-center gap-1">
+                          <input
+                            className="input h-9 w-14"
+                            type="number"
+                            min={1}
+                            max={12}
+                            value={forcedWrongAnswerAssignment.session_month}
+                            onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, session_month: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) }))}
+                            placeholder="3"
+                          />
+                          <span className="text-xs text-amber-900">/</span>
+                          <input
+                            className="input h-9 w-14"
+                            type="number"
+                            min={1}
+                            max={31}
+                            value={forcedWrongAnswerAssignment.session_day}
+                            onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, session_day: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) }))}
+                            placeholder="10"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-amber-900">시작/분</div>
+                        <div className="mt-1 flex items-center gap-1">
+                          <input
+                            className="input h-9"
+                            type="time"
+                            value={forcedWrongAnswerAssignment.session_start_time}
+                            onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, session_start_time: e.target.value }))}
+                          />
+                          <input
+                            className="input h-9 w-16"
+                            type="number"
+                            min={5}
+                            max={240}
+                            step={5}
+                            value={forcedWrongAnswerAssignment.session_duration_minutes}
+                            onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
+                              ...prev,
+                              session_duration_minutes: Math.max(5, Math.min(240, Number(e.target.value || 20) || 20))
+                            }))}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex justify-end">
+                      <button className="btn-primary" type="button" onClick={() => applyForcedWrongAnswerAssignment(wrongAnswerTargetProblemIndex)}>
+                        강제 배정 적용
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
