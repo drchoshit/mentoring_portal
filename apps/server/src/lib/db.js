@@ -402,29 +402,55 @@ function tryCreateRecoveredDb(primaryDbFile) {
       encoding: 'utf8',
       maxBuffer: 1024 * 1024 * 256
     });
-    if (recoverDump.error || recoverDump.status !== 0) {
+    const sqlDump = String(recoverDump.stdout || '');
+    if (recoverDump.error) {
       console.warn(
         `[db bootstrap] sqlite3 .recover failed for "${source}" (${String(recoverDump.error?.message || recoverDump.stderr || recoverDump.status)})`
       );
       return tryCreateRecoveredDbByTableCopy(source, recoveredPath);
     }
-    const sqlDump = String(recoverDump.stdout || '');
     if (!sqlDump.trim()) {
       console.warn(`[db bootstrap] sqlite3 .recover returned empty output for "${source}".`);
       return tryCreateRecoveredDbByTableCopy(source, recoveredPath);
     }
+    if (recoverDump.status !== 0) {
+      console.warn(
+        `[db bootstrap] sqlite3 .recover returned non-zero status for "${source}" but produced SQL output; attempting partial load.`
+      );
+    }
 
     try { fs.unlinkSync(recoveredPath); } catch {}
 
+    const recoverInput = `.bail off\nPRAGMA foreign_keys = OFF;\n${sqlDump}\n`;
     const loadRecovered = spawnSync('sqlite3', [recoveredPath], {
-      input: sqlDump,
+      input: recoverInput,
       encoding: 'utf8',
       maxBuffer: 1024 * 1024 * 256
     });
-    if (loadRecovered.error || loadRecovered.status !== 0) {
+    if (loadRecovered.error) {
       console.warn(
         `[db bootstrap] failed to materialize recovered DB "${recoveredPath}" (${String(loadRecovered.error?.message || loadRecovered.stderr || loadRecovered.status)})`
       );
+      try { fs.unlinkSync(recoveredPath); } catch {}
+      return tryCreateRecoveredDbByTableCopy(source, recoveredPath);
+    }
+    if (loadRecovered.status !== 0) {
+      console.warn(
+        `[db bootstrap] sqlite3 load for recovered DB "${recoveredPath}" completed with SQL errors; validating partial recovery.`
+      );
+    }
+
+    try {
+      const recoveredDb = new Database(recoveredPath, { readonly: true, fileMustExist: true });
+      const tableCountRow = recoveredDb
+        .prepare("SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .get();
+      recoveredDb.close();
+      if (Number(tableCountRow?.cnt || 0) < 1) {
+        try { fs.unlinkSync(recoveredPath); } catch {}
+        return tryCreateRecoveredDbByTableCopy(source, recoveredPath);
+      }
+    } catch {
       try { fs.unlinkSync(recoveredPath); } catch {}
       return tryCreateRecoveredDbByTableCopy(source, recoveredPath);
     }
@@ -550,15 +576,26 @@ function normalizeTimestampForSort(raw) {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
 }
 
+function parseBackupTimestampFromPath(filePath) {
+  const name = path.basename(String(filePath || ''));
+  const m = name.match(/db-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-\d+Z/i);
+  if (!m) return '';
+  return `${m[1]} ${m[2]}:${m[3]}:${m[4]}`;
+}
+
 function resolveDbFreshness(dbInstance, filePath) {
   const tables = getTableSet(dbInstance);
   const targets = [
     ['mentor_assignments', 'assigned_at'],
-    ['week_records', 'updated_at'],
-    ['subject_records', 'updated_at'],
-    ['students', 'updated_at'],
+    ['problem_uploads', 'created_at'],
+    ['problem_uploads', 'uploaded_at'],
     ['feeds', 'created_at'],
-    ['users', 'updated_at']
+    ['week_records', 'created_at'],
+    ['subject_records', 'created_at'],
+    ['penalties', 'created_at'],
+    ['students', 'created_at'],
+    ['users', 'created_at'],
+    ['weeks', 'created_at']
   ];
 
   let best = '';
@@ -579,10 +616,11 @@ function resolveDbFreshness(dbInstance, filePath) {
     } catch {}
   }
 
-  const freshnessKey = best || mtime || '';
+  const fileStamp = normalizeTimestampForSort(parseBackupTimestampFromPath(target));
+  const freshnessKey = best || fileStamp || mtime || '';
   return {
     freshnessKey,
-    marker: best || mtime || 'unknown'
+    marker: best || fileStamp || mtime || 'unknown'
   };
 }
 
