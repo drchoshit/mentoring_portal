@@ -6,6 +6,15 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 
+function isRenderRuntime() {
+  return Boolean(
+    process.env.RENDER ||
+    process.env.RENDER_SERVICE_ID ||
+    process.env.RENDER_EXTERNAL_URL ||
+    process.env.RENDER_INSTANCE_ID
+  );
+}
+
 function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
 }
@@ -19,7 +28,7 @@ function resolvePersistentDataDir() {
   }
 
   // Render persistent disk default mount path.
-  if (process.env.RENDER) {
+  if (isRenderRuntime()) {
     const renderDiskDir = '/var/data';
     ensureDir(renderDiskDir);
     return renderDiskDir;
@@ -78,26 +87,44 @@ function isSqliteIoError(err) {
   return code.startsWith('SQLITE_IOERR') || /disk i\/o error/i.test(msg);
 }
 
+function runPragmaBestEffort(source) {
+  try {
+    return db.pragma(source);
+  } catch (e) {
+    if (isSqliteIoError(e)) {
+      console.warn(`[db bootstrap] Skipped PRAGMA "${source}" due to ${String(e.code || e.message || e)}`);
+      return null;
+    }
+    throw e;
+  }
+}
+
 function applyDbPragmas() {
   const requestedMode = String(process.env.SQLITE_JOURNAL_MODE || '').trim().toUpperCase();
-  const defaultMode = process.env.RENDER ? 'DELETE' : 'WAL';
+  const defaultMode = isRenderRuntime() ? 'DELETE' : 'WAL';
   const desiredMode = requestedMode || defaultMode;
 
-  const setJournalMode = (mode) => db.pragma(`journal_mode = ${mode}`);
+  const setJournalMode = (mode) => runPragmaBestEffort(`journal_mode = ${mode}`);
 
   try {
-    setJournalMode(desiredMode);
+    const result = setJournalMode(desiredMode);
+    if (!result) {
+      console.warn(`[db bootstrap] journal_mode=${desiredMode} not applied; continuing with SQLite defaults.`);
+    }
   } catch (e) {
     const canFallbackToDelete = desiredMode !== 'DELETE' && isSqliteIoError(e);
     if (!canFallbackToDelete) throw e;
     console.warn(
       `[db bootstrap] journal_mode=${desiredMode} failed (${String(e.code || e.message || e)}). Falling back to DELETE.`
     );
-    setJournalMode('DELETE');
+    const fallbackResult = setJournalMode('DELETE');
+    if (!fallbackResult) {
+      console.warn('[db bootstrap] journal_mode=DELETE could not be applied; continuing with SQLite defaults.');
+    }
   }
 
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
+  runPragmaBestEffort('foreign_keys = ON');
+  runPragmaBestEffort('busy_timeout = 5000');
 }
 
 applyDbPragmas();
