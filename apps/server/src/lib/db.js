@@ -44,6 +44,11 @@ function ensureDbParentDir(filePath) {
   ensureDir(path.dirname(target));
 }
 
+function isTruthyEnv(value) {
+  const v = String(value || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
 function resolvePersistentDataDir() {
   const explicitDir = process.env.RENDER_DISK_PATH || process.env.PERSISTENT_DATA_DIR;
   if (explicitDir) {
@@ -103,10 +108,56 @@ function resolveDbFile() {
   return dbSqlite;
 }
 
+function resolveBackupDir(baseDbFilePath = '') {
+  const explicit = String(process.env.BACKUP_DIR || '').trim();
+  if (explicit) {
+    return path.isAbsolute(explicit) ? explicit : path.resolve(process.cwd(), explicit);
+  }
+  const base = String(baseDbFilePath || '').trim();
+  if (!base || base === ':memory:' || /^file:/i.test(base)) return '';
+  return path.join(path.dirname(base), 'backups');
+}
+
+function resolveLegacySiblingDbFiles(primaryDbFile) {
+  const normalized = String(primaryDbFile || '').trim();
+  if (!normalized || normalized === ':memory:' || /^file:/i.test(normalized)) return [];
+  const dir = path.dirname(normalized);
+  const base = path.basename(normalized).toLowerCase();
+  const out = [];
+  if (base === 'db.sqlite') out.push(path.join(dir, 'app.db'));
+  if (base === 'app.db') out.push(path.join(dir, 'db.sqlite'));
+  return out;
+}
+
+function resolveBackupDbCandidates(primaryDbFile) {
+  const backupDir = resolveBackupDir(primaryDbFile);
+  if (!backupDir || !fs.existsSync(backupDir)) return [];
+  try {
+    return fs.readdirSync(backupDir)
+      .filter((f) => f.endsWith('.sqlite'))
+      .sort((a, b) => b.localeCompare(a))
+      .slice(0, 30)
+      .map((name) => path.join(backupDir, name));
+  } catch {
+    return [];
+  }
+}
+
+function shouldAllowEphemeralFallback() {
+  // Production defaults to strict mode (no silent empty-db boot).
+  // Set ALLOW_EPHEMERAL_DB_FALLBACK=1 to explicitly opt in.
+  if (isTruthyEnv(process.env.ALLOW_EPHEMERAL_DB_FALLBACK)) return true;
+  if (process.env.NODE_ENV === 'production') return false;
+  return true;
+}
+
 function resolveFallbackDbFiles(primaryDbFile) {
   if (process.env.NODE_ENV === 'test') return [];
 
   const fallbackCandidates = [];
+  fallbackCandidates.push(...resolveLegacySiblingDbFiles(primaryDbFile));
+  fallbackCandidates.push(...resolveBackupDbCandidates(primaryDbFile));
+
   const explicitFallback = String(process.env.DB_FALLBACK_PATH || '').trim();
   if (explicitFallback) {
     fallbackCandidates.push(
@@ -118,13 +169,14 @@ function resolveFallbackDbFiles(primaryDbFile) {
     );
   }
 
-  if (isRenderRuntime()) {
-    const tmpRoot = String(process.env.TMPDIR || '/tmp').trim() || '/tmp';
-    fallbackCandidates.push(path.join(tmpRoot, 'mentoring-portal', 'db.sqlite'));
+  if (shouldAllowEphemeralFallback()) {
+    if (isRenderRuntime()) {
+      const tmpRoot = String(process.env.TMPDIR || '/tmp').trim() || '/tmp';
+      fallbackCandidates.push(path.join(tmpRoot, 'mentoring-portal', 'db.sqlite'));
+    }
+    // Last-resort fallback so the service can still boot when filesystem writes are broken.
+    fallbackCandidates.push(':memory:');
   }
-
-  // Last-resort fallback so the service can still boot when filesystem writes are broken.
-  fallbackCandidates.push(':memory:');
 
   const seen = new Set([String(primaryDbFile || '').trim()]);
   const uniqueFallbacks = [];
@@ -135,6 +187,30 @@ function resolveFallbackDbFiles(primaryDbFile) {
     uniqueFallbacks.push(normalized);
   }
   return uniqueFallbacks;
+}
+
+function shouldRetryWithSidecarCleanup(filePath, err) {
+  const target = String(filePath || '').trim();
+  if (!target || target === ':memory:' || /^file:/i.test(target)) return false;
+  const code = String(err?.code || '').toUpperCase();
+  const msg = String(err?.message || '').toLowerCase();
+  return code.includes('SHMSIZE') || msg.includes('shm');
+}
+
+function cleanupSqliteSidecars(filePath) {
+  const target = String(filePath || '').trim();
+  if (!target || target === ':memory:' || /^file:/i.test(target)) return [];
+  const files = [`${target}-wal`, `${target}-shm`];
+  const removed = [];
+  for (const f of files) {
+    try {
+      if (fs.existsSync(f)) {
+        fs.unlinkSync(f);
+        removed.push(f);
+      }
+    } catch {}
+  }
+  return removed;
 }
 
 function runPragmaBestEffort(dbInstance, source, fileLabel = 'unknown') {
@@ -192,15 +268,31 @@ function assertWritableDb(dbInstance) {
 }
 
 function openDatabaseAt(filePath) {
-  ensureDbParentDir(filePath);
-  const instance = new Database(filePath);
+  const target = String(filePath || '').trim();
+  const tryOpen = () => {
+    ensureDbParentDir(target);
+    const instance = new Database(target);
+    try {
+      applyDbPragmas(instance, target);
+      assertWritableDb(instance);
+      return instance;
+    } catch (e) {
+      try { instance.close(); } catch {}
+      throw e;
+    }
+  };
+
   try {
-    applyDbPragmas(instance, filePath);
-    assertWritableDb(instance);
-    return instance;
+    return tryOpen();
   } catch (e) {
-    try { instance.close(); } catch {}
-    throw e;
+    if (!shouldRetryWithSidecarCleanup(target, e)) throw e;
+    const removed = cleanupSqliteSidecars(target);
+    if (removed.length) {
+      console.warn(
+        `[db bootstrap] Retrying "${target}" after removing sidecar files: ${removed.join(', ')}`
+      );
+    }
+    return tryOpen();
   }
 }
 
