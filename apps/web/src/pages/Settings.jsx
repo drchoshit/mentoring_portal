@@ -17,6 +17,21 @@ function toRoundLabel(label) {
   return String(label || '').replace(/주차/g, '회차');
 }
 
+function toLocalDatetimeInputValue(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function toIsoOrEmpty(localDateTimeValue) {
+  const s = String(localDateTimeValue || '').trim();
+  if (!s) return '';
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString();
+}
+
 function Section({ title, children }) {
   return (
     <div className="card p-5">
@@ -693,6 +708,12 @@ function BackupTab() {
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const [forensicBusy, setForensicBusy] = useState(false);
+  const [forensicSince, setForensicSince] = useState(() => toLocalDatetimeInputValue(new Date(Date.now() - (5 * 24 * 60 * 60 * 1000))));
+  const [forensicCutoff, setForensicCutoff] = useState(() => toLocalDatetimeInputValue(new Date()));
+  const [forensicReportFile, setForensicReportFile] = useState('');
+  const [forensicSummary, setForensicSummary] = useState(null);
+  const [forensicLogs, setForensicLogs] = useState([]);
 
   async function load() {
     setError('');
@@ -705,7 +726,30 @@ function BackupTab() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  async function loadLatestForensics({ silent = false } = {}) {
+    if (!silent) {
+      setError('');
+      setStatus('');
+    }
+    try {
+      const r = await api('/api/backups/forensics/latest?preview_rows=10');
+      setForensicReportFile(r.report_file || '');
+      setForensicSummary(r.summary || null);
+      setForensicLogs([]);
+      if (!silent) {
+        setStatus(r.report_file ? `최신 포렌식 리포트: ${r.report_file}` : '최신 포렌식 리포트를 불러왔습니다');
+      }
+    } catch (e) {
+      const msg = String(e?.message || '');
+      if (silent && msg.toLowerCase().includes('no forensic report found')) return;
+      if (!silent) setError(msg || '포렌식 리포트 조회 실패');
+    }
+  }
+
+  useEffect(() => {
+    load();
+    loadLatestForensics({ silent: true });
+  }, []);
 
   async function backupNow() {
     setError('');
@@ -760,6 +804,44 @@ function BackupTab() {
     }
   }
 
+  async function runForensics() {
+    const ok = confirm('쉘 없이 서버 포렌식 복구를 실행할까요? 실행 후 최신 후보 DB와 최근 행 미리보기를 확인할 수 있습니다.');
+    if (!ok) return;
+    setError('');
+    setStatus('');
+    setForensicBusy(true);
+    try {
+      const body = {
+        since: toIsoOrEmpty(forensicSince) || undefined,
+        cutoff: toIsoOrEmpty(forensicCutoff) || undefined,
+        top: 3,
+        limit: 1000,
+        preview_rows: 12
+      };
+      const r = await api('/api/backups/forensics/run', { method: 'POST', body });
+      setForensicReportFile(r.report_file || '');
+      setForensicSummary(r.summary || null);
+      setForensicLogs(Array.isArray(r.logs) ? r.logs : []);
+      setStatus(r.report_file ? `포렌식 완료: ${r.report_file}` : '포렌식 완료');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setForensicBusy(false);
+    }
+  }
+
+  async function downloadForensicReport() {
+    if (!forensicReportFile) return;
+    setError('');
+    setStatus('');
+    try {
+      await downloadFile(`/api/backups/forensics/file/${encodeURIComponent(forensicReportFile)}`, forensicReportFile);
+      setStatus(`포렌식 리포트 다운로드: ${forensicReportFile}`);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   return (
     <Section title="백업">
       {error ? <div className="text-sm text-red-600">{error}</div> : null}
@@ -773,6 +855,98 @@ function BackupTab() {
 
       <div className="mt-4 text-xs text-slate-600">
         서버가 30분마다 자동 백업하며, 이 버튼은 즉시 백업 파일을 생성합니다.
+      </div>
+
+      <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+        <div className="text-sm font-semibold text-amber-900">포렌식 복구 (쉘 없이)</div>
+        <div className="mt-1 text-xs text-amber-800">
+          DB 손상 시 백업 후보를 자동 스캔해 최근 데이터 흔적을 추출합니다. 기간을 지정한 뒤 실행하세요.
+        </div>
+
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            <label className="text-xs text-slate-600">조회 시작 (로컬 시간)</label>
+            <input
+              type="datetime-local"
+              className="input mt-1"
+              value={forensicSince}
+              onChange={(e) => setForensicSince(e.target.value)}
+              disabled={forensicBusy}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-600">조회 종료 (로컬 시간)</label>
+            <input
+              type="datetime-local"
+              className="input mt-1"
+              value={forensicCutoff}
+              onChange={(e) => setForensicCutoff(e.target.value)}
+              disabled={forensicBusy}
+            />
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button className="btn-primary" onClick={runForensics} disabled={forensicBusy}>
+            포렌식 실행
+          </button>
+          <button className="btn-ghost" onClick={() => loadLatestForensics()} disabled={forensicBusy}>
+            최신 리포트 불러오기
+          </button>
+          <button className="btn-ghost" onClick={downloadForensicReport} disabled={forensicBusy || !forensicReportFile}>
+            리포트 JSON 다운로드
+          </button>
+        </div>
+
+        {forensicSummary ? (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-white p-3">
+            <div className="text-xs text-slate-700">
+              리포트 파일: <span className="font-mono">{forensicReportFile || '-'}</span>
+            </div>
+            <div className="mt-1 text-xs text-slate-700">
+              생성 시각: {forensicSummary.generatedAt || '-'} / 후보 수: {forensicSummary.candidateCount ?? 0}
+            </div>
+            <div className="mt-2 text-xs font-semibold text-slate-700">상위 후보 DB</div>
+            <div className="mt-1 space-y-1">
+              {(forensicSummary.topCandidates || []).length === 0 ? (
+                <div className="text-xs text-slate-500">상위 후보가 없습니다.</div>
+              ) : (forensicSummary.topCandidates || []).map((c, idx) => (
+                <div key={`${c.path || 'candidate'}-${idx}`} className="rounded border border-slate-200 bg-slate-50 px-2 py-1">
+                  <div className="text-[11px] text-slate-600">marker: {c.marker || '-'}</div>
+                  <div className="font-mono text-[11px] text-slate-700 break-all">{c.path || '-'}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-3 text-xs font-semibold text-slate-700">추출 결과</div>
+            <div className="mt-1 space-y-2">
+              {(forensicSummary.extracts || []).length === 0 ? (
+                <div className="text-xs text-slate-500">추출된 데이터가 없습니다.</div>
+              ) : (forensicSummary.extracts || []).map((ext, extIdx) => (
+                <div key={`${ext.path || 'extract'}-${extIdx}`} className="rounded border border-slate-200 px-2 py-2">
+                  <div className="font-mono text-[11px] text-slate-700 break-all">{ext.path || '-'}</div>
+                  <div className="mt-1 text-[11px] text-slate-600">
+                    총 {ext.totalRows ?? 0}개 행 {ext.error ? `(오류: ${ext.error})` : ''}
+                  </div>
+                  <div className="mt-1 space-y-1">
+                    {(ext.tables || []).map((t) => (
+                      <div key={`${ext.path || 'extract'}-${t.table}`} className="text-[11px] text-slate-700">
+                        {t.table}: {t.rowCount ?? 0} rows ({t.timestampColumn || '-'})
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {forensicLogs.length > 0 ? (
+              <div className="mt-3">
+                <div className="text-xs font-semibold text-slate-700">실행 로그(최근 30줄)</div>
+                <pre className="mt-1 max-h-48 overflow-auto rounded bg-slate-900 p-2 text-[11px] text-slate-100">{forensicLogs.join('\n')}</pre>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-4 overflow-x-auto">

@@ -2,8 +2,12 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { requireRole } from '../lib/auth.js';
 import { dbFilePath } from '../lib/db.js';
+
+const execFileAsync = promisify(execFile);
 
 export default function backupRoutes(db) {
   const router = express.Router();
@@ -18,8 +22,14 @@ export default function backupRoutes(db) {
   const BACKUP_DIR = process.env.BACKUP_DIR
     ? (path.isAbsolute(process.env.BACKUP_DIR) ? process.env.BACKUP_DIR : path.resolve(process.cwd(), process.env.BACKUP_DIR))
     : path.join(path.dirname(DB_PATH), 'backups');
+  const FORENSIC_DIR = process.env.FORENSIC_DIR
+    ? (path.isAbsolute(process.env.FORENSIC_DIR) ? process.env.FORENSIC_DIR : path.resolve(process.cwd(), process.env.FORENSIC_DIR))
+    : path.join(path.dirname(DB_PATH), 'forensics');
+  const FORENSIC_SCRIPT_PATH = path.resolve(process.cwd(), 'apps/server/scripts/forensic-dump.mjs');
+  const FORENSIC_TIMEOUT_MS = Math.max(15000, Number(process.env.FORENSIC_TIMEOUT_MS || 120000));
   const BACKUP_KEEP_MAX = Math.max(10, Number(process.env.BACKUP_KEEP_MAX || 200));
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  if (!fs.existsSync(FORENSIC_DIR)) fs.mkdirSync(FORENSIC_DIR, { recursive: true });
 
   function listBackupFiles() {
     return fs.readdirSync(BACKUP_DIR)
@@ -45,6 +55,15 @@ export default function backupRoutes(db) {
     return true;
   }
 
+  function isSafeForensicFilename(file) {
+    const name = String(file || '').trim();
+    if (!name) return false;
+    if (name !== path.basename(name)) return false;
+    if (!name.endsWith('.json')) return false;
+    if (!name.startsWith('forensic-')) return false;
+    return true;
+  }
+
   function backupNow(reason = 'manual') {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const out = path.join(BACKUP_DIR, `db-${stamp}-${reason}.sqlite`);
@@ -59,6 +78,73 @@ export default function backupRoutes(db) {
 
   function listTables() {
     return db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r => r.name);
+  }
+
+  function normalizeTimestamp(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) return s;
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  }
+
+  function parseIntRange(value, min, max, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, Math.floor(n)));
+  }
+
+  function listForensicFiles() {
+    return fs.readdirSync(FORENSIC_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .sort((a, b) => b.localeCompare(a));
+  }
+
+  function loadForensicReport(reportPath) {
+    const raw = fs.readFileSync(reportPath, 'utf8');
+    const payload = JSON.parse(raw);
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Invalid forensic report payload');
+    }
+    return payload;
+  }
+
+  function summarizeForensicPayload(payload, previewRows = 10) {
+    const maxPreviewRows = parseIntRange(previewRows, 0, 50, 10);
+    const extracts = Array.isArray(payload.extracts) ? payload.extracts : [];
+    return {
+      generatedAt: payload.generatedAt || null,
+      params: payload.params || {},
+      candidateCount: Number(payload.candidateCount || 0),
+      topCandidates: Array.isArray(payload.topCandidates) ? payload.topCandidates : [],
+      candidates: Array.isArray(payload.candidates)
+        ? payload.candidates.slice(0, 20).map((c) => ({
+            path: c.path || '',
+            marker: c.marker || '',
+            fileMtime: c.fileMtime || '',
+            openError: c.openError || '',
+            schemaKnown: Boolean(c.schemaKnown),
+            tableCounts: c.tableCounts || {}
+          }))
+        : [],
+      extracts: extracts.map((ext) => {
+        const tableEntries = Object.entries(ext?.tables || {});
+        const tables = tableEntries.map(([table, detail]) => ({
+          table,
+          timestampColumn: detail?.timestampColumn || '',
+          rowCount: Number(detail?.rowCount || 0),
+          previewRows: Array.isArray(detail?.rows) ? detail.rows.slice(0, maxPreviewRows) : []
+        }));
+        return {
+          path: ext?.path || '',
+          error: ext?.error || '',
+          totalRows: tables.reduce((sum, t) => sum + Number(t.rowCount || 0), 0),
+          tables
+        };
+      })
+    };
   }
 
   router.get('/list', (req, res) => {
@@ -133,6 +219,104 @@ export default function backupRoutes(db) {
       return res.json({ ok: true, deleted: name });
     } catch (e) {
       return res.status(500).json({ error: e?.message || 'Delete failed' });
+    }
+  });
+
+  router.get('/forensics/list', (req, res) => {
+    try {
+      const files = listForensicFiles().slice(0, 100);
+      return res.json({ reports: files });
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Failed to list forensic reports' });
+    }
+  });
+
+  router.get('/forensics/latest', (req, res) => {
+    try {
+      const files = listForensicFiles();
+      if (!files.length) return res.status(404).json({ error: 'No forensic report found' });
+      const previewRows = parseIntRange(req.query?.preview_rows, 0, 50, 10);
+      const latest = files[0];
+      const reportPath = path.join(FORENSIC_DIR, latest);
+      const payload = loadForensicReport(reportPath);
+      return res.json({
+        ok: true,
+        report_file: latest,
+        report_path: reportPath,
+        summary: summarizeForensicPayload(payload, previewRows)
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Failed to load forensic report' });
+    }
+  });
+
+  router.get('/forensics/file/:name', (req, res) => {
+    try {
+      const name = String(req.params.name || '');
+      if (!isSafeForensicFilename(name)) return res.status(400).json({ error: 'Invalid filename' });
+      const filePath = path.join(FORENSIC_DIR, name);
+      if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Forensic report not found' });
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+      return res.send(fs.readFileSync(filePath, 'utf8'));
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Failed to download forensic report' });
+    }
+  });
+
+  router.post('/forensics/run', async (req, res) => {
+    try {
+      if (!fs.existsSync(FORENSIC_SCRIPT_PATH)) {
+        return res.status(500).json({ error: `Forensic script not found: ${FORENSIC_SCRIPT_PATH}` });
+      }
+
+      const since = normalizeTimestamp(req.body?.since);
+      const cutoff = normalizeTimestamp(req.body?.cutoff);
+      const top = parseIntRange(req.body?.top, 1, 10, 3);
+      const limit = parseIntRange(req.body?.limit, 10, 5000, 500);
+      const previewRows = parseIntRange(req.body?.preview_rows, 0, 50, 10);
+
+      const args = [FORENSIC_SCRIPT_PATH, '--top', String(top), '--limit', String(limit)];
+      if (since) args.push('--since', since);
+      if (cutoff) args.push('--cutoff', cutoff);
+
+      const { stdout = '', stderr = '' } = await execFileAsync(process.execPath, args, {
+        cwd: process.cwd(),
+        timeout: FORENSIC_TIMEOUT_MS,
+        maxBuffer: 20 * 1024 * 1024,
+        env: process.env
+      });
+
+      const mergedLogs = `${stdout}\n${stderr}`;
+      let reportPath = '';
+      const found = mergedLogs.match(/\[forensic\]\s+wrote report:\s*(.+)/i);
+      if (found && found[1]) {
+        reportPath = found[1].trim();
+      }
+
+      if (!reportPath) {
+        const files = listForensicFiles();
+        if (!files.length) return res.status(500).json({ error: 'Forensic report path not found in process output' });
+        reportPath = path.join(FORENSIC_DIR, files[0]);
+      } else if (!path.isAbsolute(reportPath)) {
+        reportPath = path.resolve(process.cwd(), reportPath);
+      }
+
+      if (!fs.existsSync(reportPath)) {
+        return res.status(500).json({ error: `Forensic report file not found: ${reportPath}` });
+      }
+
+      const payload = loadForensicReport(reportPath);
+      const reportFile = path.basename(reportPath);
+      return res.json({
+        ok: true,
+        report_file: reportFile,
+        report_path: reportPath,
+        summary: summarizeForensicPayload(payload, previewRows),
+        logs: mergedLogs.split(/\r?\n/).filter(Boolean).slice(-30)
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Forensic run failed' });
     }
   });
 
