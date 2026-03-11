@@ -1125,11 +1125,7 @@ export default function Mentoring() {
   const [wrongAnswerSearched, setWrongAnswerSearched] = useState(false);
   const [wrongAnswerTargetProblemIndex, setWrongAnswerTargetProblemIndex] = useState(0);
   const [forcedWrongAnswerAssignment, setForcedWrongAnswerAssignment] = useState(buildForcedAssignmentSeed(null));
-  const wrongAnswerTargetProblem = useMemo(() => {
-    const list = Array.isArray(wrongAnswerDistributionDraft?.problems) ? wrongAnswerDistributionDraft.problems : [];
-    const safe = Math.max(0, Math.min(Number(wrongAnswerTargetProblemIndex || 0), Math.max(0, list.length - 1)));
-    return list[safe] || null;
-  }, [wrongAnswerDistributionDraft, wrongAnswerTargetProblemIndex]);
+  const [collapsedWrongAnswerProblems, setCollapsedWrongAnswerProblems] = useState({});
   const [leadWeeklyDraft, setLeadWeeklyDraft] = useState(rec?.week_record?.c_lead_weekly_feedback || '');
   const [directorCommentDraft, setDirectorCommentDraft] = useState(rec?.week_record?.c_director_commentary || '');
 
@@ -1143,6 +1139,7 @@ export default function Mentoring() {
     const safeIdx = Math.max(0, Math.min(Number(wrongAnswerTargetProblemIndex || 0), Math.max(0, problems.length - 1)));
     setWrongAnswerTargetProblemIndex(safeIdx);
     setForcedWrongAnswerAssignment(buildForcedAssignmentSeed(problems[safeIdx]));
+    setCollapsedWrongAnswerProblems({});
   }, [wrongAnswerDistributionValue]);
   useEffect(() => setLeadWeeklyDraft(rec?.week_record?.c_lead_weekly_feedback || ''), [rec?.week_record?.c_lead_weekly_feedback]);
   useEffect(() => setDirectorCommentDraft(rec?.week_record?.c_director_commentary || ''), [rec?.week_record?.c_director_commentary]);
@@ -1151,6 +1148,7 @@ export default function Mentoring() {
     setWrongAnswerSearched(false);
     setWrongAnswerTargetProblemIndex(0);
     setForcedWrongAnswerAssignment(buildForcedAssignmentSeed(null));
+    setCollapsedWrongAnswerProblems({});
   }, [weekId, studentId]);
 
   // 보기 ?�책: parent�?server-permission 기반, �??�는 "?�션?� ?�출"
@@ -1301,6 +1299,29 @@ export default function Mentoring() {
       };
     });
     setWrongAnswerTargetProblemIndex((prev) => Math.max(0, Number(prev || 0) - (Number(prev || 0) > index ? 1 : 0)));
+    setCollapsedWrongAnswerProblems((prev) => {
+      const next = {};
+      for (const [key, value] of Object.entries(prev || {})) {
+        if (!value) continue;
+        const numericKey = Number(key);
+        if (!Number.isInteger(numericKey)) continue;
+        if (numericKey < index) next[numericKey] = true;
+        if (numericKey > index) next[numericKey - 1] = true;
+      }
+      return next;
+    });
+  }
+
+  function collapseWrongAnswerProblem(index) {
+    setCollapsedWrongAnswerProblems((prev) => ({ ...(prev || {}), [Number(index || 0)]: true }));
+  }
+
+  function expandWrongAnswerProblem(index) {
+    setCollapsedWrongAnswerProblems((prev) => {
+      const next = { ...(prev || {}) };
+      delete next[Number(index || 0)];
+      return next;
+    });
   }
 
   function removeWrongAnswerImageLocal(problemIndex, targetImage, imageIndex = -1) {
@@ -1579,6 +1600,28 @@ export default function Mentoring() {
       }
     } catch (e) {
       if (e?.message !== '__CANCEL__') setError(e?.message || '오답 배분 저장에 실패했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitWrongAnswerProblem(index) {
+    if (!weekRecordId || !canEditA('e_wrong_answer_distribution')) return;
+    setBusy(true);
+    setError('');
+    try {
+      const payload = normalizeWrongAnswerDraftWithSummary(wrongAnswerDistributionDraft);
+      await api(`/api/mentoring/week-record/${weekRecordId}`, {
+        method: 'PUT',
+        body: { e_wrong_answer_distribution: payload }
+      });
+      collapseWrongAnswerProblem(index);
+      setWrongAnswerSearched(false);
+      if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+        window.alert(`오답 기록 ${Number(index) + 1}이(가) 제출되었습니다.`);
+      }
+    } catch (e) {
+      setError(e?.message || '오답 기록 제출에 실패했습니다.');
     } finally {
       setBusy(false);
     }
@@ -1965,6 +2008,8 @@ export default function Mentoring() {
                   item?.assignment || (idx === 0 ? wrongAnswerDistributionDraft?.assignment : null)
                 );
                 const isTargetProblem = Number(wrongAnswerTargetProblemIndex || 0) === idx;
+                const isCollapsed = Boolean(collapsedWrongAnswerProblems?.[idx]);
+                const showMentorPickerForProblem = wrongAnswerSearched && isTargetProblem;
                 return (
                 <div
                   key={idx}
@@ -1981,6 +2026,23 @@ export default function Mentoring() {
                         >
                           멘토 배정하기
                         </button>
+                        <button
+                          className="btn-ghost border-emerald-200 text-emerald-700 hover:border-emerald-300 hover:text-emerald-800"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => submitWrongAnswerProblem(idx)}
+                        >
+                          완료 및 제출
+                        </button>
+                        {isCollapsed ? (
+                          <button
+                            className="btn-ghost"
+                            type="button"
+                            onClick={() => expandWrongAnswerProblem(idx)}
+                          >
+                            펼쳐보기
+                          </button>
+                        ) : null}
                         <button
                           className="btn-ghost border-blue-200 text-blue-700 hover:border-blue-300 hover:text-blue-800"
                           type="button"
@@ -1999,6 +2061,18 @@ export default function Mentoring() {
                       </div>
                     ) : null}
                   </div>
+                  {isCollapsed ? (
+                    <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2">
+                      <div className="text-xs text-slate-700">
+                        {String(item.subject || '').trim() || '-'} · {String(item.problem_name || '').trim() || '문제명 미입력'} · {String(item.problem_type || '').trim() || '-'}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-600">
+                        멘토: {problemAssignment?.mentor_name || '미배정'} / 일정: {problemAssignment?.session_month || '-'}월 {problemAssignment?.session_day || '-'}일 {problemAssignment?.session_start_time || '--:--'} / 진행 {problemAssignment?.session_duration_minutes || 20}분
+                      </div>
+                    </div>
+                  ) : null}
+                  {!isCollapsed ? (
+                  <>
                   <div className="mt-3 grid grid-cols-12 gap-3">
                     <div className="col-span-12 md:col-span-3">
                       <div className="text-xs text-slate-800">과목</div>
@@ -2069,8 +2143,8 @@ export default function Mentoring() {
                         ) : (
                           <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
                         )}
-                        <div className="mt-1 grid grid-cols-1 gap-2 md:grid-cols-2">
-                          <div className="md:col-span-2">
+                        <div className="mt-1 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_160px] md:items-end">
+                          <div>
                             <div className="text-[11px] text-slate-600">일정 (캘린더 선택)</div>
                             <input
                               className="input mt-1 h-9"
@@ -2174,6 +2248,179 @@ export default function Mentoring() {
                       </div>
                     </div>
                   ) : null}
+                  {showMentorPickerForProblem ? (
+                    <div className="mt-4">
+                      <div className="mb-2 text-xs text-slate-600">
+                        학생 일정과 10분 이상 겹치는 멘토를 최대한 많이 표시합니다. (대상: 오답 기록 {idx + 1})
+                      </div>
+                      {wrongAnswerCandidates.length ? (
+                        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white/70">
+                          <table className="w-full text-sm">
+                            <thead className="bg-slate-50 text-slate-700">
+                              <tr>
+                                <th className="px-3 py-2 text-left">멘토</th>
+                                <th className="px-3 py-2 text-left">겹치는 일정</th>
+                                <th className="px-3 py-2 text-left">근무 요일/시간 · 선택과목</th>
+                                <th className="px-3 py-2 text-right">배정</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {wrongAnswerCandidates.map((candidate, candidateIndex) => {
+                                const selectedMentorId = String(problemAssignment?.mentor_id || '');
+                                const isSelected = selectedMentorId && selectedMentorId === String(candidate.mentor_id || '');
+                                return (
+                                  <tr
+                                    key={`${candidate.mentor_id || candidate.mentor_name}-${candidateIndex}`}
+                                    className={`border-t border-slate-200 ${wrongAnswerRoleRowTone(candidate.mentor_role)}`}
+                                  >
+                                    <td className="px-3 py-2">
+                                      <div className="font-medium text-slate-900">{candidate.mentor_name}</div>
+                                      <div className="text-xs text-slate-600">{wrongAnswerRoleLabel(candidate.mentor_role)}</div>
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      <div className="text-xs text-slate-700">총 {candidate.overlaps.length}개 (10분 이상)</div>
+                                      <div className="text-xs text-slate-500">
+                                        {candidate.overlaps.slice(0, 3).map((overlapItem, overlapIndex) => (
+                                          <span key={`${overlapItem.day}-${overlapItem.student_time}-${overlapIndex}`}>
+                                            {overlapIndex > 0 ? ' / ' : ''}
+                                            {(DAY_LABELS[overlapItem.day] || overlapItem.day)} {overlapItem.student_time}
+                                            {overlapItem.overlap_minutes ? ` (${overlapItem.overlap_minutes}분)` : ''}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-700">
+                                      <div className="text-xs text-slate-500">이름</div>
+                                      <div className="text-sm text-slate-900">{candidate.mentor_name}</div>
+                                      <div className="mt-1 text-xs text-slate-500">근무</div>
+                                      <div className="text-xs text-slate-700">
+                                        {(candidate.mentor_work_slots || []).length
+                                          ? candidate.mentor_work_slots
+                                              .map((slot) => `${DAY_LABELS[slot.day] || slot.day} ${slot.time}`)
+                                              .join(' / ')
+                                          : '-'}
+                                      </div>
+                                      <div className="mt-1 text-xs text-slate-500">선택과목</div>
+                                      <div className="text-xs text-slate-700">
+                                        {(candidate.mentor_subjects || []).length
+                                          ? candidate.mentor_subjects.join(', ')
+                                          : '-'}
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2 text-right">
+                                      {canEditA('e_wrong_answer_distribution') && !parentMode ? (
+                                        <button
+                                          className={isSelected ? 'btn-primary' : 'btn-ghost'}
+                                          type="button"
+                                          onClick={() => assignWrongAnswerMentor(candidate, idx)}
+                                        >
+                                          {isSelected ? '배정됨' : '배정'}
+                                        </button>
+                                      ) : null}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-sm text-slate-700">
+                          학생 일정과 10분 이상 겹치는 멘토가 없습니다. 멘토 정보 파일 또는 학생 일정 분류를 확인해 주세요.
+                        </div>
+                      )}
+
+                      {canEditA('e_wrong_answer_distribution') && !parentMode ? (
+                        <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-3">
+                          <div className="text-sm font-semibold text-amber-900">리스트 외 멘토 강제 배정</div>
+                          <div className="mt-1 text-xs text-amber-800">
+                            후보 리스트에 없어도 멘토 이름을 직접 입력해 오답 기록 {idx + 1}에 배정할 수 있습니다.
+                          </div>
+                          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-6">
+                            <div className="md:col-span-2">
+                              <div className="text-[11px] text-amber-900">멘토 이름</div>
+                              <input
+                                className="input mt-1 h-9"
+                                value={forcedWrongAnswerAssignment.mentor_name}
+                                onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, mentor_name: e.target.value }))}
+                                placeholder="예: 홍길동M"
+                              />
+                            </div>
+                            <div>
+                              <div className="text-[11px] text-amber-900">역할</div>
+                              <select
+                                className="input mt-1 h-9"
+                                value={forcedWrongAnswerAssignment.mentor_role}
+                                onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, mentor_role: e.target.value }))}
+                              >
+                                <option value="mentor">클리닉 멘토</option>
+                                <option value="lead">총괄멘토</option>
+                                <option value="director">원장</option>
+                                <option value="admin">관리자</option>
+                              </select>
+                            </div>
+                            <div className="md:col-span-2">
+                              <div className="text-[11px] text-amber-900">일정 (캘린더 선택)</div>
+                              <input
+                                className="input mt-1 h-9"
+                                type="datetime-local"
+                                step={60}
+                                value={buildSessionDateTimeLocal(
+                                  forcedWrongAnswerAssignment.session_month,
+                                  forcedWrongAnswerAssignment.session_day,
+                                  forcedWrongAnswerAssignment.session_start_time
+                                )}
+                                onChange={(e) =>
+                                  setForcedWrongAnswerAssignment((prev) => {
+                                    const value = String(e.target.value || '');
+                                    if (!value) {
+                                      return {
+                                        ...prev,
+                                        session_day_label: '',
+                                        session_month: '',
+                                        session_day: '',
+                                        session_start_time: ''
+                                      };
+                                    }
+                                    const parsed = parseSessionDateTimeLocal(value);
+                                    if (!parsed) return prev;
+                                    return { ...prev, ...parsed };
+                                  })
+                                }
+                              />
+                              <div className="mt-1 text-[11px] text-amber-900">
+                                자동 반영: {forcedWrongAnswerAssignment.session_day_label || '-'}요일 ·{' '}
+                                {forcedWrongAnswerAssignment.session_month || '-'}월 {forcedWrongAnswerAssignment.session_day || '-'}일 ·{' '}
+                                {forcedWrongAnswerAssignment.session_start_time || '--:--'}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[11px] text-amber-900">진행 시간(분)</div>
+                              <input
+                                className="input mt-1 h-9"
+                                type="number"
+                                min={1}
+                                max={240}
+                                step={1}
+                                value={forcedWrongAnswerAssignment.session_duration_minutes}
+                                onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
+                                  ...prev,
+                                  session_duration_minutes: Math.max(1, Math.min(240, Number(e.target.value || 20) || 20))
+                                }))}
+                              />
+                            </div>
+                          </div>
+                          <div className="mt-2 flex justify-end">
+                            <button className="btn-primary" type="button" onClick={() => applyForcedWrongAnswerAssignment(idx)}>
+                              강제 배정 적용
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
+                  ) : null}
                 </div>
               );
               })}
@@ -2186,192 +2433,10 @@ export default function Mentoring() {
             </div>
 
             <div className="mt-4 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-              <button
-                className="btn-primary"
-                type="button"
-                onClick={() => findWrongAnswerCandidates(wrongAnswerTargetProblemIndex)}
-                disabled={busy}
-              >
-                선택 문제 멘토 배정하기
-              </button>
               <div className="text-xs text-slate-600">
-                대상: 오답 기록 {Number(wrongAnswerTargetProblemIndex) + 1} · 업로드된 멘토 정보 기준 · 현재 멘토 수 {mentorInfo?.mentors?.length || 0}명
+                업로드된 멘토 정보 기준 · 현재 멘토 수 {mentorInfo?.mentors?.length || 0}명
               </div>
             </div>
-
-            {wrongAnswerSearched ? (
-              <div className="mt-4">
-                <div className="mb-2 text-xs text-slate-600">
-                  학생 일정과 10분 이상 겹치는 멘토를 최대한 많이 표시합니다. (대상: 오답 기록 {Number(wrongAnswerTargetProblemIndex) + 1})
-                </div>
-                {wrongAnswerCandidates.length ? (
-                  <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white/70">
-                    <table className="w-full text-sm">
-                      <thead className="bg-slate-50 text-slate-700">
-                        <tr>
-                          <th className="px-3 py-2 text-left">멘토</th>
-                          <th className="px-3 py-2 text-left">겹치는 일정</th>
-                          <th className="px-3 py-2 text-left">근무 요일/시간 · 선택과목</th>
-                          <th className="px-3 py-2 text-right">배정</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {wrongAnswerCandidates.map((candidate, idx) => {
-                          const selectedMentorId = String(
-                            normalizeWrongAnswerAssignment(wrongAnswerTargetProblem?.assignment || null)?.mentor_id || ''
-                          );
-                          const isSelected = selectedMentorId && selectedMentorId === String(candidate.mentor_id || '');
-                          return (
-                            <tr
-                              key={`${candidate.mentor_id || candidate.mentor_name}-${idx}`}
-                              className={`border-t border-slate-200 ${wrongAnswerRoleRowTone(candidate.mentor_role)}`}
-                            >
-                              <td className="px-3 py-2">
-                                <div className="font-medium text-slate-900">{candidate.mentor_name}</div>
-                                <div className="text-xs text-slate-600">{wrongAnswerRoleLabel(candidate.mentor_role)}</div>
-                              </td>
-                              <td className="px-3 py-2">
-                                <div className="text-xs text-slate-700">총 {candidate.overlaps.length}개 (10분 이상)</div>
-                                <div className="text-xs text-slate-500">
-                                  {candidate.overlaps.slice(0, 3).map((item, i) => (
-                                    <span key={`${item.day}-${item.student_time}-${i}`}>
-                                      {i > 0 ? ' / ' : ''}
-                                      {(DAY_LABELS[item.day] || item.day)} {item.student_time}
-                                      {item.overlap_minutes ? ` (${item.overlap_minutes}분)` : ''}
-                                    </span>
-                                  ))}
-                                </div>
-                              </td>
-                              <td className="px-3 py-2 text-slate-700">
-                                <div className="text-xs text-slate-500">이름</div>
-                                <div className="text-sm text-slate-900">{candidate.mentor_name}</div>
-                                <div className="mt-1 text-xs text-slate-500">근무</div>
-                                <div className="text-xs text-slate-700">
-                                  {(candidate.mentor_work_slots || []).length
-                                    ? candidate.mentor_work_slots
-                                        .map((slot) => `${DAY_LABELS[slot.day] || slot.day} ${slot.time}`)
-                                        .join(' / ')
-                                    : '-'}
-                                </div>
-                                <div className="mt-1 text-xs text-slate-500">선택과목</div>
-                                <div className="text-xs text-slate-700">
-                                  {(candidate.mentor_subjects || []).length
-                                    ? candidate.mentor_subjects.join(', ')
-                                    : '-'}
-                                </div>
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                {canEditA('e_wrong_answer_distribution') && !parentMode ? (
-                                  <button
-                                    className={isSelected ? 'btn-primary' : 'btn-ghost'}
-                                    type="button"
-                                    onClick={() => assignWrongAnswerMentor(candidate, wrongAnswerTargetProblemIndex)}
-                                  >
-                                    {isSelected ? '배정됨' : '배정'}
-                                  </button>
-                                ) : null}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-sm text-slate-700">
-                    학생 일정과 10분 이상 겹치는 멘토가 없습니다. 멘토 정보 파일 또는 학생 일정 분류를 확인해 주세요.
-                  </div>
-                )}
-
-                {canEditA('e_wrong_answer_distribution') && !parentMode ? (
-                  <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-3">
-                    <div className="text-sm font-semibold text-amber-900">리스트 외 멘토 강제 배정</div>
-                    <div className="mt-1 text-xs text-amber-800">
-                      후보 리스트에 없어도 멘토 이름을 직접 입력해 오답 기록 {Number(wrongAnswerTargetProblemIndex) + 1}에 배정할 수 있습니다.
-                    </div>
-                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-6">
-                      <div className="md:col-span-2">
-                        <div className="text-[11px] text-amber-900">멘토 이름</div>
-                        <input
-                          className="input mt-1 h-9"
-                          value={forcedWrongAnswerAssignment.mentor_name}
-                          onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, mentor_name: e.target.value }))}
-                          placeholder="예: 홍길동M"
-                        />
-                      </div>
-                      <div>
-                        <div className="text-[11px] text-amber-900">역할</div>
-                        <select
-                          className="input mt-1 h-9"
-                          value={forcedWrongAnswerAssignment.mentor_role}
-                          onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, mentor_role: e.target.value }))}
-                        >
-                          <option value="mentor">클리닉 멘토</option>
-                          <option value="lead">총괄멘토</option>
-                          <option value="director">원장</option>
-                          <option value="admin">관리자</option>
-                        </select>
-                      </div>
-                      <div className="md:col-span-2">
-                        <div className="text-[11px] text-amber-900">일정 (캘린더 선택)</div>
-                        <input
-                          className="input mt-1 h-9"
-                          type="datetime-local"
-                          step={60}
-                          value={buildSessionDateTimeLocal(
-                            forcedWrongAnswerAssignment.session_month,
-                            forcedWrongAnswerAssignment.session_day,
-                            forcedWrongAnswerAssignment.session_start_time
-                          )}
-                          onChange={(e) =>
-                            setForcedWrongAnswerAssignment((prev) => {
-                              const value = String(e.target.value || '');
-                              if (!value) {
-                                return {
-                                  ...prev,
-                                  session_day_label: '',
-                                  session_month: '',
-                                  session_day: '',
-                                  session_start_time: ''
-                                };
-                              }
-                              const parsed = parseSessionDateTimeLocal(value);
-                              if (!parsed) return prev;
-                              return { ...prev, ...parsed };
-                            })
-                          }
-                        />
-                        <div className="mt-1 text-[11px] text-amber-900">
-                          자동 반영: {forcedWrongAnswerAssignment.session_day_label || '-'}요일 ·{' '}
-                          {forcedWrongAnswerAssignment.session_month || '-'}월 {forcedWrongAnswerAssignment.session_day || '-'}일 ·{' '}
-                          {forcedWrongAnswerAssignment.session_start_time || '--:--'}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-[11px] text-amber-900">진행 시간(분)</div>
-                        <input
-                          className="input mt-1 h-9"
-                          type="number"
-                          min={1}
-                          max={240}
-                          step={1}
-                          value={forcedWrongAnswerAssignment.session_duration_minutes}
-                          onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
-                            ...prev,
-                            session_duration_minutes: Math.max(1, Math.min(240, Number(e.target.value || 20) || 20))
-                          }))}
-                        />
-                      </div>
-                    </div>
-                    <div className="mt-2 flex justify-end">
-                      <button className="btn-primary" type="button" onClick={() => applyForcedWrongAnswerAssignment(wrongAnswerTargetProblemIndex)}>
-                        강제 배정 적용
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
 
           </GoldCard>
         ) : null}
