@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import BetterSqlite from 'better-sqlite3';
 import { requireRole } from '../lib/auth.js';
 import { dbFilePath } from '../lib/db.js';
 
@@ -82,6 +83,13 @@ function resolvePrimaryDbPath(activeDbPath) {
   return path.join(persistentRoot, 'db.sqlite');
 }
 
+function isPathWithin(baseDir, targetPath) {
+  const base = path.resolve(String(baseDir || ''));
+  const target = path.resolve(String(targetPath || ''));
+  const rel = path.relative(base, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 export default function backupRoutes(db) {
   const router = express.Router();
   router.use(requireRole('director', 'admin'));
@@ -141,6 +149,22 @@ export default function backupRoutes(db) {
     if (!name.endsWith('.json')) return false;
     if (!name.startsWith('forensic-')) return false;
     return true;
+  }
+
+  function removeSqliteSidecars(filePath) {
+    const target = String(filePath || '').trim();
+    if (!target) return [];
+    const sidecars = [`${target}-wal`, `${target}-shm`, `${target}-journal`];
+    const removed = [];
+    for (const side of sidecars) {
+      try {
+        if (fs.existsSync(side)) {
+          fs.unlinkSync(side);
+          removed.push(side);
+        }
+      } catch {}
+    }
+    return removed;
   }
 
   function resolveBackupSourceCandidates() {
@@ -252,6 +276,146 @@ export default function backupRoutes(db) {
       throw new Error('Invalid forensic report payload');
     }
     return payload;
+  }
+
+  function pickTopCandidateFromReport(payload) {
+    const topCandidates = Array.isArray(payload?.topCandidates) ? payload.topCandidates : [];
+    for (const c of topCandidates) {
+      const p = String(c?.path || '').trim();
+      if (p) return p;
+    }
+
+    const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
+    for (const c of candidates) {
+      const p = String(c?.path || '').trim();
+      if (!p) continue;
+      if (String(c?.openError || '').trim()) continue;
+      if (Boolean(c?.schemaKnown) || Boolean(c?.hasRecoverableTables)) return p;
+    }
+
+    return '';
+  }
+
+  function resolvePromotionCandidatePath({ reportFile, candidatePath }) {
+    const direct = String(candidatePath || '').trim();
+    if (direct) {
+      return path.isAbsolute(direct) ? direct : path.resolve(process.cwd(), direct);
+    }
+
+    const targetReport = String(reportFile || '').trim();
+    if (targetReport) {
+      const reportPath = findForensicReportPathByName(targetReport);
+      if (!reportPath || !fs.existsSync(reportPath)) {
+        throw new Error(`Forensic report not found: ${targetReport}`);
+      }
+      const payload = loadForensicReport(reportPath);
+      const picked = pickTopCandidateFromReport(payload);
+      if (!picked) throw new Error(`No promotable candidate in report: ${targetReport}`);
+      return path.isAbsolute(picked) ? picked : path.resolve(process.cwd(), picked);
+    }
+
+    const latest = listForensicReports()[0];
+    if (!latest) throw new Error('No forensic report found');
+    const payload = loadForensicReport(latest.path);
+    const picked = pickTopCandidateFromReport(payload);
+    if (!picked) throw new Error('No promotable candidate in latest forensic report');
+    return path.isAbsolute(picked) ? picked : path.resolve(process.cwd(), picked);
+  }
+
+  function inspectSchema(filePath) {
+    let tmp = null;
+    try {
+      tmp = new BetterSqlite(filePath, { readonly: true, fileMustExist: true });
+      const names = new Set(
+        tmp.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => String(r.name || ''))
+      );
+      const schemaKnown = names.has('users') && names.has('students') && names.has('weeks');
+      const hasRecoverableTables =
+        names.has('week_records') ||
+        names.has('subject_records') ||
+        names.has('feeds') ||
+        names.has('penalties') ||
+        names.has('students');
+      return { schemaKnown, hasRecoverableTables };
+    } finally {
+      try { tmp?.close(); } catch {}
+    }
+  }
+
+  function promoteCandidateToPrimary(rawCandidatePath) {
+    const candidatePath = path.resolve(String(rawCandidatePath || '').trim());
+    if (!candidatePath) throw new Error('Candidate path is required');
+    if (!fs.existsSync(candidatePath)) throw new Error(`Candidate not found: ${candidatePath}`);
+    if (!fs.statSync(candidatePath).isFile()) throw new Error(`Candidate is not a file: ${candidatePath}`);
+    if (!candidatePath.endsWith('.sqlite') && !candidatePath.endsWith('.db')) {
+      throw new Error(`Invalid candidate extension: ${candidatePath}`);
+    }
+
+    const allowedRoots = uniqPaths([
+      resolvePersistentRoot(PRIMARY_DB_PATH),
+      path.dirname(PRIMARY_DB_PATH),
+      BACKUP_DIR,
+      ...FORENSIC_DIRS
+    ]);
+    const inAllowed = allowedRoots.some((root) => root && isPathWithin(root, candidatePath));
+    if (!inAllowed) {
+      throw new Error(`Candidate path is outside allowed storage roots: ${candidatePath}`);
+    }
+
+    const target = path.resolve(PRIMARY_DB_PATH);
+    const schema = inspectSchema(candidatePath);
+    if (!schema.schemaKnown && !schema.hasRecoverableTables) {
+      throw new Error('Candidate does not contain recognizable schema/tables');
+    }
+
+    if (candidatePath === target) {
+      return {
+        source: candidatePath,
+        target,
+        mode: 'already_primary',
+        previous_primary_path: null,
+        warnings: ['Target already points to candidate file'],
+        schema
+      };
+    }
+
+    const stamp = timestampStamp();
+    const previousPrimaryPath = path.join(path.dirname(target), `db.prepromote-${stamp}.sqlite`);
+    const warnings = [];
+    let mode = 'copy';
+
+    removeSqliteSidecars(target);
+
+    try {
+      fs.copyFileSync(candidatePath, target);
+    } catch (e) {
+      if (String(e?.code || '') !== 'ENOSPC') throw e;
+
+      warnings.push('copy failed with ENOSPC; fallback to rename strategy');
+      if (fs.existsSync(target)) {
+        fs.renameSync(target, previousPrimaryPath);
+      }
+      try {
+        fs.renameSync(candidatePath, target);
+        mode = 'rename';
+      } catch (renameError) {
+        if (fs.existsSync(previousPrimaryPath) && !fs.existsSync(target)) {
+          try { fs.renameSync(previousPrimaryPath, target); } catch {}
+        }
+        throw renameError;
+      }
+    }
+
+    removeSqliteSidecars(target);
+
+    return {
+      source: candidatePath,
+      target,
+      mode,
+      previous_primary_path: fs.existsSync(previousPrimaryPath) ? previousPrimaryPath : null,
+      warnings,
+      schema
+    };
   }
 
   function buildRecoveredDbFromPrimary(sourceDbPath) {
@@ -530,6 +694,54 @@ export default function backupRoutes(db) {
       });
     } catch (e) {
       return res.status(500).json({ error: e?.message || 'Forensic run failed' });
+    }
+  });
+
+  router.post('/forensics/promote', (req, res) => {
+    try {
+      const reportFile = String(req.body?.report_file || '').trim();
+      const candidatePathInput = String(req.body?.candidate_path || '').trim();
+      const restartAfter = Boolean(req.body?.restart_after);
+
+      const candidatePath = resolvePromotionCandidatePath({
+        reportFile,
+        candidatePath: candidatePathInput
+      });
+      const promoted = promoteCandidateToPrimary(candidatePath);
+
+      const logs = [
+        `[promote] source=${promoted.source}`,
+        `[promote] target=${promoted.target}`,
+        `[promote] mode=${promoted.mode}`,
+        `[promote] active_db_path=${DB_PATH}`,
+        `[promote] primary_db_path=${PRIMARY_DB_PATH}`,
+        `[promote] schema_known=${promoted.schema?.schemaKnown ? 1 : 0}`,
+        `[promote] has_recoverable_tables=${promoted.schema?.hasRecoverableTables ? 1 : 0}`
+      ];
+      if (promoted.previous_primary_path) {
+        logs.push(`[promote] previous_primary_moved=${promoted.previous_primary_path}`);
+      }
+      for (const w of promoted.warnings || []) logs.push(`[promote] warning=${w}`);
+
+      const response = {
+        ok: true,
+        report_file: reportFile || null,
+        promoted_from: promoted.source,
+        promoted_to: promoted.target,
+        mode: promoted.mode,
+        previous_primary_path: promoted.previous_primary_path,
+        warnings: promoted.warnings || [],
+        restart_required: true,
+        logs
+      };
+
+      res.json(response);
+
+      if (restartAfter) {
+        setTimeout(() => process.exit(0), 400);
+      }
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Promote failed' });
     }
   });
 

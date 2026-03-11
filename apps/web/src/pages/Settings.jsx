@@ -849,6 +849,45 @@ function BackupTab() {
     }
   }
 
+  async function promoteTopCandidate() {
+    const candidatePath = String(forensicSummary?.topCandidates?.[0]?.path || '').trim();
+    const reportHint = forensicReportFile ? `\n리포트: ${forensicReportFile}` : '';
+    const candidateHint = candidatePath ? `\n후보: ${candidatePath}` : '';
+    const ok = confirm(
+      `최상위 후보 DB를 현재 기본 DB로 확정할까요?\n이 작업 후 서비스 재시작(재배포 또는 수동 restart)이 필요합니다.${reportHint}${candidateHint}`
+    );
+    if (!ok) return;
+
+    setError('');
+    setStatus('');
+    setForensicBusy(true);
+    try {
+      const r = await api('/api/backups/forensics/promote', {
+        method: 'POST',
+        body: {
+          report_file: forensicReportFile || undefined,
+          candidate_path: candidatePath || undefined,
+          restart_after: false
+        }
+      });
+
+      const mode = String(r.mode || '');
+      const modeLabel = mode === 'rename'
+        ? 'rename(저장공간 절약 모드)'
+        : mode === 'copy'
+          ? 'copy'
+          : mode || 'unknown';
+      setStatus(`기본 DB 확정 완료 (${modeLabel}) - 이제 서비스 재시작(Deploy/Manual Restart) 해주세요.`);
+      setForensicLogs(Array.isArray(r.logs) ? r.logs : []);
+      await load();
+      await loadLatestForensics({ silent: true });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setForensicBusy(false);
+    }
+  }
+
   return (
     <Section title="백업">
       {error ? <div className="text-sm text-red-600">{error}</div> : null}
@@ -899,6 +938,9 @@ function BackupTab() {
           </button>
           <button className="btn-ghost" onClick={() => runForensics({ recoverPrimary: true })} disabled={forensicBusy}>
             손상 원본 최종복구
+          </button>
+          <button className="btn-ghost" onClick={promoteTopCandidate} disabled={forensicBusy || !forensicSummary}>
+            최상위 후보 DB 확정
           </button>
           <button className="btn-ghost" onClick={() => loadLatestForensics()} disabled={forensicBusy}>
             최신 리포트 불러오기
