@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
 import { execFile } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { requireRole } from '../lib/auth.js';
@@ -27,6 +28,10 @@ function resolveForensicScriptPath() {
     } catch {}
   }
   return candidates[0] || path.resolve(process.cwd(), 'scripts/forensic-dump.mjs');
+}
+
+function timestampStamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
 function uniqPaths(items) {
@@ -129,7 +134,7 @@ export default function backupRoutes(db) {
   }
 
   function backupNow(reason = 'manual') {
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const stamp = timestampStamp();
     const out = path.join(BACKUP_DIR, `db-${stamp}-${reason}.sqlite`);
     fs.copyFileSync(DB_PATH, out);
     pruneByKeepMax();
@@ -213,6 +218,55 @@ export default function backupRoutes(db) {
       throw new Error('Invalid forensic report payload');
     }
     return payload;
+  }
+
+  function buildRecoveredDbFromPrimary(sourceDbPath) {
+    const source = String(sourceDbPath || '').trim();
+    if (!source || !fs.existsSync(source)) {
+      throw new Error(`Primary DB not found: ${source}`);
+    }
+
+    const stamp = timestampStamp();
+    const recoveredPath = path.join(FORENSIC_DIR, `db.primary.recovered-${stamp}.sqlite`);
+
+    const recoverDump = spawnSync('sqlite3', [source, '.recover'], {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024 * 256
+    });
+    const sqlDump = String(recoverDump.stdout || '');
+
+    if (recoverDump.error) {
+      throw new Error(`sqlite3 .recover failed: ${String(recoverDump.error?.message || recoverDump.status || 'unknown')}`);
+    }
+    if (!sqlDump.trim()) {
+      throw new Error('sqlite3 .recover returned empty output');
+    }
+
+    try { fs.unlinkSync(recoveredPath); } catch {}
+
+    const recoverInput = `.bail off\nPRAGMA foreign_keys = OFF;\n${sqlDump}\n`;
+    const loadRecovered = spawnSync('sqlite3', [recoveredPath], {
+      input: recoverInput,
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024 * 256
+    });
+
+    if (loadRecovered.error) {
+      try { fs.unlinkSync(recoveredPath); } catch {}
+      throw new Error(`sqlite3 load failed: ${String(loadRecovered.error?.message || loadRecovered.status || 'unknown')}`);
+    }
+
+    if (!fs.existsSync(recoveredPath)) {
+      throw new Error(`Recovered DB was not created: ${recoveredPath}`);
+    }
+
+    return {
+      recoveredPath,
+      recoverStatus: Number(recoverDump.status ?? 0),
+      loadStatus: Number(loadRecovered.status ?? 0),
+      recoverStderr: String(recoverDump.stderr || ''),
+      loadStderr: String(loadRecovered.stderr || '')
+    };
   }
 
   function summarizeForensicPayload(payload, previewRows = 10) {
@@ -379,8 +433,14 @@ export default function backupRoutes(db) {
       const top = parseIntRange(req.body?.top, 1, 10, 3);
       const limit = parseIntRange(req.body?.limit, 10, 5000, 500);
       const previewRows = parseIntRange(req.body?.preview_rows, 0, 50, 10);
+      const recoverPrimary = Boolean(req.body?.recover_primary);
+      let recoveredMeta = null;
 
       const args = [FORENSIC_SCRIPT_PATH, '--top', String(top), '--limit', String(limit)];
+      if (recoverPrimary) {
+        recoveredMeta = buildRecoveredDbFromPrimary(DB_PATH);
+        args.push('--candidate', recoveredMeta.recoveredPath);
+      }
       if (since) args.push('--since', since);
       if (cutoff) args.push('--cutoff', cutoff);
 
@@ -412,12 +472,25 @@ export default function backupRoutes(db) {
 
       const payload = loadForensicReport(reportPath);
       const reportFile = path.basename(reportPath);
+      const baseLogs = mergedLogs.split(/\r?\n/).filter(Boolean).slice(-30);
+      if (recoverPrimary && recoveredMeta) {
+        baseLogs.unshift(
+          `[forensic] recover_primary=1 source=${DB_PATH}`,
+          `[forensic] recovered_candidate=${recoveredMeta.recoveredPath}`,
+          `[forensic] sqlite3_recover_status=${recoveredMeta.recoverStatus}`,
+          `[forensic] sqlite3_load_status=${recoveredMeta.loadStatus}`
+        );
+        if (recoveredMeta.recoverStderr) baseLogs.push(`[forensic] recover_stderr=${recoveredMeta.recoverStderr}`);
+        if (recoveredMeta.loadStderr) baseLogs.push(`[forensic] load_stderr=${recoveredMeta.loadStderr}`);
+      }
       return res.json({
         ok: true,
         report_file: reportFile,
         report_path: reportPath,
+        recover_primary: recoverPrimary,
+        recovered_candidate_path: recoveredMeta?.recoveredPath || null,
         summary: summarizeForensicPayload(payload, previewRows),
-        logs: mergedLogs.split(/\r?\n/).filter(Boolean).slice(-30)
+        logs: baseLogs.slice(-60)
       });
     } catch (e) {
       return res.status(500).json({ error: e?.message || 'Forensic run failed' });

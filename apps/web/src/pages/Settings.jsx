@@ -804,8 +804,10 @@ function BackupTab() {
     }
   }
 
-  async function runForensics() {
-    const ok = confirm('쉘 없이 서버 포렌식 복구를 실행할까요? 실행 후 최신 후보 DB와 최근 행 미리보기를 확인할 수 있습니다.');
+  async function runForensics({ recoverPrimary = false } = {}) {
+    const ok = recoverPrimary
+      ? confirm('손상된 원본 db.sqlite에 대해 sqlite3 .recover 최종 복구를 시도할까요? 시간이 다소 걸릴 수 있습니다.')
+      : confirm('쉘 없이 서버 포렌식 복구를 실행할까요? 실행 후 최신 후보 DB와 최근 행 미리보기를 확인할 수 있습니다.');
     if (!ok) return;
     setError('');
     setStatus('');
@@ -816,13 +818,18 @@ function BackupTab() {
         cutoff: toIsoOrEmpty(forensicCutoff) || undefined,
         top: 3,
         limit: 1000,
-        preview_rows: 12
+        preview_rows: 12,
+        recover_primary: recoverPrimary
       };
       const r = await api('/api/backups/forensics/run', { method: 'POST', body });
       setForensicReportFile(r.report_file || '');
       setForensicSummary(r.summary || null);
       setForensicLogs(Array.isArray(r.logs) ? r.logs : []);
-      setStatus(r.report_file ? `포렌식 완료: ${r.report_file}` : '포렌식 완료');
+      if (recoverPrimary) {
+        setStatus(r.report_file ? `최종 복구 시도 완료: ${r.report_file}` : '최종 복구 시도 완료');
+      } else {
+        setStatus(r.report_file ? `포렌식 완료: ${r.report_file}` : '포렌식 완료');
+      }
     } catch (e) {
       setError(e.message);
     } finally {
@@ -887,8 +894,11 @@ function BackupTab() {
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          <button className="btn-primary" onClick={runForensics} disabled={forensicBusy}>
+          <button className="btn-primary" onClick={() => runForensics()} disabled={forensicBusy}>
             포렌식 실행
+          </button>
+          <button className="btn-ghost" onClick={() => runForensics({ recoverPrimary: true })} disabled={forensicBusy}>
+            손상 원본 최종복구
           </button>
           <button className="btn-ghost" onClick={() => loadLatestForensics()} disabled={forensicBusy}>
             최신 리포트 불러오기
