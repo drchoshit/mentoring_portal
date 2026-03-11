@@ -13,10 +13,24 @@ function isSqliteIoError(err) {
   return code.startsWith('SQLITE_IOERR') || /disk i\/o error/i.test(msg);
 }
 
+function isSqliteCorruptError(err) {
+  if (!err) return false;
+  const code = String(err.code || '').toUpperCase();
+  const msg = String(err.message || '');
+  return (
+    code.startsWith('SQLITE_CORRUPT') ||
+    code === 'SQLITE_NOTADB' ||
+    /database disk image is malformed/i.test(msg) ||
+    /file is not a database/i.test(msg)
+  );
+}
+
 function isRecoverableDbOpenError(err) {
   if (!err) return false;
   if (isSqliteIoError(err)) return true;
+  if (isSqliteCorruptError(err)) return true;
   const code = String(err.code || '').toUpperCase();
+  if (code === 'DB_EMPTY_CANDIDATE') return true;
   if (code === 'SQLITE_FULL') return true;
   if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS' || code === 'ENOSPC' || code === 'ENOENT' || code === 'EIO') {
     return true;
@@ -73,17 +87,8 @@ function resolveDbFile() {
   const p = String(process.env.DB_PATH || '').trim();
   if (p) {
     if (p === ':memory:') return ':memory:';
-    const resolved = path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
-    // If DB_PATH points to db.sqlite but legacy app.db exists, prefer app.db to avoid data loss.
-    if (resolved.endsWith(`${path.sep}db.sqlite`)) {
-      const legacy = path.join(path.dirname(resolved), 'app.db');
-      if (fs.existsSync(legacy)) {
-        const legacySize = fs.statSync(legacy).size;
-        const resolvedSize = fs.existsSync(resolved) ? fs.statSync(resolved).size : 0;
-        if (resolvedSize < legacySize) return legacy;
-      }
-    }
-    return resolved;
+    // Explicit DB_PATH should be honored as-is.
+    return path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
   }
 
   const persistentDir = resolvePersistentDataDir();
@@ -126,7 +131,13 @@ function resolveLegacySiblingDbFiles(primaryDbFile) {
   const out = [];
   if (base === 'db.sqlite') out.push(path.join(dir, 'app.db'));
   if (base === 'app.db') out.push(path.join(dir, 'db.sqlite'));
-  return out;
+  return out.filter((candidate) => {
+    try {
+      return fs.existsSync(candidate) && fs.statSync(candidate).isFile() && fs.statSync(candidate).size > 0;
+    } catch {
+      return false;
+    }
+  });
 }
 
 function resolveBackupDbCandidates(primaryDbFile) {
@@ -194,7 +205,7 @@ function shouldRetryWithSidecarCleanup(filePath, err) {
   if (!target || target === ':memory:' || /^file:/i.test(target)) return false;
   const code = String(err?.code || '').toUpperCase();
   const msg = String(err?.message || '').toLowerCase();
-  return code.includes('SHMSIZE') || msg.includes('shm');
+  return code.includes('SHMSIZE') || msg.includes('shm') || isSqliteCorruptError(err);
 }
 
 function cleanupSqliteSidecars(filePath) {
@@ -296,6 +307,26 @@ function openDatabaseAt(filePath) {
   }
 }
 
+function hasKnownSchemaTables(dbInstance) {
+  const row = dbInstance.prepare(`
+    SELECT COUNT(*) AS cnt
+    FROM sqlite_master
+    WHERE type='table'
+      AND name IN ('users', 'students', 'weeks', 'week_records', 'mentoring_records', 'subject_records')
+  `).get();
+  return Number(row?.cnt || 0) > 0;
+}
+
+function isEphemeralFallbackPath(filePath) {
+  const target = String(filePath || '').trim();
+  if (!target) return false;
+  if (target === ':memory:') return true;
+  const tmpRoot = String(process.env.TMPDIR || '/tmp').trim() || '/tmp';
+  const ephemeralRoot = path.resolve(path.join(tmpRoot, 'mentoring-portal'));
+  const resolved = path.resolve(target);
+  return resolved === ephemeralRoot || resolved.startsWith(`${ephemeralRoot}${path.sep}`);
+}
+
 function createDatabaseWithFallback() {
   const primaryDbFile = resolveDbFile();
   const candidates = [primaryDbFile, ...resolveFallbackDbFiles(primaryDbFile)];
@@ -304,6 +335,13 @@ function createDatabaseWithFallback() {
   for (const candidate of candidates) {
     try {
       const instance = openDatabaseAt(candidate);
+      const isFallbackCandidate = candidate !== primaryDbFile;
+      if (isFallbackCandidate && !isEphemeralFallbackPath(candidate) && !hasKnownSchemaTables(instance)) {
+        try { instance.close(); } catch {}
+        const emptySchemaError = new Error(`No known schema tables found in fallback candidate "${candidate}"`);
+        emptySchemaError.code = 'DB_EMPTY_CANDIDATE';
+        throw emptySchemaError;
+      }
       if (candidate !== primaryDbFile) {
         console.warn(`[db bootstrap] Switched DB to fallback path "${candidate}" (primary "${primaryDbFile}" failed).`);
       }
