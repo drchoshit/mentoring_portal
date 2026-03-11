@@ -155,6 +155,55 @@ function resolveBackupDbCandidates(primaryDbFile) {
   }
 }
 
+function resolvePersistentDbCandidates(primaryDbFile) {
+  const source = String(primaryDbFile || '').trim();
+  const rootDir = resolvePersistentDataDir()
+    || ((source && source !== ':memory:' && !/^file:/i.test(source)) ? path.dirname(source) : '');
+  if (!rootDir || !fs.existsSync(rootDir)) return [];
+
+  const maxDepthRaw = Number(process.env.DB_DISCOVERY_MAX_DEPTH || 4);
+  const maxDepth = Number.isFinite(maxDepthRaw) ? Math.max(1, Math.floor(maxDepthRaw)) : 4;
+  const maxFilesRaw = Number(process.env.DB_DISCOVERY_MAX_FILES || 400);
+  const maxFiles = Number.isFinite(maxFilesRaw) ? Math.max(20, Math.floor(maxFilesRaw)) : 400;
+
+  const queue = [{ dir: rootDir, depth: 0 }];
+  const collected = [];
+
+  while (queue.length && collected.length < maxFiles) {
+    const { dir, depth } = queue.shift();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < maxDepth) queue.push({ dir: fullPath, depth: depth + 1 });
+        continue;
+      }
+      if (!entry.isFile()) continue;
+
+      const lower = entry.name.toLowerCase();
+      if (lower.endsWith('-wal') || lower.endsWith('-shm') || lower.endsWith('-journal')) continue;
+      if (!(lower.endsWith('.sqlite') || lower.endsWith('.db'))) continue;
+
+      collected.push(fullPath);
+      if (collected.length >= maxFiles) break;
+    }
+  }
+
+  return collected.sort((a, b) => {
+    try {
+      return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+    } catch {
+      return 0;
+    }
+  });
+}
+
 function shouldAllowEphemeralFallback() {
   // Production defaults to strict mode (no silent empty-db boot).
   // Set ALLOW_EPHEMERAL_DB_FALLBACK=1 to explicitly opt in.
@@ -168,6 +217,7 @@ function resolveFallbackDbFiles(primaryDbFile) {
 
   const fallbackCandidates = [];
   fallbackCandidates.push(...resolveLegacySiblingDbFiles(primaryDbFile));
+  fallbackCandidates.push(...resolvePersistentDbCandidates(primaryDbFile));
   fallbackCandidates.push(...resolveBackupDbCandidates(primaryDbFile));
 
   const explicitFallback = String(process.env.DB_FALLBACK_PATH || '').trim();
@@ -205,8 +255,8 @@ function shouldRetryWithSidecarCleanup(filePath, err) {
   const target = String(filePath || '').trim();
   if (!target || target === ':memory:' || /^file:/i.test(target)) return false;
   const code = String(err?.code || '').toUpperCase();
-  const msg = String(err?.message || '').toLowerCase();
-  return code.includes('SHMSIZE') || msg.includes('shm') || isSqliteCorruptError(err);
+  const msg = String(err?.message || '');
+  return code.includes('SHMSIZE') || /SQLITE_IOERR_SHMSIZE/i.test(msg);
 }
 
 function cleanupSqliteSidecars(filePath) {
@@ -546,22 +596,38 @@ function isEphemeralFallbackPath(filePath) {
   return resolved === ephemeralRoot || resolved.startsWith(`${ephemeralRoot}${path.sep}`);
 }
 
+function shouldPreferFreshestDatabase() {
+  const explicit = String(process.env.PREFER_FRESHEST_DB || '').trim();
+  if (explicit) return isTruthyEnv(explicit);
+  // On Render, prefer the newest valid DB candidate over primary path pinning.
+  return isRenderRuntime();
+}
+
+function compareCandidatePriority(a, b) {
+  // Higher score wins.
+  if (a.isEphemeral !== b.isEphemeral) return a.isEphemeral ? -1 : 1;
+  if (a.schemaKnown !== b.schemaKnown) return a.schemaKnown ? 1 : -1;
+  if (a.freshnessKey !== b.freshnessKey) return a.freshnessKey > b.freshnessKey ? 1 : -1;
+  if (a.isPrimary !== b.isPrimary) return a.isPrimary ? 1 : -1;
+  return 0;
+}
+
 function createDatabaseWithFallback() {
   const primaryDbFile = resolveDbFile();
+  const preferFreshest = shouldPreferFreshestDatabase();
   const candidates = [primaryDbFile, ...resolveFallbackDbFiles(primaryDbFile)];
   const seenCandidates = new Set(candidates.map((c) => String(c || '').trim()).filter(Boolean));
   let lastRecoverableError = null;
-  let bestFallback = null;
+  let bestCandidate = null;
 
   for (const candidate of candidates) {
+    const isPrimary = candidate === primaryDbFile;
     try {
       const instance = openDatabaseAt(candidate);
-      if (candidate === primaryDbFile) {
-        return { instance, filePath: candidate };
-      }
-
       const isEphemeral = isEphemeralFallbackPath(candidate);
-      if (!isEphemeral && !hasKnownSchemaTables(instance)) {
+      const schemaKnown = hasKnownSchemaTables(instance);
+
+      if (!isEphemeral && !schemaKnown && !isPrimary) {
         try { instance.close(); } catch {}
         const emptySchemaError = new Error(`No known schema tables found in fallback candidate "${candidate}"`);
         emptySchemaError.code = 'DB_EMPTY_CANDIDATE';
@@ -569,26 +635,37 @@ function createDatabaseWithFallback() {
       }
 
       const freshness = resolveDbFreshness(instance, candidate);
-      console.warn(
-        `[db bootstrap] Fallback candidate "${candidate}" accepted (freshness=${freshness.marker}).`
-      );
+      const current = {
+        instance,
+        filePath: candidate,
+        freshnessKey: freshness.freshnessKey,
+        marker: freshness.marker,
+        isPrimary,
+        isEphemeral,
+        schemaKnown
+      };
 
-      if (!bestFallback || freshness.freshnessKey > bestFallback.freshnessKey) {
-        if (bestFallback?.instance) {
-          try { bestFallback.instance.close(); } catch {}
+      if (isPrimary && !preferFreshest) {
+        return { instance, filePath: candidate };
+      }
+
+      if (!isPrimary) {
+        console.warn(
+          `[db bootstrap] Fallback candidate "${candidate}" accepted (freshness=${freshness.marker}, schema=${schemaKnown ? 'known' : 'unknown'}).`
+        );
+      }
+
+      if (!bestCandidate || compareCandidatePriority(current, bestCandidate) > 0) {
+        if (bestCandidate?.instance) {
+          try { bestCandidate.instance.close(); } catch {}
         }
-        bestFallback = {
-          instance,
-          filePath: candidate,
-          freshnessKey: freshness.freshnessKey,
-          marker: freshness.marker
-        };
+        bestCandidate = current;
       } else {
         try { instance.close(); } catch {}
       }
     } catch (e) {
       if (!isRecoverableDbOpenError(e)) throw e;
-      if (candidate === primaryDbFile && isSqliteCorruptError(e)) {
+      if (isPrimary && isSqliteCorruptError(e)) {
         const recoveredCandidate = tryCreateRecoveredDb(primaryDbFile);
         const key = String(recoveredCandidate || '').trim();
         if (key && !seenCandidates.has(key)) {
@@ -604,11 +681,17 @@ function createDatabaseWithFallback() {
     }
   }
 
-  if (bestFallback) {
-    console.warn(
-      `[db bootstrap] Switched DB to freshest fallback "${bestFallback.filePath}" (freshness=${bestFallback.marker}, primary "${primaryDbFile}" failed).`
-    );
-    return { instance: bestFallback.instance, filePath: bestFallback.filePath };
+  if (bestCandidate) {
+    if (bestCandidate.filePath !== primaryDbFile) {
+      console.warn(
+        `[db bootstrap] Switched DB to freshest fallback "${bestCandidate.filePath}" (freshness=${bestCandidate.marker}, primary "${primaryDbFile}" unavailable or stale).`
+      );
+    } else {
+      console.warn(
+        `[db bootstrap] Using primary DB "${primaryDbFile}" (freshness=${bestCandidate.marker}, schema=${bestCandidate.schemaKnown ? 'known' : 'unknown'}).`
+      );
+    }
+    return { instance: bestCandidate.instance, filePath: bestCandidate.filePath };
   }
 
   if (lastRecoverableError) throw lastRecoverableError;
