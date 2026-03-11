@@ -714,6 +714,8 @@ function BackupTab() {
   const [forensicReportFile, setForensicReportFile] = useState('');
   const [forensicSummary, setForensicSummary] = useState(null);
   const [forensicLogs, setForensicLogs] = useState([]);
+  const [fullBusy, setFullBusy] = useState(false);
+  const [fullRestoreFile, setFullRestoreFile] = useState(null);
   const [mergeBusy, setMergeBusy] = useState(false);
   const [mergeFile, setMergeFile] = useState(null);
   const [mergeTables, setMergeTables] = useState('week_records,subject_records');
@@ -925,6 +927,51 @@ function BackupTab() {
     }
   }
 
+  async function downloadFullSnapshot() {
+    setError('');
+    setStatus('');
+    setFullBusy(true);
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `mentoring_full_${stamp}.sqlite`;
+      await downloadFile('/api/backups/full-export', fileName);
+      setStatus(`전체 데이터 다운로드 완료: ${fileName}`);
+    } catch (e) {
+      setError(e.message || '전체 데이터 다운로드 실패');
+    } finally {
+      setFullBusy(false);
+    }
+  }
+
+  async function restoreFullSnapshot() {
+    if (!fullRestoreFile) {
+      setError('복원할 .sqlite 파일을 선택하세요.');
+      return;
+    }
+    const ok = confirm(
+      '선택한 전체 데이터 파일로 현재 DB를 덮어쓸까요?\n\n주의: 적용 후 서비스 재시작(Deploy/Manual Restart)이 필요합니다.'
+    );
+    if (!ok) return;
+
+    setError('');
+    setStatus('');
+    setFullBusy(true);
+    try {
+      const body = new FormData();
+      body.append('file', fullRestoreFile);
+      const r = await api('/api/backups/full-import', { method: 'POST', body });
+      const warnings = Array.isArray(r?.warnings) && r.warnings.length
+        ? ` / 경고: ${r.warnings.join(' | ')}`
+        : '';
+      setStatus(`전체 복원 파일 적용 완료 (restart 필요)${warnings}`);
+      await load();
+    } catch (e) {
+      setError(e.message || '전체 복원 실패');
+    } finally {
+      setFullBusy(false);
+    }
+  }
+
   return (
     <Section title="백업">
       {error ? <div className="text-sm text-red-600">{error}</div> : null}
@@ -938,6 +985,37 @@ function BackupTab() {
 
       <div className="mt-4 text-xs text-slate-600">
         서버가 30분마다 자동 백업하며, 이 버튼은 즉시 백업 파일을 생성합니다.
+      </div>
+
+      <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50/60 p-4">
+        <div className="text-sm font-semibold text-sky-900">전체 데이터 수동 백업/복원 (SQLite)</div>
+        <div className="mt-1 text-xs text-sky-800">
+          텍스트/사진(BLOB) 포함 전체 DB를 파일로 내려받고, 같은 파일을 다시 올려 전체 복원할 수 있습니다.
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button className="btn-primary" onClick={downloadFullSnapshot} disabled={fullBusy || forensicBusy}>
+            전체 데이터 파일 다운로드
+          </button>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
+          <input
+            type="file"
+            accept=".sqlite,.db,application/octet-stream"
+            className="input"
+            onChange={(e) => setFullRestoreFile(e.target.files?.[0] || null)}
+            disabled={fullBusy || forensicBusy}
+          />
+          <button
+            className="btn-ghost"
+            onClick={restoreFullSnapshot}
+            disabled={fullBusy || forensicBusy || !fullRestoreFile}
+          >
+            선택 파일 전체 복원
+          </button>
+        </div>
+        <div className="mt-1 text-[11px] text-slate-600">
+          복원 적용 후에는 Render에서 수동 재시작(Manual Restart) 또는 재배포가 필요합니다.
+        </div>
       </div>
 
       <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50/60 p-4">

@@ -1,7 +1,10 @@
 import express from 'express';
 import multer from 'multer';
+import fs from 'node:fs';
+import path from 'node:path';
 import { requireRole } from '../lib/auth.js';
 import { writeAudit } from '../lib/audit.js';
+import { dbFilePath } from '../lib/db.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -9,6 +12,10 @@ const upload = multer({
 });
 
 const MAX_LEGACY_IMAGES = 3;
+const MIN_FREE_BYTES_BEFORE_LEGACY_IMAGE_UPLOAD = Math.max(
+  32 * 1024 * 1024,
+  Number(process.env.MIN_FREE_BYTES_BEFORE_LEGACY_IMAGE_UPLOAD || 128 * 1024 * 1024)
+);
 const ALLOWED_IMAGE_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -49,6 +56,34 @@ function tryWriteAudit(db, payload) {
   } catch (e) {
     console.error('writeAudit failed:', e?.message || e);
   }
+}
+
+function resolveStorageProbePath() {
+  const explicit = String(process.env.RENDER_DISK_PATH || process.env.PERSISTENT_DATA_DIR || '').trim();
+  if (explicit) return path.isAbsolute(explicit) ? explicit : path.resolve(process.cwd(), explicit);
+  if (process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.RENDER_INSTANCE_ID) return '/var/data';
+  return path.dirname(dbFilePath);
+}
+
+function getDiskFreeBytes(targetPath) {
+  try {
+    const stat = fs.statfsSync(targetPath);
+    const blockSize = Number(stat?.bsize || stat?.frsize || 0);
+    const blocks = Number(stat?.bavail ?? stat?.bfree ?? 0);
+    if (!Number.isFinite(blockSize) || !Number.isFinite(blocks) || blockSize <= 0 || blocks < 0) return null;
+    return blockSize * blocks;
+  } catch {
+    return null;
+  }
+}
+
+function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return 'unknown';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 export default function studentRoutes(db) {
@@ -215,6 +250,14 @@ export default function studentRoutes(db) {
 
       const files = Array.isArray(req.files) ? req.files : [];
       if (!files.length) return res.status(400).json({ error: '파일이 없습니다.' });
+      const uploadBytes = files.reduce((sum, file) => sum + Number(file?.size || 0), 0);
+      const freeBytes = getDiskFreeBytes(resolveStorageProbePath());
+      const required = uploadBytes + MIN_FREE_BYTES_BEFORE_LEGACY_IMAGE_UPLOAD;
+      if (freeBytes != null && freeBytes < required) {
+        return res.status(507).json({
+          error: `저장공간이 부족합니다. 관리자에게 문의하세요. (required=${formatBytes(required)}, free=${formatBytes(freeBytes)})`
+        });
+      }
 
       if (files.some((f) => !ALLOWED_IMAGE_TYPES.has(String(f.mimetype || '').toLowerCase()))) {
         return res.status(400).json({ error: '이미지 파일만 업로드할 수 있습니다.' });

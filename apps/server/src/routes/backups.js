@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
+import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -90,13 +91,57 @@ function isPathWithin(baseDir, targetPath) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return 'unknown';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function getDiskFreeBytes(targetPath) {
+  try {
+    const stat = fs.statfsSync(targetPath);
+    const blockSize = Number(stat?.bsize || stat?.frsize || 0);
+    const blocks = Number(stat?.bavail ?? stat?.bfree ?? 0);
+    if (!Number.isFinite(blockSize) || !Number.isFinite(blocks) || blockSize <= 0 || blocks < 0) return null;
+    return blockSize * blocks;
+  } catch {
+    return null;
+  }
+}
+
 export default function backupRoutes(db) {
   const router = express.Router();
   router.use(requireRole('director', 'admin'));
 
+  const FULL_IMPORT_MAX_BYTES = Math.max(
+    50 * 1024 * 1024,
+    Number(process.env.FULL_IMPORT_MAX_BYTES || 1024 * 1024 * 1024)
+  );
+  const BACKUP_MIN_HEADROOM_BYTES = Math.max(
+    32 * 1024 * 1024,
+    Number(process.env.BACKUP_MIN_HEADROOM_BYTES || 64 * 1024 * 1024)
+  );
+  const FULL_IMPORT_TMP_DIR = path.join(os.tmpdir(), 'mentoring-full-imports');
+  if (!fs.existsSync(FULL_IMPORT_TMP_DIR)) fs.mkdirSync(FULL_IMPORT_TMP_DIR, { recursive: true });
+
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 50 * 1024 * 1024 }
+  });
+  const fullUpload = multer({
+    storage: multer.diskStorage({
+      destination(req, file, cb) {
+        cb(null, FULL_IMPORT_TMP_DIR);
+      },
+      filename(req, file, cb) {
+        const ext = String(path.extname(String(file?.originalname || '')).toLowerCase() || '.sqlite');
+        cb(null, `full-import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
+      }
+    }),
+    limits: { fileSize: FULL_IMPORT_MAX_BYTES }
   });
 
   const DB_PATH = dbFilePath;
@@ -168,13 +213,55 @@ export default function backupRoutes(db) {
   }
 
   function resolveBackupSourceCandidates() {
-    return uniqPaths([DB_PATH, PRIMARY_DB_PATH]).filter((p) => {
+    const candidates = uniqPaths([PRIMARY_DB_PATH, DB_PATH]).filter((p) => {
       try {
         return fs.existsSync(p) && fs.statSync(p).isFile();
       } catch {
         return false;
       }
     });
+    const outsideBackup = candidates.filter((p) => !isPathWithin(BACKUP_DIR, p));
+    return outsideBackup.length ? [...outsideBackup, ...candidates.filter((p) => isPathWithin(BACKUP_DIR, p))] : candidates;
+  }
+
+  function pruneOldestBackupsUntilBytes(requiredBytes, keepMin = 1) {
+    const files = listBackupFiles();
+    const removed = [];
+    let free = getDiskFreeBytes(BACKUP_DIR);
+    if (free == null) return { freeBytes: null, removed };
+
+    for (let i = files.length - 1; i >= keepMin && free < requiredBytes; i -= 1) {
+      const file = files[i];
+      const fullPath = path.join(BACKUP_DIR, file);
+      try {
+        fs.unlinkSync(fullPath);
+        removed.push(file);
+      } catch {}
+      free = getDiskFreeBytes(BACKUP_DIR);
+      if (free == null) break;
+    }
+    return { freeBytes: free, removed };
+  }
+
+  function ensureBackupSpaceForSource(sourcePath) {
+    const src = String(sourcePath || '').trim();
+    if (!src) return;
+    const sourceSize = Number(fs.statSync(src).size || 0);
+    const required = sourceSize + BACKUP_MIN_HEADROOM_BYTES;
+    let free = getDiskFreeBytes(BACKUP_DIR);
+
+    if (free != null && free < required) {
+      pruneOldestBackupsUntilBytes(required, 1);
+      free = getDiskFreeBytes(BACKUP_DIR);
+    }
+
+    if (free != null && free < required) {
+      const err = new Error(
+        `ENOSPC not enough space for backup copy (required=${formatBytes(required)}, free=${formatBytes(free)}, source=${src})`
+      );
+      err.code = 'ENOSPC';
+      throw err;
+    }
   }
 
   function backupNow(reason = 'manual') {
@@ -187,7 +274,14 @@ export default function backupRoutes(db) {
 
     let lastError = null;
     for (const source of sources) {
+      if (reason === 'interval' && isPathWithin(BACKUP_DIR, source)) {
+        const err = new Error(`Skipped interval backup from backup-origin source: ${source}`);
+        err.code = 'BACKUP_SOURCE_LOOP';
+        lastError = err;
+        continue;
+      }
       try {
+        ensureBackupSpaceForSource(source);
         fs.copyFileSync(source, out);
         pruneByKeepMax();
         return { out, source };
@@ -401,6 +495,28 @@ export default function backupRoutes(db) {
     } finally {
       try { tmp?.close(); } catch {}
     }
+  }
+
+  function canOpenAsSqlite(filePath) {
+    const target = String(filePath || '').trim();
+    if (!target) return false;
+    try {
+      const fd = fs.openSync(target, 'r');
+      const buf = Buffer.alloc(16);
+      fs.readSync(fd, buf, 0, 16, 0);
+      fs.closeSync(fd);
+      return buf.toString('utf8', 0, 15) === 'SQLite format 3';
+    } catch {
+      return false;
+    }
+  }
+
+  function removeFileQuietly(filePath) {
+    const target = String(filePath || '').trim();
+    if (!target) return;
+    try {
+      if (fs.existsSync(target)) fs.unlinkSync(target);
+    } catch {}
   }
 
   function promoteCandidateToPrimary(rawCandidatePath) {
@@ -932,6 +1048,115 @@ export default function backupRoutes(db) {
     } catch (e) {
       db.pragma('foreign_keys = ON');
       return res.status(500).json({ error: e?.message || 'Forensic merge failed' });
+    }
+  });
+
+  router.get('/full-export', (req, res) => {
+    try {
+      const sources = resolveBackupSourceCandidates();
+      if (!sources.length) {
+        return res.status(500).json({ error: `No DB source found (active=${DB_PATH}, primary=${PRIMARY_DB_PATH})` });
+      }
+      const source = sources.find((p) => !isPathWithin(BACKUP_DIR, p)) || sources[0];
+      try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch {}
+
+      const stamp = timestampStamp();
+      const fileName = `mentoring_full_${stamp}.sqlite`;
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('X-Backup-Source', source);
+
+      const stream = fs.createReadStream(source);
+      stream.on('error', (e) => {
+        if (!res.headersSent) {
+          res.status(500).json({ error: e?.message || 'Failed to stream DB file' });
+        } else {
+          res.destroy(e);
+        }
+      });
+      return stream.pipe(res);
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Full export failed' });
+    }
+  });
+
+  router.post('/full-import', fullUpload.single('file'), (req, res) => {
+    const uploadedPath = String(req.file?.path || '').trim();
+    if (!uploadedPath) return res.status(400).json({ error: '업로드 파일이 없습니다.' });
+
+    let tmpTargetPath = '';
+    try {
+      if (!canOpenAsSqlite(uploadedPath)) {
+        return res.status(400).json({ error: 'SQLite 파일 형식이 아닙니다.' });
+      }
+
+      const schema = inspectSchema(uploadedPath);
+      if (!schema.schemaKnown && !schema.hasRecoverableTables) {
+        return res.status(400).json({ error: '복원 가능한 테이블 구조를 찾지 못했습니다.' });
+      }
+
+      let quick = null;
+      let probe = null;
+      try {
+        probe = new BetterSqlite(uploadedPath, { readonly: true, fileMustExist: true });
+        const row = probe.prepare('PRAGMA quick_check').get();
+        quick = String(row?.quick_check || '').trim().toLowerCase();
+      } finally {
+        try { probe?.close(); } catch {}
+      }
+      if (quick && quick !== 'ok') {
+        return res.status(400).json({ error: `업로드 파일 무결성 검사 실패: ${quick}` });
+      }
+
+      const target = path.resolve(PRIMARY_DB_PATH);
+      const sourceBytes = Number(fs.statSync(uploadedPath).size || 0);
+      const free = getDiskFreeBytes(path.dirname(target));
+      const required = sourceBytes + BACKUP_MIN_HEADROOM_BYTES;
+      if (free != null && free < required) {
+        return res.status(507).json({
+          error: `ENOSPC not enough space for full import (required=${formatBytes(required)}, free=${formatBytes(free)})`
+        });
+      }
+
+      let preImportBackup = null;
+      let preImportBackupSource = null;
+      const warnings = [];
+      try {
+        const saved = backupNow('preimport');
+        preImportBackup = path.basename(saved.out);
+        preImportBackupSource = saved.source;
+      } catch (e) {
+        warnings.push(`preimport backup failed: ${String(e?.message || e)}`);
+      }
+
+      removeSqliteSidecars(target);
+      tmpTargetPath = `${target}.import-${Date.now()}.tmp`;
+      fs.copyFileSync(uploadedPath, tmpTargetPath);
+
+      try {
+        fs.renameSync(tmpTargetPath, target);
+      } catch {
+        removeFileQuietly(target);
+        fs.renameSync(tmpTargetPath, target);
+      }
+
+      removeSqliteSidecars(target);
+
+      return res.json({
+        ok: true,
+        imported_to: target,
+        bytes: sourceBytes,
+        schema,
+        pre_import_backup: preImportBackup,
+        pre_import_backup_source: preImportBackupSource,
+        warnings,
+        restart_required: true
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Full import failed' });
+    } finally {
+      removeFileQuietly(uploadedPath);
+      removeFileQuietly(tmpTargetPath);
     }
   });
 

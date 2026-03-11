@@ -1,11 +1,18 @@
 import express from 'express';
 import multer from 'multer';
 import crypto from 'crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import { verifyWrongAnswerUploadToken } from '../lib/problemUploadToken.js';
+import { dbFilePath } from '../lib/db.js';
 
 const MAX_IMAGE_COUNT = 12;
 const MAX_FILE_SIZE = 12 * 1024 * 1024;
+const MIN_FREE_BYTES_BEFORE_UPLOAD = Math.max(
+  32 * 1024 * 1024,
+  Number(process.env.MIN_FREE_BYTES_BEFORE_IMAGE_UPLOAD || 128 * 1024 * 1024)
+);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -34,6 +41,34 @@ function ensureWrongAnswerImagesTable(db) {
     CREATE INDEX IF NOT EXISTS idx_wrong_answer_images_student_week
       ON wrong_answer_images(student_id, week_id, problem_index, created_at);
   `);
+}
+
+function resolveStorageProbePath() {
+  const explicit = String(process.env.RENDER_DISK_PATH || process.env.PERSISTENT_DATA_DIR || '').trim();
+  if (explicit) return path.isAbsolute(explicit) ? explicit : path.resolve(process.cwd(), explicit);
+  if (process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.RENDER_INSTANCE_ID) return '/var/data';
+  return path.dirname(dbFilePath);
+}
+
+function getDiskFreeBytes(targetPath) {
+  try {
+    const stat = fs.statfsSync(targetPath);
+    const blockSize = Number(stat?.bsize || stat?.frsize || 0);
+    const blocks = Number(stat?.bavail ?? stat?.bfree ?? 0);
+    if (!Number.isFinite(blockSize) || !Number.isFinite(blocks) || blockSize <= 0 || blocks < 0) return null;
+    return blockSize * blocks;
+  } catch {
+    return null;
+  }
+}
+
+function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return 'unknown';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function escapeHtml(value) {
@@ -336,6 +371,15 @@ export default function problemUploadRoutes(db) {
 
       const files = Array.isArray(req.files) ? req.files : [];
       if (!files.length) return res.status(400).json({ error: '업로드할 이미지가 없습니다.' });
+      const uploadBytes = files.reduce((sum, file) => sum + Number(file?.size || 0), 0);
+      const probePath = resolveStorageProbePath();
+      const freeBytes = getDiskFreeBytes(probePath);
+      const required = uploadBytes + MIN_FREE_BYTES_BEFORE_UPLOAD;
+      if (freeBytes != null && freeBytes < required) {
+        return res.status(507).json({
+          error: `저장공간이 부족합니다. 관리자에게 문의하세요. (required=${formatBytes(required)}, free=${formatBytes(freeBytes)})`
+        });
+      }
 
       const weekRecord = db.prepare('SELECT id FROM week_records WHERE student_id=? AND week_id=?').get(studentId, weekId);
       if (!weekRecord?.id) return res.status(404).json({ error: '주간 기록을 찾지 못했습니다.' });
