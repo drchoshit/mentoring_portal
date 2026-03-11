@@ -2,6 +2,70 @@ import express from 'express';
 import { requireRole } from '../lib/auth.js';
 import { writeAudit } from '../lib/audit.js';
 
+const ASSIGNMENT_KEEP_RECENT_WEEKS = Math.max(
+  1,
+  Number(process.env.ASSIGNMENT_KEEP_RECENT_WEEKS || 3)
+);
+
+function cleanupOldAssignmentHistory(db, keepRecentWeeks = ASSIGNMENT_KEEP_RECENT_WEEKS) {
+  const keepCount = Math.max(1, Number(keepRecentWeeks || 3));
+  const keepRows = db
+    .prepare('SELECT id FROM weeks ORDER BY id DESC LIMIT ?')
+    .all(keepCount);
+  const keepIds = keepRows
+    .map((row) => Number(row?.id || 0))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  if (!keepIds.length) {
+    return {
+      keep_week_ids: [],
+      cleared_week_records: 0,
+      deleted_wrong_answer_images: 0
+    };
+  }
+
+  const placeholders = keepIds.map(() => '?').join(',');
+  const deleteSql = `week_id NOT IN (${placeholders})`;
+  const hasWeekRecords = Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='week_records'").get()
+  );
+  const hasWrongAnswerImages = Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wrong_answer_images'").get()
+  );
+
+  const clearWeekRecords = hasWeekRecords
+    ? db.prepare(`
+      UPDATE week_records
+      SET
+        e_wrong_answer_distribution = '{}',
+        updated_at = datetime('now')
+      WHERE ${deleteSql}
+        AND e_wrong_answer_distribution IS NOT NULL
+        AND TRIM(e_wrong_answer_distribution) != ''
+        AND TRIM(e_wrong_answer_distribution) != '{}'
+    `)
+    : null;
+
+  const deleteWrongAnswerImages = hasWrongAnswerImages
+    ? db.prepare(`
+      DELETE FROM wrong_answer_images
+      WHERE ${deleteSql}
+    `)
+    : null;
+
+  const tx = db.transaction(() => {
+    const cleared = clearWeekRecords ? clearWeekRecords.run(...keepIds) : { changes: 0 };
+    const deletedImages = deleteWrongAnswerImages ? deleteWrongAnswerImages.run(...keepIds) : { changes: 0 };
+    return {
+      keep_week_ids: keepIds,
+      cleared_week_records: Number(cleared?.changes || 0),
+      deleted_wrong_answer_images: Number(deletedImages?.changes || 0)
+    };
+  });
+
+  return tx();
+}
+
 export default function weekRoutes(db) {
   const router = express.Router();
 
@@ -33,8 +97,18 @@ export default function weekRoutes(db) {
           `
         ).run(newWeekId, prevWeek.id);
       }
-      writeAudit(db, { user_id: req.user.id, action: 'create', entity: 'week', entity_id: newWeekId, details: { label } });
-      return res.json({ id: newWeekId });
+      const cleanupResult = cleanupOldAssignmentHistory(db, ASSIGNMENT_KEEP_RECENT_WEEKS);
+      writeAudit(db, {
+        user_id: req.user.id,
+        action: 'create',
+        entity: 'week',
+        entity_id: newWeekId,
+        details: { label, cleanup: cleanupResult }
+      });
+      return res.json({
+        id: newWeekId,
+        cleanup: cleanupResult
+      });
     } catch {
       return res.status(400).json({ error: 'Week label exists' });
     }

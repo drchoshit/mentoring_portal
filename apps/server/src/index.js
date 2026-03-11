@@ -38,7 +38,7 @@ const PRIMARY_DB_PATH = (() => {
 const BACKUP_DIR = process.env.BACKUP_DIR
   ? (path.isAbsolute(process.env.BACKUP_DIR) ? process.env.BACKUP_DIR : path.resolve(process.cwd(), process.env.BACKUP_DIR))
   : path.join(path.dirname(PRIMARY_DB_PATH), 'backups');
-const BACKUP_KEEP_MAX = Math.max(10, Number(process.env.BACKUP_KEEP_MAX || 200));
+const BACKUP_KEEP_MAX = Math.max(1, Number(process.env.BACKUP_KEEP_MAX || 15));
 const BACKUP_MIN_HEADROOM_BYTES = Math.max(
   32 * 1024 * 1024,
   Number(process.env.BACKUP_MIN_HEADROOM_BYTES || 64 * 1024 * 1024)
@@ -148,6 +148,8 @@ function isSqliteFullError(err) {
   const msg = String(err.message || '');
   return code === 'SQLITE_FULL' || /database or disk is full/i.test(msg);
 }
+
+pruneBackupFilesByCount(BACKUP_KEEP_MAX);
 
 try {
   initDb();
