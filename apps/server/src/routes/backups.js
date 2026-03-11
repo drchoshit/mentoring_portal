@@ -278,6 +278,67 @@ export default function backupRoutes(db) {
     return payload;
   }
 
+  function getTableColumns(tableName) {
+    const safe = quoteIdent(tableName);
+    return new Set(
+      db.prepare(`PRAGMA table_info(${safe})`).all().map((c) => String(c.name || '').trim()).filter(Boolean)
+    );
+  }
+
+  function rowTimestamp(row = {}) {
+    return normalizeTimestamp(row?.updated_at || row?.created_at || '');
+  }
+
+  function collectMergeRowsFromForensicPayload(payload, { since = '', cutoff = '', tableFilter = null } = {}) {
+    const allowedTables = new Set(
+      Array.isArray(tableFilter) && tableFilter.length
+        ? tableFilter
+        : ['week_records', 'subject_records', 'feeds', 'penalties', 'students']
+    );
+
+    const rowsByTable = new Map();
+    const extracts = Array.isArray(payload?.extracts) ? payload.extracts : [];
+    for (const extract of extracts) {
+      const tables = extract?.tables || {};
+      for (const tableName of Object.keys(tables)) {
+        if (!allowedTables.has(tableName)) continue;
+        const tableInfo = tables[tableName] || {};
+        const rows = Array.isArray(tableInfo.rows) ? tableInfo.rows : [];
+        if (!rows.length) continue;
+
+        if (!rowsByTable.has(tableName)) rowsByTable.set(tableName, new Map());
+        const idMap = rowsByTable.get(tableName);
+
+        for (const rawRow of rows) {
+          if (!rawRow || typeof rawRow !== 'object') continue;
+          if (rawRow.id === null || rawRow.id === undefined) continue;
+          const id = Number(rawRow.id);
+          if (!Number.isFinite(id)) continue;
+
+          const ts = rowTimestamp(rawRow);
+          if (since && ts && ts < since) continue;
+          if (cutoff && ts && ts > cutoff) continue;
+
+          const prev = idMap.get(id);
+          if (!prev) {
+            idMap.set(id, { row: rawRow, ts });
+            continue;
+          }
+          // Keep the newest timestamp row for the same id.
+          if (ts && prev.ts) {
+            if (ts > prev.ts) idMap.set(id, { row: rawRow, ts });
+            continue;
+          }
+          if (ts && !prev.ts) {
+            idMap.set(id, { row: rawRow, ts });
+          }
+        }
+      }
+    }
+
+    return rowsByTable;
+  }
+
   function pickTopCandidateFromReport(payload) {
     const topCandidates = Array.isArray(payload?.topCandidates) ? payload.topCandidates : [];
     for (const c of topCandidates) {
@@ -742,6 +803,135 @@ export default function backupRoutes(db) {
       }
     } catch (e) {
       return res.status(500).json({ error: e?.message || 'Promote failed' });
+    }
+  });
+
+  router.post('/forensics/merge-report', upload.single('file'), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Forensic report file is required' });
+    let payload = null;
+    try {
+      payload = JSON.parse(req.file.buffer.toString('utf8'));
+    } catch {
+      return res.status(400).json({ error: 'Invalid forensic report JSON' });
+    }
+    if (!payload || !Array.isArray(payload.extracts)) {
+      return res.status(400).json({ error: 'Invalid forensic report format' });
+    }
+
+    const since = normalizeTimestamp(req.body?.since);
+    const cutoff = normalizeTimestamp(req.body?.cutoff);
+    const selectedTablesRaw = String(req.body?.tables || '').trim();
+    const tableFilter = selectedTablesRaw
+      ? selectedTablesRaw.split(',').map((t) => String(t || '').trim()).filter(Boolean)
+      : null;
+
+    const rowsByTable = collectMergeRowsFromForensicPayload(payload, {
+      since,
+      cutoff,
+      tableFilter
+    });
+
+    const summary = {};
+    let totalInserted = 0;
+    let totalUpdated = 0;
+    let totalSkipped = 0;
+
+    try {
+      db.pragma('foreign_keys = OFF');
+      const tx = db.transaction(() => {
+        for (const [tableName, idMap] of rowsByTable.entries()) {
+          const stats = {
+            input_rows: idMap.size,
+            inserted: 0,
+            updated: 0,
+            skipped_older: 0,
+            skipped_invalid: 0,
+            skipped_no_ts: 0
+          };
+          summary[tableName] = stats;
+
+          const safe = quoteIdent(tableName);
+          const cols = getTableColumns(tableName);
+          if (!cols.size || !cols.has('id')) {
+            stats.skipped_invalid += idMap.size;
+            totalSkipped += idMap.size;
+            continue;
+          }
+
+          const selectById = db.prepare(`SELECT * FROM ${safe} WHERE id = ?`);
+
+          for (const { row } of idMap.values()) {
+            const id = Number(row.id);
+            if (!Number.isFinite(id)) {
+              stats.skipped_invalid += 1;
+              totalSkipped += 1;
+              continue;
+            }
+
+            const existing = selectById.get(id);
+            if (!existing) {
+              const insertCols = Object.keys(row).filter((c) => cols.has(c));
+              if (!insertCols.length) {
+                stats.skipped_invalid += 1;
+                totalSkipped += 1;
+                continue;
+              }
+              const colSql = insertCols.map(quoteIdent).join(', ');
+              const placeholders = insertCols.map((c) => `@${c}`).join(', ');
+              const insertStmt = db.prepare(`INSERT INTO ${safe} (${colSql}) VALUES (${placeholders})`);
+              const data = {};
+              for (const c of insertCols) data[c] = row[c] ?? null;
+              insertStmt.run(data);
+              stats.inserted += 1;
+              totalInserted += 1;
+              continue;
+            }
+
+            const incomingTs = rowTimestamp(row);
+            const existingTs = rowTimestamp(existing);
+            if (!incomingTs && existingTs) {
+              stats.skipped_no_ts += 1;
+              totalSkipped += 1;
+              continue;
+            }
+            if (incomingTs && existingTs && incomingTs <= existingTs) {
+              stats.skipped_older += 1;
+              totalSkipped += 1;
+              continue;
+            }
+
+            const updateCols = Object.keys(row).filter((c) => c !== 'id' && cols.has(c));
+            if (!updateCols.length) {
+              stats.skipped_invalid += 1;
+              totalSkipped += 1;
+              continue;
+            }
+            const setSql = updateCols.map((c) => `${quoteIdent(c)}=@${c}`).join(', ');
+            const updateStmt = db.prepare(`UPDATE ${safe} SET ${setSql} WHERE id=@id`);
+            const data = { id };
+            for (const c of updateCols) data[c] = row[c] ?? null;
+            updateStmt.run(data);
+            stats.updated += 1;
+            totalUpdated += 1;
+          }
+        }
+      });
+
+      tx();
+      db.pragma('foreign_keys = ON');
+      return res.json({
+        ok: true,
+        since: since || null,
+        cutoff: cutoff || null,
+        merged_tables: Object.keys(summary).length,
+        inserted: totalInserted,
+        updated: totalUpdated,
+        skipped: totalSkipped,
+        summary
+      });
+    } catch (e) {
+      db.pragma('foreign_keys = ON');
+      return res.status(500).json({ error: e?.message || 'Forensic merge failed' });
     }
   });
 

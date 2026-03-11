@@ -714,6 +714,10 @@ function BackupTab() {
   const [forensicReportFile, setForensicReportFile] = useState('');
   const [forensicSummary, setForensicSummary] = useState(null);
   const [forensicLogs, setForensicLogs] = useState([]);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeFile, setMergeFile] = useState(null);
+  const [mergeTables, setMergeTables] = useState('week_records,subject_records');
+  const [mergeResult, setMergeResult] = useState(null);
 
   async function load() {
     setError('');
@@ -888,6 +892,39 @@ function BackupTab() {
     }
   }
 
+  async function mergeForensicReport() {
+    if (!mergeFile) {
+      setError('병합할 포렌식 JSON 파일을 선택하세요.');
+      return;
+    }
+    const ok = confirm('선택한 포렌식 JSON 데이터를 현재 DB에 병합할까요? 같은 id는 updated_at 기준 최신 값만 반영됩니다.');
+    if (!ok) return;
+
+    setError('');
+    setStatus('');
+    setMergeBusy(true);
+    try {
+      const body = new FormData();
+      body.append('file', mergeFile);
+      const since = toIsoOrEmpty(forensicSince);
+      const cutoff = toIsoOrEmpty(forensicCutoff);
+      if (since) body.append('since', since);
+      if (cutoff) body.append('cutoff', cutoff);
+      if (String(mergeTables || '').trim()) {
+        body.append('tables', String(mergeTables).trim());
+      }
+
+      const r = await api('/api/backups/forensics/merge-report', { method: 'POST', body });
+      setMergeResult(r);
+      setStatus(`병합 완료: table ${r?.merged_tables ?? 0}개 / inserted ${r?.inserted ?? 0} / updated ${r?.updated ?? 0} / skipped ${r?.skipped ?? 0}`);
+      await loadLatestForensics({ silent: true });
+    } catch (e) {
+      setError(e.message || '포렌식 리포트 병합 실패');
+    } finally {
+      setMergeBusy(false);
+    }
+  }
+
   return (
     <Section title="백업">
       {error ? <div className="text-sm text-red-600">{error}</div> : null}
@@ -948,6 +985,58 @@ function BackupTab() {
           <button className="btn-ghost" onClick={downloadForensicReport} disabled={forensicBusy || !forensicReportFile}>
             리포트 JSON 다운로드
           </button>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50/70 p-3">
+          <div className="text-xs font-semibold text-emerald-900">포렌식 리포트 병합 (업로드)</div>
+          <div className="mt-1 text-[11px] text-emerald-800">
+            스냅샷/외부에서 받은 포렌식 JSON 파일을 업로드해 현재 DB에 누락 행을 합칩니다.
+          </div>
+
+          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_auto]">
+            <input
+              type="file"
+              accept=".json,application/json"
+              className="input"
+              onChange={(e) => {
+                const f = e.target.files?.[0] || null;
+                setMergeFile(f);
+              }}
+              disabled={forensicBusy || mergeBusy}
+            />
+            <input
+              className="input"
+              placeholder="대상 테이블 (콤마구분)"
+              value={mergeTables}
+              onChange={(e) => setMergeTables(e.target.value)}
+              disabled={forensicBusy || mergeBusy}
+            />
+            <button
+              className="btn-primary"
+              onClick={mergeForensicReport}
+              disabled={forensicBusy || mergeBusy || !mergeFile}
+            >
+              {mergeBusy ? '병합 중...' : '선택 리포트 병합'}
+            </button>
+          </div>
+          <div className="mt-1 text-[11px] text-slate-600">
+            기본값: <span className="font-mono">week_records,subject_records</span>
+          </div>
+
+          {mergeResult ? (
+            <div className="mt-2 rounded border border-emerald-200 bg-white p-2">
+              <div className="text-[11px] text-slate-700">
+                merged_tables={mergeResult.merged_tables ?? 0}, inserted={mergeResult.inserted ?? 0}, updated={mergeResult.updated ?? 0}, skipped={mergeResult.skipped ?? 0}
+              </div>
+              <div className="mt-1 space-y-1">
+                {Object.entries(mergeResult.summary || {}).map(([table, s]) => (
+                  <div key={table} className="text-[11px] text-slate-700">
+                    {table}: input {s.input_rows ?? 0} / ins {s.inserted ?? 0} / upd {s.updated ?? 0} / older {s.skipped_older ?? 0} / invalid {s.skipped_invalid ?? 0} / no_ts {s.skipped_no_ts ?? 0}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {forensicSummary ? (
