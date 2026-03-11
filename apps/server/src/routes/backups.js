@@ -29,6 +29,45 @@ function resolveForensicScriptPath() {
   return candidates[0] || path.resolve(process.cwd(), 'scripts/forensic-dump.mjs');
 }
 
+function uniqPaths(items) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of items) {
+    const p = String(raw || '').trim();
+    if (!p) continue;
+    const key = path.resolve(p);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+function resolvePersistentRoot(dbPath) {
+  const explicit = String(process.env.RENDER_DISK_PATH || process.env.PERSISTENT_DATA_DIR || '').trim();
+  if (explicit) return path.isAbsolute(explicit) ? explicit : path.resolve(process.cwd(), explicit);
+  if (process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.RENDER_INSTANCE_ID) return '/var/data';
+
+  const dbDir = path.dirname(String(dbPath || ''));
+  if (dbDir) {
+    if (path.basename(dbDir) === 'backups') return path.dirname(dbDir);
+    return dbDir;
+  }
+
+  return path.resolve(process.cwd(), 'data');
+}
+
+function resolveForensicDirs({ dbPath, explicitForensicDir }) {
+  const persistentRoot = resolvePersistentRoot(dbPath);
+  const dirs = [];
+  if (explicitForensicDir) dirs.push(explicitForensicDir);
+  dirs.push(path.join(persistentRoot, 'forensics'));
+  dirs.push(path.join(path.dirname(dbPath), 'forensics'));
+  dirs.push(path.resolve(process.cwd(), 'forensics'));
+  dirs.push(path.resolve(process.cwd(), 'apps/server/forensics'));
+  return uniqPaths(dirs);
+}
+
 export default function backupRoutes(db) {
   const router = express.Router();
   router.use(requireRole('director', 'admin'));
@@ -42,14 +81,19 @@ export default function backupRoutes(db) {
   const BACKUP_DIR = process.env.BACKUP_DIR
     ? (path.isAbsolute(process.env.BACKUP_DIR) ? process.env.BACKUP_DIR : path.resolve(process.cwd(), process.env.BACKUP_DIR))
     : path.join(path.dirname(DB_PATH), 'backups');
-  const FORENSIC_DIR = process.env.FORENSIC_DIR
+  const EXPLICIT_FORENSIC_DIR = process.env.FORENSIC_DIR
     ? (path.isAbsolute(process.env.FORENSIC_DIR) ? process.env.FORENSIC_DIR : path.resolve(process.cwd(), process.env.FORENSIC_DIR))
-    : path.join(path.dirname(DB_PATH), 'forensics');
+    : '';
+  const FORENSIC_DIRS = resolveForensicDirs({
+    dbPath: DB_PATH,
+    explicitForensicDir: EXPLICIT_FORENSIC_DIR
+  });
+  const FORENSIC_DIR = FORENSIC_DIRS[0];
   const FORENSIC_SCRIPT_PATH = resolveForensicScriptPath();
   const FORENSIC_TIMEOUT_MS = Math.max(15000, Number(process.env.FORENSIC_TIMEOUT_MS || 120000));
   const BACKUP_KEEP_MAX = Math.max(10, Number(process.env.BACKUP_KEEP_MAX || 200));
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  if (!fs.existsSync(FORENSIC_DIR)) fs.mkdirSync(FORENSIC_DIR, { recursive: true });
+  if (FORENSIC_DIR && !fs.existsSync(FORENSIC_DIR)) fs.mkdirSync(FORENSIC_DIR, { recursive: true });
 
   function listBackupFiles() {
     return fs.readdirSync(BACKUP_DIR)
@@ -116,10 +160,50 @@ export default function backupRoutes(db) {
     return Math.min(max, Math.max(min, Math.floor(n)));
   }
 
+  function listForensicReports() {
+    const bestByName = new Map();
+
+    for (const dir of FORENSIC_DIRS) {
+      if (!dir || !fs.existsSync(dir)) continue;
+      let names = [];
+      try {
+        names = fs.readdirSync(dir);
+      } catch {
+        continue;
+      }
+
+      for (const name of names) {
+        if (!name.endsWith('.json')) continue;
+        const fullPath = path.join(dir, name);
+        let stat = null;
+        try {
+          stat = fs.statSync(fullPath);
+          if (!stat.isFile()) continue;
+        } catch {
+          continue;
+        }
+
+        const cur = bestByName.get(name);
+        const mtimeMs = Number(stat.mtimeMs || 0);
+        if (!cur || mtimeMs > cur.mtimeMs) {
+          bestByName.set(name, { name, path: fullPath, mtimeMs });
+        }
+      }
+    }
+
+    return Array.from(bestByName.values()).sort((a, b) => b.name.localeCompare(a.name));
+  }
+
   function listForensicFiles() {
-    return fs.readdirSync(FORENSIC_DIR)
-      .filter((f) => f.endsWith('.json'))
-      .sort((a, b) => b.localeCompare(a));
+    return listForensicReports().map((r) => r.name);
+  }
+
+  function findForensicReportPathByName(name) {
+    const target = String(name || '').trim();
+    if (!target) return '';
+    const reports = listForensicReports();
+    const found = reports.find((r) => r.name === target);
+    return found?.path || '';
   }
 
   function loadForensicReport(reportPath) {
@@ -253,15 +337,15 @@ export default function backupRoutes(db) {
 
   router.get('/forensics/latest', (req, res) => {
     try {
-      const files = listForensicFiles();
-      if (!files.length) return res.status(404).json({ error: 'No forensic report found' });
+      const reports = listForensicReports();
+      if (!reports.length) return res.status(404).json({ error: 'No forensic report found' });
       const previewRows = parseIntRange(req.query?.preview_rows, 0, 50, 10);
-      const latest = files[0];
-      const reportPath = path.join(FORENSIC_DIR, latest);
+      const latest = reports[0];
+      const reportPath = latest.path;
       const payload = loadForensicReport(reportPath);
       return res.json({
         ok: true,
-        report_file: latest,
+        report_file: latest.name,
         report_path: reportPath,
         summary: summarizeForensicPayload(payload, previewRows)
       });
@@ -274,7 +358,7 @@ export default function backupRoutes(db) {
     try {
       const name = String(req.params.name || '');
       if (!isSafeForensicFilename(name)) return res.status(400).json({ error: 'Invalid filename' });
-      const filePath = path.join(FORENSIC_DIR, name);
+      const filePath = findForensicReportPathByName(name);
       if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Forensic report not found' });
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
@@ -315,9 +399,9 @@ export default function backupRoutes(db) {
       }
 
       if (!reportPath) {
-        const files = listForensicFiles();
-        if (!files.length) return res.status(500).json({ error: 'Forensic report path not found in process output' });
-        reportPath = path.join(FORENSIC_DIR, files[0]);
+        const reports = listForensicReports();
+        if (!reports.length) return res.status(500).json({ error: 'Forensic report path not found in process output' });
+        reportPath = reports[0].path;
       } else if (!path.isAbsolute(reportPath)) {
         reportPath = path.resolve(process.cwd(), reportPath);
       }
