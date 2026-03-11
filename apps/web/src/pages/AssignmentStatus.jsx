@@ -1,7 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../api.js';
-import { useAuth } from '../auth/AuthProvider.jsx';
+import { API_BASE, api } from '../api.js';
 
 const DAY_ORDER = ['월', '화', '수', '목', '금', '토', '일', '-'];
 
@@ -71,6 +70,28 @@ function formatProblemLine(problem) {
   return parts.join(' · ');
 }
 
+function normalizeProblemImage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const url = String(raw.url || '').trim();
+  if (!url) return null;
+  return {
+    id: String(raw.id || '').trim(),
+    url,
+    filename: String(raw.filename || '').trim()
+  };
+}
+
+function resolveProblemImageUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  if (/^(?:https?:|data:|blob:)/i.test(raw)) return raw;
+
+  const base = String(API_BASE || '').trim().replace(/\/+$/, '');
+  if (!base) return raw;
+  if (raw.startsWith('/')) return `${base}${raw}`;
+  return `${base}/${raw}`;
+}
+
 function groupAssignments(items) {
   const mentorMap = new Map();
   for (const row of Array.isArray(items) ? items : []) {
@@ -109,7 +130,6 @@ function groupAssignments(items) {
 }
 
 export default function AssignmentStatus() {
-  const { user } = useAuth();
   const [sp, setSp] = useSearchParams();
   const [weeks, setWeeks] = useState([]);
   const [weekId, setWeekId] = useState(sp.get('week') || '');
@@ -184,9 +204,7 @@ export default function AssignmentStatus() {
           <div>
             <div className="text-lg font-semibold text-brand-800">배정현황</div>
             <div className="text-sm text-slate-600">
-              {user?.role === 'mentor'
-                ? '클리닉 멘토 본인에게 배정된 학생과 문제를 시간순으로 확인합니다.'
-                : '멘토별 배정 목록을 예정 시간순으로 확인합니다.'}
+              멘토별 배정 목록을 예정 시간순으로 확인합니다.
             </div>
             {viewer?.display_name ? (
               <div className="mt-1 text-xs text-slate-500">
@@ -269,11 +287,42 @@ export default function AssignmentStatus() {
                       <div className="text-[11px] font-medium text-slate-500">해결 예정 문제</div>
                       {problems.length ? (
                         <div className="mt-1 space-y-1">
-                          {problems.map((problem, idx) => (
-                            <div key={`${item.week_record_id}-${item.student_id}-problem-${idx}`} className="text-xs text-slate-700">
-                              {idx + 1}. {formatProblemLine(problem)}
-                            </div>
-                          ))}
+                          {problems.map((problem, idx) => {
+                            const images = (Array.isArray(problem?.images) ? problem.images : [])
+                              .map(normalizeProblemImage)
+                              .filter(Boolean);
+
+                            return (
+                              <div key={`${item.week_record_id}-${item.student_id}-problem-${idx}`} className="text-xs text-slate-700">
+                                <div>{idx + 1}. {formatProblemLine(problem)}</div>
+                                {images.length ? (
+                                  <div className="mt-1 flex flex-wrap gap-1.5">
+                                    {images.map((img, imageIdx) => {
+                                      const src = resolveProblemImageUrl(img.url);
+                                      if (!src) return null;
+                                      return (
+                                        <a
+                                          key={img.id || `${img.url}-${imageIdx}`}
+                                          href={src}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="block rounded-md border border-slate-200 bg-white p-0.5"
+                                          title={img.filename || '문제 이미지'}
+                                        >
+                                          <img
+                                            src={src}
+                                            alt={img.filename || `문제 ${idx + 1} 이미지`}
+                                            className="h-16 w-16 rounded object-cover"
+                                            loading="lazy"
+                                          />
+                                        </a>
+                                      );
+                                    })}
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
                         </div>
                       ) : (
                         <div className="mt-1 text-xs text-slate-500">과목/문제 정보가 아직 입력되지 않았습니다.</div>

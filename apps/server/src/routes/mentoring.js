@@ -512,10 +512,6 @@ function toHHMM(totalMinutes) {
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
-function normalizeMentorName(value) {
-  return String(value || '').trim().toLowerCase().replace(/\s+/g, '');
-}
-
 function dayOrderValue(day) {
   const key = String(day || '').trim();
   return DAY_ORDER_MAP.get(key) || 999;
@@ -1018,35 +1014,19 @@ export default function mentoringRoutes(db) {
       )
       .all(week_id);
 
-    const isMentorRole = req.user.role === 'mentor';
-    const meNameRaw = String(req.user?.display_name || '').trim();
-    const meUserRaw = String(req.user?.username || '').trim();
-    const meName = normalizeMentorName(meNameRaw);
-    const meUser = normalizeMentorName(meUserRaw);
-
     const assignments = [];
     for (const row of rows) {
-      const dist = normalizeWrongAnswerDistribution(safeJson(row.e_wrong_answer_distribution, {}));
+      const dist = mergeWrongAnswerDistributionWithImages(
+        db,
+        row.student_id,
+        week_id,
+        safeJson(row.e_wrong_answer_distribution, {})
+      );
       const assignment = dist.assignment && typeof dist.assignment === 'object' ? dist.assignment : null;
       if (!assignment?.mentor_name) continue;
 
       const mentorName = String(assignment.mentor_name || '').trim();
       const mentorRole = String(assignment.mentor_role || '').trim();
-      const normalizedMentorName = normalizeMentorName(mentorName);
-      const normalizedMentorId = normalizeMentorName(String(assignment.mentor_id || '').trim());
-
-      if (isMentorRole) {
-        if (mentorRole !== 'mentor') continue;
-        const matched =
-          (meName && (normalizedMentorName.includes(meName) || meName.includes(normalizedMentorName))) ||
-          (meUser && (
-            normalizedMentorName.includes(meUser) ||
-            meUser.includes(normalizedMentorName) ||
-            normalizedMentorId === meUser
-          ));
-        if (!matched) continue;
-      }
-
       const startTime = String(assignment.session_start_time || assignment.session_time || '').trim();
       const duration = Math.max(5, Math.min(240, Number(assignment.session_duration_minutes || 20) || 20));
       const startMinutes = parseTimePart(startTime);
@@ -1064,13 +1044,23 @@ export default function mentoringRoutes(db) {
           problem.subject ||
           problem.material ||
           problem.problem_name ||
-          problem.problem_type
+          problem.problem_type ||
+          (Array.isArray(problem.images) && problem.images.length > 0)
         ))
         .map((problem) => ({
           subject: String(problem.subject || '').trim(),
           material: String(problem.material || '').trim(),
           problem_name: String(problem.problem_name || '').trim(),
-          problem_type: String(problem.problem_type || '').trim()
+          problem_type: String(problem.problem_type || '').trim(),
+          images: (Array.isArray(problem.images) ? problem.images : [])
+            .map((img) => ({
+              id: String(img?.id || '').trim(),
+              url: String(img?.url || '').trim(),
+              filename: String(img?.filename || '').trim(),
+              mime_type: String(img?.mime_type || '').trim(),
+              uploaded_at: String(img?.uploaded_at || '').trim()
+            }))
+            .filter((img) => img.url)
         }));
 
       assignments.push({
