@@ -92,9 +92,10 @@ export default function backupRoutes(db) {
   });
 
   const DB_PATH = dbFilePath;
+  const PRIMARY_DB_PATH = resolvePrimaryDbPath(DB_PATH);
   const BACKUP_DIR = process.env.BACKUP_DIR
     ? (path.isAbsolute(process.env.BACKUP_DIR) ? process.env.BACKUP_DIR : path.resolve(process.cwd(), process.env.BACKUP_DIR))
-    : path.join(path.dirname(DB_PATH), 'backups');
+    : path.join(path.dirname(PRIMARY_DB_PATH), 'backups');
   const EXPLICIT_FORENSIC_DIR = process.env.FORENSIC_DIR
     ? (path.isAbsolute(process.env.FORENSIC_DIR) ? process.env.FORENSIC_DIR : path.resolve(process.cwd(), process.env.FORENSIC_DIR))
     : '';
@@ -105,7 +106,6 @@ export default function backupRoutes(db) {
   const FORENSIC_DIR = FORENSIC_DIRS[0];
   const FORENSIC_SCRIPT_PATH = resolveForensicScriptPath();
   const FORENSIC_TIMEOUT_MS = Math.max(15000, Number(process.env.FORENSIC_TIMEOUT_MS || 120000));
-  const PRIMARY_DB_PATH = resolvePrimaryDbPath(DB_PATH);
   const BACKUP_KEEP_MAX = Math.max(10, Number(process.env.BACKUP_KEEP_MAX || 200));
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
   if (FORENSIC_DIR && !fs.existsSync(FORENSIC_DIR)) fs.mkdirSync(FORENSIC_DIR, { recursive: true });
@@ -143,12 +143,36 @@ export default function backupRoutes(db) {
     return true;
   }
 
+  function resolveBackupSourceCandidates() {
+    return uniqPaths([DB_PATH, PRIMARY_DB_PATH]).filter((p) => {
+      try {
+        return fs.existsSync(p) && fs.statSync(p).isFile();
+      } catch {
+        return false;
+      }
+    });
+  }
+
   function backupNow(reason = 'manual') {
     const stamp = timestampStamp();
     const out = path.join(BACKUP_DIR, `db-${stamp}-${reason}.sqlite`);
-    fs.copyFileSync(DB_PATH, out);
-    pruneByKeepMax();
-    return out;
+    const sources = resolveBackupSourceCandidates();
+    if (!sources.length) {
+      throw new Error(`No backup source DB found (active=${DB_PATH}, primary=${PRIMARY_DB_PATH})`);
+    }
+
+    let lastError = null;
+    for (const source of sources) {
+      try {
+        fs.copyFileSync(source, out);
+        pruneByKeepMax();
+        return { out, source };
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    throw lastError || new Error('copyFile failed for all source candidates');
   }
 
   function quoteIdent(name) {
@@ -322,10 +346,13 @@ export default function backupRoutes(db) {
 
   router.post('/now', (req, res) => {
     try {
-      const filePath = backupNow('manual');
-      res.json({ ok: true, file: path.basename(filePath) });
+      const { out, source } = backupNow('manual');
+      res.json({ ok: true, file: path.basename(out), source });
     } catch (e) {
-      res.status(500).json({ error: 'Backup failed' });
+      const code = String(e?.code || '').trim();
+      const msg = String(e?.message || '').trim();
+      const detail = [code, msg].filter(Boolean).join(' ');
+      res.status(500).json({ error: `Backup failed${detail ? ` (${detail})` : ''}` });
     }
   });
 
