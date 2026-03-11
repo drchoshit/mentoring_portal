@@ -205,7 +205,7 @@ function normalizeWrongAnswerAssignment(raw) {
   const sessionDay = String(raw.session_day || '').trim();
   const sessionStart = String(raw.session_start_time || raw.session_time || '').trim();
   const dayLabel = String(raw.session_day_label || '').trim();
-  const duration = Math.max(5, Math.min(240, Number(raw.session_duration_minutes || 20) || 20));
+  const duration = Math.max(1, Math.min(240, Number(raw.session_duration_minutes || 20) || 20));
 
   if (!mentorName && !mentorId && !sessionMonth && !sessionDay && !sessionStart && !dayLabel) return null;
 
@@ -339,9 +339,104 @@ function buildForcedAssignmentSeed(problem) {
     session_day: String(assignment?.session_day || '').trim(),
     session_start_time: String(assignment?.session_start_time || '').trim(),
     session_duration_minutes: Math.max(
-      5,
+      1,
       Math.min(240, Number(assignment?.session_duration_minutes || 20) || 20)
     )
+  };
+}
+
+const KO_DAY_LABELS_BY_INDEX = ['일', '월', '화', '수', '목', '금', '토'];
+
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function buildSessionDateTimeLocal(monthValue, dayValue, timeValue) {
+  const month = Number(monthValue || 0);
+  const day = Number(dayValue || 0);
+  const timeMatch = String(timeValue || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    !timeMatch
+  ) {
+    return '';
+  }
+
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  if (
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return '';
+  }
+
+  const year = new Date().getFullYear();
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return '';
+  }
+
+  return `${year}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:${pad2(minute)}`;
+}
+
+function parseSessionDateTimeLocal(value) {
+  const match = String(value || '').trim().match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
+  );
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return {
+    session_day_label: KO_DAY_LABELS_BY_INDEX[date.getDay()] || '',
+    session_month: String(month),
+    session_day: String(day),
+    session_start_time: `${pad2(hour)}:${pad2(minute)}`
   };
 }
 
@@ -446,7 +541,7 @@ function formatTimePart(totalMinutes) {
 
 function makeSessionRangeText(startTime, durationMinutes) {
   const start = parseTimePart(startTime);
-  const duration = Math.max(5, Math.min(240, Number(durationMinutes || 20) || 20));
+  const duration = Math.max(1, Math.min(240, Number(durationMinutes || 20) || 20));
   if (start == null) return '';
   const end = start + duration;
   return `${formatTimePart(start)} ~ ${formatTimePart(end)} (${duration}분)`;
@@ -1368,7 +1463,7 @@ export default function Mentoring() {
         patch.session_start_time ?? previous.session_start_time ?? previous.session_time ?? ''
       ).trim(),
       session_duration_minutes: Math.max(
-        5,
+        1,
         Math.min(
           240,
           Number(patch.session_duration_minutes ?? previous.session_duration_minutes ?? 20) || 20
@@ -1417,7 +1512,7 @@ export default function Mentoring() {
         session_day: String(current.session_day || '').trim(),
         session_start_time: String(current.session_start_time || current.session_time || '').trim(),
         session_duration_minutes: Math.max(
-          5,
+          1,
           Math.min(240, Number(current.session_duration_minutes || 20) || 20)
         ),
         ...patch
@@ -1445,7 +1540,7 @@ export default function Mentoring() {
       return;
     }
     if (!sessionMonth || !sessionDay || !sessionStart) {
-      setError('강제 배정 시 월/일/시작시간을 모두 입력해 주세요.');
+      setError('강제 배정 시 날짜/시간을 모두 입력해 주세요.');
       return;
     }
     const forcedCandidate = {
@@ -1462,7 +1557,7 @@ export default function Mentoring() {
       session_day: sessionDay,
       session_start_time: sessionStart,
       session_duration_minutes: Math.max(
-        5,
+        1,
         Math.min(240, Number(forcedWrongAnswerAssignment?.session_duration_minutes || 20) || 20)
       )
     });
@@ -1974,70 +2069,54 @@ export default function Mentoring() {
                         ) : (
                           <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
                         )}
-                        <div className="mt-1 grid grid-cols-5 gap-2">
-                          <div>
-                            <div className="text-[11px] text-slate-600">요일</div>
-                            <select
+                        <div className="mt-1 grid grid-cols-1 gap-2 md:grid-cols-2">
+                          <div className="md:col-span-2">
+                            <div className="text-[11px] text-slate-600">일정 (캘린더 선택)</div>
+                            <input
                               className="input mt-1 h-9"
-                              value={problemAssignment?.session_day_label || ''}
-                              onChange={(e) => updateWrongAnswerAssignment(idx, { session_day_label: e.target.value })}
+                              type="datetime-local"
+                              step={60}
+                              value={buildSessionDateTimeLocal(
+                                problemAssignment?.session_month,
+                                problemAssignment?.session_day,
+                                problemAssignment?.session_start_time
+                              )}
+                              onChange={(e) => {
+                                const value = String(e.target.value || '');
+                                if (!value) {
+                                  updateWrongAnswerAssignment(idx, {
+                                    session_day_label: '',
+                                    session_month: '',
+                                    session_day: '',
+                                    session_start_time: ''
+                                  });
+                                  return;
+                                }
+                                const parsed = parseSessionDateTimeLocal(value);
+                                if (!parsed) return;
+                                updateWrongAnswerAssignment(idx, parsed);
+                              }}
                               disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                            >
-                              <option value="">선택</option>
-                              {Object.entries(DAY_LABELS).map(([dayKey, dayKo]) => (
-                                <option key={dayKey} value={dayKo}>{dayKo}</option>
-                              ))}
-                            </select>
+                            />
+                            <div className="mt-1 text-[11px] text-slate-600">
+                              자동 반영: {problemAssignment?.session_day_label || '-'}요일 ·{' '}
+                              {problemAssignment?.session_month || '-'}월 {problemAssignment?.session_day || '-'}일 ·{' '}
+                              {problemAssignment?.session_start_time || '--:--'}
+                            </div>
                           </div>
                           <div>
-                            <div className="text-[11px] text-slate-600">월</div>
+                            <div className="text-[11px] text-slate-600">진행 시간(분)</div>
                             <input
                               className="input mt-1 h-9"
                               type="number"
                               min={1}
-                              max={12}
-                              placeholder="3"
-                              value={problemAssignment?.session_month || ''}
-                              onChange={(e) => updateWrongAnswerAssignment(idx, { session_month: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) })}
-                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                            />
-                          </div>
-                          <div>
-                            <div className="text-[11px] text-slate-600">일</div>
-                            <input
-                              className="input mt-1 h-9"
-                              type="number"
-                              min={1}
-                              max={31}
-                              placeholder="10"
-                              value={problemAssignment?.session_day || ''}
-                              onChange={(e) => updateWrongAnswerAssignment(idx, { session_day: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) })}
-                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                            />
-                          </div>
-                          <div>
-                            <div className="text-[11px] text-slate-600">시작</div>
-                            <input
-                              className="input mt-1 h-9"
-                              type="time"
-                              value={problemAssignment?.session_start_time || ''}
-                              onChange={(e) => updateWrongAnswerAssignment(idx, { session_start_time: e.target.value })}
-                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                            />
-                          </div>
-                          <div>
-                            <div className="text-[11px] text-slate-600">분</div>
-                            <input
-                              className="input mt-1 h-9"
-                              type="number"
-                              min={5}
                               max={240}
-                              step={5}
+                              step={1}
                               value={problemAssignment?.session_duration_minutes || 20}
                               onChange={(e) =>
                                 updateWrongAnswerAssignment(idx, {
                                   session_duration_minutes: Math.max(
-                                    5,
+                                    1,
                                     Math.min(240, Number(e.target.value || 20) || 20)
                                   )
                                 })
@@ -2233,65 +2312,55 @@ export default function Mentoring() {
                           <option value="admin">관리자</option>
                         </select>
                       </div>
-                      <div>
-                        <div className="text-[11px] text-amber-900">요일</div>
-                        <select
+                      <div className="md:col-span-2">
+                        <div className="text-[11px] text-amber-900">일정 (캘린더 선택)</div>
+                        <input
                           className="input mt-1 h-9"
-                          value={forcedWrongAnswerAssignment.session_day_label}
-                          onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, session_day_label: e.target.value }))}
-                        >
-                          <option value="">선택</option>
-                          {Object.entries(DAY_LABELS).map(([, dayKo]) => (
-                            <option key={`forced-day-${dayKo}`} value={dayKo}>{dayKo}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <div className="text-[11px] text-amber-900">월/일</div>
-                        <div className="mt-1 flex items-center gap-1">
-                          <input
-                            className="input h-9 w-14"
-                            type="number"
-                            min={1}
-                            max={12}
-                            value={forcedWrongAnswerAssignment.session_month}
-                            onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, session_month: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) }))}
-                            placeholder="3"
-                          />
-                          <span className="text-xs text-amber-900">/</span>
-                          <input
-                            className="input h-9 w-14"
-                            type="number"
-                            min={1}
-                            max={31}
-                            value={forcedWrongAnswerAssignment.session_day}
-                            onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, session_day: String(e.target.value || '').replace(/\D/g, '').slice(0, 2) }))}
-                            placeholder="10"
-                          />
+                          type="datetime-local"
+                          step={60}
+                          value={buildSessionDateTimeLocal(
+                            forcedWrongAnswerAssignment.session_month,
+                            forcedWrongAnswerAssignment.session_day,
+                            forcedWrongAnswerAssignment.session_start_time
+                          )}
+                          onChange={(e) =>
+                            setForcedWrongAnswerAssignment((prev) => {
+                              const value = String(e.target.value || '');
+                              if (!value) {
+                                return {
+                                  ...prev,
+                                  session_day_label: '',
+                                  session_month: '',
+                                  session_day: '',
+                                  session_start_time: ''
+                                };
+                              }
+                              const parsed = parseSessionDateTimeLocal(value);
+                              if (!parsed) return prev;
+                              return { ...prev, ...parsed };
+                            })
+                          }
+                        />
+                        <div className="mt-1 text-[11px] text-amber-900">
+                          자동 반영: {forcedWrongAnswerAssignment.session_day_label || '-'}요일 ·{' '}
+                          {forcedWrongAnswerAssignment.session_month || '-'}월 {forcedWrongAnswerAssignment.session_day || '-'}일 ·{' '}
+                          {forcedWrongAnswerAssignment.session_start_time || '--:--'}
                         </div>
                       </div>
                       <div>
-                        <div className="text-[11px] text-amber-900">시작/분</div>
-                        <div className="mt-1 flex items-center gap-1">
-                          <input
-                            className="input h-9"
-                            type="time"
-                            value={forcedWrongAnswerAssignment.session_start_time}
-                            onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({ ...prev, session_start_time: e.target.value }))}
-                          />
-                          <input
-                            className="input h-9 w-16"
-                            type="number"
-                            min={5}
-                            max={240}
-                            step={5}
-                            value={forcedWrongAnswerAssignment.session_duration_minutes}
-                            onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
-                              ...prev,
-                              session_duration_minutes: Math.max(5, Math.min(240, Number(e.target.value || 20) || 20))
-                            }))}
-                          />
-                        </div>
+                        <div className="text-[11px] text-amber-900">진행 시간(분)</div>
+                        <input
+                          className="input mt-1 h-9"
+                          type="number"
+                          min={1}
+                          max={240}
+                          step={1}
+                          value={forcedWrongAnswerAssignment.session_duration_minutes}
+                          onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
+                            ...prev,
+                            session_duration_minutes: Math.max(1, Math.min(240, Number(e.target.value || 20) || 20))
+                          }))}
+                        />
                       </div>
                     </div>
                     <div className="mt-2 flex justify-end">
