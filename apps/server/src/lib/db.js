@@ -317,6 +317,62 @@ function hasKnownSchemaTables(dbInstance) {
   return Number(row?.cnt || 0) > 0;
 }
 
+function getTableSet(dbInstance) {
+  return new Set(
+    dbInstance
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all()
+      .map((r) => String(r.name || ''))
+  );
+}
+
+function normalizeTimestampForSort(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  // SQLite datetime('now') style: "YYYY-MM-DD HH:MM:SS"
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+
+function resolveDbFreshness(dbInstance, filePath) {
+  const tables = getTableSet(dbInstance);
+  const targets = [
+    ['mentor_assignments', 'assigned_at'],
+    ['week_records', 'updated_at'],
+    ['subject_records', 'updated_at'],
+    ['students', 'updated_at'],
+    ['feeds', 'created_at'],
+    ['users', 'updated_at']
+  ];
+
+  let best = '';
+  for (const [table, column] of targets) {
+    if (!tables.has(table)) continue;
+    try {
+      const row = dbInstance.prepare(`SELECT MAX(${column}) AS v FROM "${table}"`).get();
+      const normalized = normalizeTimestampForSort(row?.v);
+      if (normalized && normalized > best) best = normalized;
+    } catch {}
+  }
+
+  let mtime = '';
+  const target = String(filePath || '').trim();
+  if (target && target !== ':memory:' && !/^file:/i.test(target)) {
+    try {
+      mtime = normalizeTimestampForSort(fs.statSync(target).mtime.toISOString());
+    } catch {}
+  }
+
+  const freshnessKey = best || mtime || '';
+  return {
+    freshnessKey,
+    marker: best || mtime || 'unknown'
+  };
+}
+
 function isEphemeralFallbackPath(filePath) {
   const target = String(filePath || '').trim();
   if (!target) return false;
@@ -331,21 +387,41 @@ function createDatabaseWithFallback() {
   const primaryDbFile = resolveDbFile();
   const candidates = [primaryDbFile, ...resolveFallbackDbFiles(primaryDbFile)];
   let lastRecoverableError = null;
+  let bestFallback = null;
 
   for (const candidate of candidates) {
     try {
       const instance = openDatabaseAt(candidate);
-      const isFallbackCandidate = candidate !== primaryDbFile;
-      if (isFallbackCandidate && !isEphemeralFallbackPath(candidate) && !hasKnownSchemaTables(instance)) {
+      if (candidate === primaryDbFile) {
+        return { instance, filePath: candidate };
+      }
+
+      const isEphemeral = isEphemeralFallbackPath(candidate);
+      if (!isEphemeral && !hasKnownSchemaTables(instance)) {
         try { instance.close(); } catch {}
         const emptySchemaError = new Error(`No known schema tables found in fallback candidate "${candidate}"`);
         emptySchemaError.code = 'DB_EMPTY_CANDIDATE';
         throw emptySchemaError;
       }
-      if (candidate !== primaryDbFile) {
-        console.warn(`[db bootstrap] Switched DB to fallback path "${candidate}" (primary "${primaryDbFile}" failed).`);
+
+      const freshness = resolveDbFreshness(instance, candidate);
+      console.warn(
+        `[db bootstrap] Fallback candidate "${candidate}" accepted (freshness=${freshness.marker}).`
+      );
+
+      if (!bestFallback || freshness.freshnessKey > bestFallback.freshnessKey) {
+        if (bestFallback?.instance) {
+          try { bestFallback.instance.close(); } catch {}
+        }
+        bestFallback = {
+          instance,
+          filePath: candidate,
+          freshnessKey: freshness.freshnessKey,
+          marker: freshness.marker
+        };
+      } else {
+        try { instance.close(); } catch {}
       }
-      return { instance, filePath: candidate };
     } catch (e) {
       if (!isRecoverableDbOpenError(e)) throw e;
       lastRecoverableError = e;
@@ -353,6 +429,13 @@ function createDatabaseWithFallback() {
         `[db bootstrap] DB open failure on "${candidate}" (${String(e.code || e.message || e)}). Trying next fallback.`
       );
     }
+  }
+
+  if (bestFallback) {
+    console.warn(
+      `[db bootstrap] Switched DB to freshest fallback "${bestFallback.filePath}" (freshness=${bestFallback.marker}, primary "${primaryDbFile}" failed).`
+    );
+    return { instance: bestFallback.instance, filePath: bestFallback.filePath };
   }
 
   if (lastRecoverableError) throw lastRecoverableError;
