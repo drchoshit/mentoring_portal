@@ -6,6 +6,25 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 
+function isSqliteIoError(err) {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const msg = String(err.message || '');
+  return code.startsWith('SQLITE_IOERR') || /disk i\/o error/i.test(msg);
+}
+
+function isRecoverableDbOpenError(err) {
+  if (!err) return false;
+  if (isSqliteIoError(err)) return true;
+  const code = String(err.code || '').toUpperCase();
+  if (code === 'SQLITE_FULL') return true;
+  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS' || code === 'ENOSPC' || code === 'ENOENT' || code === 'EIO') {
+    return true;
+  }
+  const msg = String(err.message || '');
+  return /database or disk is full/i.test(msg);
+}
+
 function isRenderRuntime() {
   return Boolean(
     process.env.RENDER ||
@@ -17,6 +36,12 @@ function isRenderRuntime() {
 
 function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function ensureDbParentDir(filePath) {
+  const target = String(filePath || '').trim();
+  if (!target || target === ':memory:' || /^file:/i.test(target)) return;
+  ensureDir(path.dirname(target));
 }
 
 function resolvePersistentDataDir() {
@@ -40,8 +65,9 @@ function resolvePersistentDataDir() {
 function resolveDbFile() {
   if (process.env.NODE_ENV === 'test') return ':memory:';
 
-  const p = process.env.DB_PATH;
+  const p = String(process.env.DB_PATH || '').trim();
   if (p) {
+    if (p === ':memory:') return ':memory:';
     const resolved = path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
     // If DB_PATH points to db.sqlite but legacy app.db exists, prefer app.db to avoid data loss.
     if (resolved.endsWith(`${path.sep}db.sqlite`)) {
@@ -77,57 +103,133 @@ function resolveDbFile() {
   return dbSqlite;
 }
 
-const dbFile = resolveDbFile();
-const db = new Database(dbFile);
+function resolveFallbackDbFiles(primaryDbFile) {
+  if (process.env.NODE_ENV === 'test') return [];
 
-function isSqliteIoError(err) {
-  if (!err) return false;
-  const code = String(err.code || '');
-  const msg = String(err.message || '');
-  return code.startsWith('SQLITE_IOERR') || /disk i\/o error/i.test(msg);
+  const fallbackCandidates = [];
+  const explicitFallback = String(process.env.DB_FALLBACK_PATH || '').trim();
+  if (explicitFallback) {
+    fallbackCandidates.push(
+      explicitFallback === ':memory:'
+        ? ':memory:'
+        : (path.isAbsolute(explicitFallback)
+          ? explicitFallback
+          : path.resolve(process.cwd(), explicitFallback))
+    );
+  }
+
+  if (isRenderRuntime()) {
+    const tmpRoot = String(process.env.TMPDIR || '/tmp').trim() || '/tmp';
+    fallbackCandidates.push(path.join(tmpRoot, 'mentoring-portal', 'db.sqlite'));
+  }
+
+  // Last-resort fallback so the service can still boot when filesystem writes are broken.
+  fallbackCandidates.push(':memory:');
+
+  const seen = new Set([String(primaryDbFile || '').trim()]);
+  const uniqueFallbacks = [];
+  for (const candidate of fallbackCandidates) {
+    const normalized = String(candidate || '').trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    uniqueFallbacks.push(normalized);
+  }
+  return uniqueFallbacks;
 }
 
-function runPragmaBestEffort(source) {
+function runPragmaBestEffort(dbInstance, source, fileLabel = 'unknown') {
   try {
-    return db.pragma(source);
+    return dbInstance.pragma(source);
   } catch (e) {
     if (isSqliteIoError(e)) {
-      console.warn(`[db bootstrap] Skipped PRAGMA "${source}" due to ${String(e.code || e.message || e)}`);
+      console.warn(
+        `[db bootstrap] Skipped PRAGMA "${source}" on "${fileLabel}" due to ${String(e.code || e.message || e)}`
+      );
       return null;
     }
     throw e;
   }
 }
 
-function applyDbPragmas() {
+function applyDbPragmas(dbInstance, fileLabel = 'unknown') {
   const requestedMode = String(process.env.SQLITE_JOURNAL_MODE || '').trim().toUpperCase();
   const defaultMode = isRenderRuntime() ? 'DELETE' : 'WAL';
   const desiredMode = requestedMode || defaultMode;
 
-  const setJournalMode = (mode) => runPragmaBestEffort(`journal_mode = ${mode}`);
+  const setJournalMode = (mode) => runPragmaBestEffort(dbInstance, `journal_mode = ${mode}`, fileLabel);
 
   try {
     const result = setJournalMode(desiredMode);
     if (!result) {
-      console.warn(`[db bootstrap] journal_mode=${desiredMode} not applied; continuing with SQLite defaults.`);
+      console.warn(`[db bootstrap] journal_mode=${desiredMode} not applied for "${fileLabel}"; continuing with defaults.`);
     }
   } catch (e) {
     const canFallbackToDelete = desiredMode !== 'DELETE' && isSqliteIoError(e);
     if (!canFallbackToDelete) throw e;
     console.warn(
-      `[db bootstrap] journal_mode=${desiredMode} failed (${String(e.code || e.message || e)}). Falling back to DELETE.`
+      `[db bootstrap] journal_mode=${desiredMode} failed for "${fileLabel}" (${String(e.code || e.message || e)}). Falling back to DELETE.`
     );
     const fallbackResult = setJournalMode('DELETE');
     if (!fallbackResult) {
-      console.warn('[db bootstrap] journal_mode=DELETE could not be applied; continuing with SQLite defaults.');
+      console.warn(`[db bootstrap] journal_mode=DELETE not applied for "${fileLabel}"; continuing with defaults.`);
     }
   }
 
-  runPragmaBestEffort('foreign_keys = ON');
-  runPragmaBestEffort('busy_timeout = 5000');
+  runPragmaBestEffort(dbInstance, 'foreign_keys = ON', fileLabel);
+  runPragmaBestEffort(dbInstance, 'busy_timeout = 5000', fileLabel);
 }
 
-applyDbPragmas();
+function assertWritableDb(dbInstance) {
+  dbInstance.exec(`
+    CREATE TABLE IF NOT EXISTS __db_startup_probe__ (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      touched_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO __db_startup_probe__ (id, touched_at)
+    VALUES (1, datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET touched_at = excluded.touched_at;
+  `);
+}
+
+function openDatabaseAt(filePath) {
+  ensureDbParentDir(filePath);
+  const instance = new Database(filePath);
+  try {
+    applyDbPragmas(instance, filePath);
+    assertWritableDb(instance);
+    return instance;
+  } catch (e) {
+    try { instance.close(); } catch {}
+    throw e;
+  }
+}
+
+function createDatabaseWithFallback() {
+  const primaryDbFile = resolveDbFile();
+  const candidates = [primaryDbFile, ...resolveFallbackDbFiles(primaryDbFile)];
+  let lastRecoverableError = null;
+
+  for (const candidate of candidates) {
+    try {
+      const instance = openDatabaseAt(candidate);
+      if (candidate !== primaryDbFile) {
+        console.warn(`[db bootstrap] Switched DB to fallback path "${candidate}" (primary "${primaryDbFile}" failed).`);
+      }
+      return { instance, filePath: candidate };
+    } catch (e) {
+      if (!isRecoverableDbOpenError(e)) throw e;
+      lastRecoverableError = e;
+      console.warn(
+        `[db bootstrap] DB open failure on "${candidate}" (${String(e.code || e.message || e)}). Trying next fallback.`
+      );
+    }
+  }
+
+  if (lastRecoverableError) throw lastRecoverableError;
+  throw new Error('Failed to initialize SQLite database.');
+}
+
+const { instance: db, filePath: dbFile } = createDatabaseWithFallback();
 
 function isSqliteFullError(err) {
   if (!err) return false;
