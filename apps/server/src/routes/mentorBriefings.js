@@ -23,6 +23,94 @@ const DAY_ORDER_MAP = new Map([
 ]);
 const PIN_MAX_ATTEMPTS = 5;
 const PIN_LOCK_MINUTES = 15;
+const DEFAULT_SOLAPI_SENDER = '01055132733';
+
+function isTruthyEnv(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function normalizePhoneNumber(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('82') && digits.length >= 11) return `0${digits.slice(2)}`;
+  return digits;
+}
+
+function maskPhoneNumber(value) {
+  const digits = normalizePhoneNumber(value);
+  if (!digits) return '';
+  if (digits.length < 8) return digits;
+  return `${digits.slice(0, 3)}****${digits.slice(-4)}`;
+}
+
+function getSolapiConfig() {
+  const apiKey = String(process.env.SOLAPI_API_KEY || process.env.COOLSMS_API_KEY || '').trim();
+  const apiSecret = String(process.env.SOLAPI_API_SECRET || process.env.COOLSMS_API_SECRET || '').trim();
+  const senderNumber = normalizePhoneNumber(
+    process.env.SOLAPI_SENDER_NUMBER || process.env.COOLSMS_SENDER_NUMBER || DEFAULT_SOLAPI_SENDER
+  );
+  const apiBase = String(process.env.SOLAPI_API_BASE || 'https://api.solapi.com').trim().replace(/\/+$/, '');
+
+  return { apiKey, apiSecret, senderNumber, apiBase };
+}
+
+function buildSolapiAuthHeader(apiKey, apiSecret) {
+  const date = new Date().toISOString();
+  const salt = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID().replace(/-/g, '')
+    : crypto.randomBytes(16).toString('hex');
+  const signature = crypto
+    .createHmac('sha256', apiSecret)
+    .update(`${date}${salt}`)
+    .digest('hex');
+  return `HMAC-SHA256 apiKey=${apiKey}, date=${date}, salt=${salt}, signature=${signature}`;
+}
+
+async function sendSolapiTextMessage({ to, from, text }) {
+  const { apiKey, apiSecret, apiBase } = getSolapiConfig();
+  if (!apiKey || !apiSecret) {
+    throw new Error('SOLAPI API 인증키가 설정되지 않았습니다.');
+  }
+  if (!from) throw new Error('발신 번호가 설정되지 않았습니다.');
+  if (!to) throw new Error('수신 번호가 필요합니다.');
+  if (!text) throw new Error('문자 내용이 비어 있습니다.');
+
+  const endpoint = `${apiBase}/messages/v4/send`;
+  const authHeader = buildSolapiAuthHeader(apiKey, apiSecret);
+  const payload = {
+    message: { to, from, text: String(text || '').slice(0, 2000) },
+    autoTypeDetect: true
+  };
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: authHeader
+    },
+    body: JSON.stringify(payload)
+  });
+  const raw = await response.text();
+  let data = null;
+  try {
+    data = raw ? JSON.parse(raw) : null;
+  } catch {
+    data = { raw };
+  }
+
+  if (!response.ok) {
+    const message = String(
+      data?.message ||
+      data?.errorMessage ||
+      data?.errorCode ||
+      raw ||
+      `HTTP ${response.status}`
+    ).trim();
+    throw new Error(`SOLAPI 전송 실패: ${message}`);
+  }
+  return data || { ok: true };
+}
 
 function safeJson(text, fallback) {
   try {
@@ -343,6 +431,51 @@ function toIso(value) {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString();
 }
 
+function buildShareUrlForTokenRow(req, tokenRow) {
+  const tokenId = String(tokenRow?.token_id || '').trim();
+  const weekId = Number(tokenRow?.week_id || 0);
+  const mentorName = String(tokenRow?.mentor_name || '').trim();
+  if (!tokenId || !weekId || !mentorName) return { shareUrl: '', token: '' };
+
+  const expiresAtIso = toIso(tokenRow?.expires_at);
+  const expiresMs = expiresAtIso ? new Date(expiresAtIso).getTime() : 0;
+  const nowMs = Date.now();
+  const remainingSeconds = Math.max(60, Math.floor((expiresMs - nowMs) / 1000));
+
+  const token = signMentorBriefingToken({
+    token_id: tokenId,
+    week_id: weekId,
+    mentor_name: mentorName,
+    mentor_role: normalizeMentorRole(tokenRow?.mentor_role),
+    issued_by: Number(tokenRow?.issued_by_user_id || 0)
+  }, `${remainingSeconds}s`);
+
+  const baseUrl = requestPublicBaseUrl(req);
+  const viewPath = `/api/mentor-briefings/view?token=${encodeURIComponent(token)}`;
+  return {
+    shareUrl: baseUrl ? `${baseUrl}${viewPath}` : viewPath,
+    token
+  };
+}
+
+function buildMentorBriefingSmsText({
+  weekLabel = '',
+  mentorName = '',
+  shareUrl = '',
+  senderNumber = DEFAULT_SOLAPI_SENDER,
+  expiresAt = ''
+} = {}) {
+  const lines = [
+    '[멘토링 포털] 사전 브리핑 안내',
+    mentorName ? `${mentorName} 멘토님 배정 문제 확인 링크입니다.` : '배정 문제 확인 링크입니다.',
+    weekLabel ? `회차: ${weekLabel}` : '',
+    shareUrl || '',
+    expiresAt ? `만료: ${String(expiresAt).replace('T', ' ').slice(0, 16)} (48시간)` : '만료: 발급 후 48시간',
+    `문의: ${senderNumber}`
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
 function escapeHtml(value) {
   return String(value || '')
     .replaceAll('&', '&amp;')
@@ -353,8 +486,6 @@ function escapeHtml(value) {
 }
 
 function renderMentorBriefingPage({ token = '', openPath = '/api/mentor-briefings/open', error = '' } = {}) {
-  const escapedToken = escapeHtml(token);
-  const escapedOpenPath = escapeHtml(openPath);
   const escapedError = escapeHtml(error);
 
   return `<!doctype html>
@@ -362,64 +493,95 @@ function renderMentorBriefingPage({ token = '', openPath = '/api/mentor-briefing
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>멘토 사전 브리핑</title>
+    <title>멘토 배정 브리핑</title>
     <style>
-      body{margin:0;background:#f3f6fb;color:#16263d;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Noto Sans KR',sans-serif}
-      .wrap{max-width:760px;margin:0 auto;padding:18px}
-      .card{background:#fff;border:1px solid #d8e2f2;border-radius:14px;padding:16px;box-shadow:0 8px 24px rgba(9,31,66,.07)}
-      h1{margin:0;font-size:22px}
-      p{margin:10px 0 0;color:#46607f;font-size:14px;line-height:1.5}
+      :root{
+        --bg:#eff5ff;
+        --card:#ffffff;
+        --line:#d6e2f5;
+        --text:#182b46;
+        --muted:#4f6785;
+        --brand:#1f5ed6;
+        --brand-soft:#e8f0ff;
+      }
+      *{box-sizing:border-box}
+      body{margin:0;background:radial-gradient(circle at top right,#f7fbff 0%,var(--bg) 50%,#eef3f9 100%);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Noto Sans KR',sans-serif}
+      .wrap{max-width:980px;margin:0 auto;padding:18px}
+      .panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 14px 36px rgba(18,44,89,.10)}
+      .head h1{margin:0;font-size:30px;line-height:1.2;font-weight:800;letter-spacing:-.02em}
+      .head p{margin:10px 0 0;color:var(--muted);font-size:15px}
       .error{margin-top:12px;color:#b42318;font-size:13px}
-      .row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:14px}
-      .field{min-width:200px;flex:1}
-      .label{font-size:12px;color:#48617f;margin-bottom:6px}
-      input{width:100%;height:42px;border-radius:10px;border:1px solid #c8d4e5;padding:0 12px;font-size:15px;box-sizing:border-box}
-      button{height:42px;border-radius:10px;border:0;background:#2f6df6;color:#fff;padding:0 16px;font-weight:700;font-size:14px;cursor:pointer}
-      button:disabled{opacity:.65;cursor:not-allowed}
-      .meta{margin-top:14px;padding:10px;border-radius:10px;background:#edf3ff;border:1px solid #d4e2ff;font-size:13px;color:#1d3f7a}
-      .list{margin-top:14px;display:flex;flex-direction:column;gap:10px}
-      .item{border:1px solid #d8e2f2;background:#f8fbff;border-radius:12px;padding:10px}
-      .title{font-weight:700;font-size:15px}
-      .sub{margin-top:2px;font-size:12px;color:#4b6486}
-      .badge{display:inline-flex;align-items:center;border:1px solid #c8d4e5;border-radius:999px;padding:2px 8px;font-size:11px;color:#355076;margin-left:6px}
-      .problem{margin-top:8px;padding:8px;border:1px solid #d8e2f2;background:#fff;border-radius:10px}
-      .problem-title{font-size:12px;color:#4b6486;margin-bottom:4px}
-      .problem-line{font-size:13px;color:#1b2f4a}
-      .note{margin-top:6px;padding:6px 8px;border-radius:8px;background:#f7fafc;border:1px solid #dde6f2;font-size:12px;white-space:pre-wrap}
-      .images{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
-      .images a{display:block;border:1px solid #d8e2f2;border-radius:8px;overflow:hidden;background:#fff}
-      .images img{display:block;width:78px;height:78px;object-fit:cover}
-      .warn{margin-top:8px;padding:8px;border:1px solid #fed7aa;background:#fffbeb;color:#9a3412;border-radius:8px;font-size:12px;white-space:pre-wrap}
-      .empty{margin-top:12px;font-size:13px;color:#4b6486}
-      .muted{font-size:12px;color:#607896}
+      .toolbar{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+      .btn{height:40px;border-radius:12px;border:1px solid var(--line);background:#fff;padding:0 14px;font-size:14px;font-weight:700;color:#304b6f;cursor:pointer}
+      .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+      .btn:disabled{opacity:.7;cursor:not-allowed}
+      .status{margin-top:12px;padding:10px 12px;border-radius:12px;background:#f4f8ff;border:1px solid #dce8ff;color:var(--muted);font-size:13px}
+      .status.error{background:#fff1f1;border-color:#f7caca;color:#9f1239}
+      .pin-box{display:none;margin-top:12px;padding:12px;border:1px solid #f1dca4;background:#fff9e8;border-radius:12px}
+      .pin-box.open{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+      .pin-box input{height:40px;border-radius:10px;border:1px solid #d8c892;padding:0 10px;font-size:15px;width:170px}
+      .meta{margin-top:14px;background:var(--brand-soft);border:1px solid #cfe0ff;border-radius:14px;padding:14px}
+      .meta-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+      .meta-item{background:#fff;border:1px solid #dbe7ff;border-radius:10px;padding:10px}
+      .meta-label{font-size:12px;color:#5a7499}
+      .meta-value{margin-top:4px;font-size:16px;font-weight:700;color:#143a71}
+      .list{margin-top:16px;display:flex;flex-direction:column;gap:12px}
+      .item{border:1px solid var(--line);border-radius:16px;background:#f7faff;padding:14px}
+      .item-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
+      .item-title{font-size:20px;font-weight:800;line-height:1.25}
+      .item-sub{margin-top:6px;font-size:14px;color:var(--muted)}
+      .badge{display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:999px;border:1px solid #c6d8ff;background:#edf4ff;font-size:12px;font-weight:700;color:#1f4f93}
+      .problem{margin-top:12px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
+      .problem-head{font-size:12px;color:#5b7398}
+      .problem-line{margin-top:6px;font-size:18px;line-height:1.45;font-weight:700;word-break:keep-all}
+      .note{margin-top:10px;padding:10px 12px;border-radius:10px;border:1px solid #dee8f8;background:#f8fbff;font-size:15px;white-space:pre-wrap;line-height:1.45}
+      .warn{margin-top:10px;padding:10px 12px;border-radius:10px;border:1px solid #f7d39b;background:#fff7e8;font-size:14px;white-space:pre-wrap;color:#92400e}
+      .images{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+      .images a{display:block;border:1px solid #d6e2f5;background:#fff;border-radius:10px;overflow:hidden;transition:transform .12s ease}
+      .images a:hover{transform:translateY(-1px)}
+      .images img{display:block;width:100%;aspect-ratio:1/1;object-fit:cover}
+      .empty{margin-top:14px;padding:14px;border:1px dashed #cfdcf2;border-radius:12px;text-align:center;color:#5a7499}
+      @media (max-width:760px){
+        .head h1{font-size:24px}
+        .meta-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+        .item-title{font-size:18px}
+        .problem-line{font-size:16px}
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <div class="card">
-        <h1>멘토 사전 브리핑</h1>
-        <p>원장에서 전달한 PIN 번호를 입력하면 배정된 오답 문제와 이미지를 확인할 수 있습니다.</p>
-        ${escapedError ? `<div class="error">${escapedError}</div>` : ''}
-        <div class="row">
-          <div class="field">
-            <div class="label">PIN 번호 (6자리)</div>
-            <input id="pinInput" type="password" inputmode="numeric" maxlength="6" placeholder="예: 123456" />
-          </div>
-          <button id="openBtn" type="button">내용 확인</button>
+      <div class="panel">
+        <div class="head">
+          <h1>멘토 배정 브리핑</h1>
+          <p>링크를 열면 배정된 문제 내용과 이미지를 바로 확인할 수 있습니다.</p>
+          ${escapedError ? `<div class="error">${escapedError}</div>` : ''}
         </div>
-        <div id="status" class="muted" style="margin-top:8px">링크 유효기간은 발급 시점 기준 48시간입니다.</div>
-        <div id="meta"></div>
+        <div class="toolbar">
+          <button id="reloadBtn" type="button" class="btn primary">새로고침</button>
+          <button id="openAppBtn" type="button" class="btn">포털 열기</button>
+        </div>
+        <div id="status" class="status">브리핑 내용을 불러오는 중입니다...</div>
+        <div id="pinBox" class="pin-box">
+          <span style="font-size:13px;color:#8c5a13">PIN 인증이 필요합니다.</span>
+          <input id="pinInput" type="password" inputmode="numeric" maxlength="6" placeholder="PIN 6자리" />
+          <button id="pinSubmitBtn" type="button" class="btn primary">인증 후 열기</button>
+        </div>
+        <div id="meta" class="meta" style="display:none"></div>
         <div id="list" class="list"></div>
       </div>
     </div>
     <script>
       const token = ${JSON.stringify(String(token || ''))};
       const openPath = ${JSON.stringify(String(openPath || '/api/mentor-briefings/open'))};
-      const pinInput = document.getElementById('pinInput');
-      const openBtn = document.getElementById('openBtn');
       const statusEl = document.getElementById('status');
       const metaEl = document.getElementById('meta');
       const listEl = document.getElementById('list');
+      const reloadBtn = document.getElementById('reloadBtn');
+      const openAppBtn = document.getElementById('openAppBtn');
+      const pinBox = document.getElementById('pinBox');
+      const pinInput = document.getElementById('pinInput');
+      const pinSubmitBtn = document.getElementById('pinSubmitBtn');
 
       function escapeText(value) {
         return String(value || '')
@@ -443,7 +605,7 @@ function renderMentorBriefingPage({ token = '', openPath = '/api/mentor-briefing
 
       function setStatus(text, isError = false) {
         statusEl.textContent = String(text || '');
-        statusEl.style.color = isError ? '#b42318' : '#607896';
+        statusEl.className = isError ? 'status error' : 'status';
       }
 
       function problemLine(problem) {
@@ -459,27 +621,33 @@ function renderMentorBriefingPage({ token = '', openPath = '/api/mentor-briefing
       }
 
       function renderItems(data) {
-        metaEl.innerHTML = '';
-        listEl.innerHTML = '';
-
         const mentorName = escapeText(data?.mentor_name || '-');
         const weekLabel = escapeText(data?.week?.label || '-');
-        const expiresAt = fmtDateTime(data?.expires_at);
+        const expiresAt = escapeText(fmtDateTime(data?.expires_at));
         const itemCount = Number(data?.item_count || 0);
 
-        metaEl.innerHTML = '<div class="meta">멘토: <b>' + mentorName + '</b> · 회차: <b>' + weekLabel + '</b> · 만료: <b>' + escapeText(expiresAt) + '</b> · 총 <b>' + itemCount + '건</b></div>';
+        metaEl.style.display = 'block';
+        metaEl.innerHTML =
+          '<div class="meta-grid">' +
+            '<div class="meta-item"><div class="meta-label">멘토</div><div class="meta-value">' + mentorName + '</div></div>' +
+            '<div class="meta-item"><div class="meta-label">회차</div><div class="meta-value">' + weekLabel + '</div></div>' +
+            '<div class="meta-item"><div class="meta-label">총 배정</div><div class="meta-value">' + itemCount + '건</div></div>' +
+            '<div class="meta-item"><div class="meta-label">만료 시각</div><div class="meta-value" style="font-size:14px">' + expiresAt + '</div></div>' +
+          '</div>';
 
         const rows = Array.isArray(data?.items) ? data.items : [];
         if (!rows.length) {
-          listEl.innerHTML = '<div class="empty">현재 이 멘토에게 배정된 항목이 없습니다.</div>';
+          listEl.innerHTML = '<div class="empty">현재 배정된 항목이 없습니다.</div>';
           return;
         }
 
         const html = rows.map((item) => {
           const title = (item?.external_id ? escapeText(item.external_id) + ' · ' : '') + escapeText(item?.student_name || '-') + ' · 오답 기록 ' + Number(item?.problem_order || 1);
-          const schedule = [item?.day_label ? escapeText(item.day_label) + '요일' : '요일 미정', item?.session_date_label && item.session_date_label !== '-' ? escapeText(item.session_date_label) : '', item?.session_range_text && item.session_range_text !== '-' ? escapeText(item.session_range_text) : '시간 미정']
-            .filter(Boolean)
-            .join(' · ');
+          const schedule = [
+            item?.day_label ? escapeText(item.day_label) + '요일' : '요일 미정',
+            item?.session_date_label && item.session_date_label !== '-' ? escapeText(item.session_date_label) : '',
+            item?.session_range_text && item.session_range_text !== '-' ? escapeText(item.session_range_text) : '시간 미정'
+          ].filter(Boolean).join(' · ');
           const status = statusLabel(item?.completion_status);
           const noteText = String(item?.problem?.note || '').trim();
           const incompleteReason = String(item?.incomplete_reason || '').trim();
@@ -490,61 +658,78 @@ function renderMentorBriefingPage({ token = '', openPath = '/api/mentor-briefing
             return '<a href="' + href + '" target="_blank" rel="noreferrer"><img src="' + href + '" alt="' + alt + '" loading="lazy" /></a>';
           }).join('');
 
-          return '<div class="item">' +
-            '<div class="title">' + title + '<span class="badge">' + escapeText(status) + '</span></div>' +
-            '<div class="sub">예정: ' + schedule + ' · 배정일시: ' + escapeText(fmtDateTime(item?.assigned_at)) + '</div>' +
-            '<div class="problem">' +
-              '<div class="problem-title">해결 예정 문제</div>' +
+          return '<article class="item">' +
+            '<div class="item-top">' +
+              '<div>' +
+                '<div class="item-title">' + title + '</div>' +
+                '<div class="item-sub">예정: ' + schedule + ' · 배정일시: ' + escapeText(fmtDateTime(item?.assigned_at)) + '</div>' +
+              '</div>' +
+              '<span class="badge">' + escapeText(status) + '</span>' +
+            '</div>' +
+            '<section class="problem">' +
+              '<div class="problem-head">해결 예정 문제</div>' +
               '<div class="problem-line">' + escapeText(problemLine(item?.problem || {})) + '</div>' +
               (noteText ? '<div class="note">' + escapeText(noteText) + '</div>' : '') +
               (incompleteReason ? '<div class="warn">미완료 사유\\n' + escapeText(incompleteReason) + '</div>' : '') +
               (imageHtml ? '<div class="images">' + imageHtml + '</div>' : '') +
-            '</div>' +
-          '</div>';
+            '</section>' +
+          '</article>';
         }).join('');
         listEl.innerHTML = html;
       }
 
-      async function openBriefing() {
-        const pin = String(pinInput.value || '').trim();
+      async function openBriefing(pinCode) {
         if (!token) {
           setStatus('유효하지 않은 링크입니다.', true);
           return;
         }
-        if (!/^\\d{6}$/.test(pin)) {
-          setStatus('PIN 번호 6자리를 입력해 주세요.', true);
-          return;
-        }
 
-        openBtn.disabled = true;
-        setStatus('불러오는 중입니다...');
+        setStatus('브리핑 내용을 불러오는 중입니다...');
+        reloadBtn.disabled = true;
+        pinSubmitBtn.disabled = true;
         try {
+          const payload = pinCode ? { token, pin_code: pinCode } : { token };
           const res = await fetch(openPath, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, pin_code: pin })
+            body: JSON.stringify(payload)
           });
           const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data?.error || ('HTTP ' + res.status));
+          if (!res.ok) {
+            if (data?.code === 'PIN_REQUIRED') {
+              pinBox.className = 'pin-box open';
+              setStatus('PIN 번호를 입력해 주세요.', true);
+              return;
+            }
+            throw new Error(data?.error || ('HTTP ' + res.status));
+          }
 
+          pinBox.className = 'pin-box';
           renderItems(data);
           setStatus('조회 완료');
         } catch (err) {
-          metaEl.innerHTML = '';
+          metaEl.style.display = 'none';
           listEl.innerHTML = '';
           setStatus(err && err.message ? err.message : '브리핑 조회에 실패했습니다.', true);
         } finally {
-          openBtn.disabled = false;
+          reloadBtn.disabled = false;
+          pinSubmitBtn.disabled = false;
         }
       }
 
-      openBtn.addEventListener('click', openBriefing);
+      reloadBtn.addEventListener('click', () => openBriefing(pinInput.value));
+      pinSubmitBtn.addEventListener('click', () => openBriefing(pinInput.value));
       pinInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
-          openBriefing();
+          openBriefing(pinInput.value);
         }
       });
+      openAppBtn.addEventListener('click', () => {
+        window.open('/', '_blank', 'noopener,noreferrer');
+      });
+
+      openBriefing('');
     </script>
   </body>
 </html>`;
@@ -620,6 +805,7 @@ export default function mentorBriefingsRoutes(db) {
     const viewPath = `/api/mentor-briefings/view?token=${encodeURIComponent(token)}`;
     const shareUrl = baseUrl ? `${baseUrl}${viewPath}` : viewPath;
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=420x420&data=${encodeURIComponent(shareUrl)}`;
+    const { senderNumber } = getSolapiConfig();
 
     writeAudit(db, {
       user_id: req.user.id,
@@ -647,15 +833,19 @@ export default function mentorBriefingsRoutes(db) {
       issued_at: new Date().toISOString(),
       expires_at: expiresAt,
       share_url: shareUrl,
-      qr_url: qrUrl
+      qr_url: qrUrl,
+      sender_phone: senderNumber || DEFAULT_SOLAPI_SENDER
     });
   });
 
   router.post('/open', (req, res) => {
     const tokenRaw = String(req.body?.token || '').trim();
     const pinCode = String(req.body?.pin_code || '').trim();
+    const requirePin = isTruthyEnv(process.env.MENTOR_BRIEFING_REQUIRE_PIN);
     if (!tokenRaw) return res.status(400).json({ error: 'token is required' });
-    if (!/^\d{6}$/.test(pinCode)) return res.status(400).json({ error: 'PIN 6자리를 입력해 주세요.' });
+    if (pinCode && !/^\d{6}$/.test(pinCode)) {
+      return res.status(400).json({ error: 'PIN 6자리를 입력해 주세요.' });
+    }
 
     let decoded;
     try {
@@ -695,43 +885,55 @@ export default function mentorBriefingsRoutes(db) {
       return res.status(400).json({ error: '토큰 정보가 일치하지 않습니다.' });
     }
 
-    const lockedUntilIso = toIso(row.locked_until);
-    if (lockedUntilIso && new Date(lockedUntilIso).getTime() > now.getTime()) {
-      return res.status(429).json({ error: `PIN 입력 실패로 잠금 중입니다. 잠시 후 다시 시도해 주세요. (잠금 해제: ${lockedUntilIso.replace('T', ' ').slice(0, 16)})` });
-    }
+    const shouldCheckPin = requirePin || Boolean(pinCode);
+    if (shouldCheckPin) {
+      if (!pinCode) {
+        return res.status(400).json({
+          error: 'PIN 번호가 필요합니다.',
+          code: 'PIN_REQUIRED'
+        });
+      }
 
-    const pinMatched = bcrypt.compareSync(pinCode, String(row.pin_hash || ''));
-    if (!pinMatched) {
-      const failedAttempts = Number(row.failed_attempts || 0) + 1;
-      if (failedAttempts >= PIN_MAX_ATTEMPTS) {
-        const nextLock = new Date(now.getTime() + (PIN_LOCK_MINUTES * 60 * 1000)).toISOString();
+      const lockedUntilIso = toIso(row.locked_until);
+      if (lockedUntilIso && new Date(lockedUntilIso).getTime() > now.getTime()) {
+        return res.status(429).json({ error: `PIN 입력 실패로 잠금 중입니다. 잠시 후 다시 시도해 주세요. (잠금 해제: ${lockedUntilIso.replace('T', ' ').slice(0, 16)})` });
+      }
+
+      const pinMatched = bcrypt.compareSync(pinCode, String(row.pin_hash || ''));
+      if (!pinMatched) {
+        const failedAttempts = Number(row.failed_attempts || 0) + 1;
+        if (failedAttempts >= PIN_MAX_ATTEMPTS) {
+          const nextLock = new Date(now.getTime() + (PIN_LOCK_MINUTES * 60 * 1000)).toISOString();
+          db.prepare(
+            `
+            UPDATE mentor_briefing_tokens
+            SET failed_attempts=0, locked_until=?, last_accessed_at=datetime('now')
+            WHERE token_id=?
+            `
+          ).run(nextLock, tokenId);
+          return res.status(429).json({ error: `PIN 입력을 ${PIN_MAX_ATTEMPTS}회 실패하여 ${PIN_LOCK_MINUTES}분 잠금되었습니다.` });
+        }
+
         db.prepare(
           `
           UPDATE mentor_briefing_tokens
-          SET failed_attempts=0, locked_until=?, last_accessed_at=datetime('now')
+          SET failed_attempts=?, locked_until=NULL, last_accessed_at=datetime('now')
           WHERE token_id=?
           `
-        ).run(nextLock, tokenId);
-        return res.status(429).json({ error: `PIN 입력을 ${PIN_MAX_ATTEMPTS}회 실패하여 ${PIN_LOCK_MINUTES}분 잠금되었습니다.` });
+        ).run(failedAttempts, tokenId);
+        return res.status(401).json({ error: `PIN 번호가 올바르지 않습니다. (${failedAttempts}/${PIN_MAX_ATTEMPTS})` });
       }
 
       db.prepare(
         `
         UPDATE mentor_briefing_tokens
-        SET failed_attempts=?, locked_until=NULL, last_accessed_at=datetime('now')
+        SET failed_attempts=0, locked_until=NULL, last_accessed_at=datetime('now')
         WHERE token_id=?
         `
-      ).run(failedAttempts, tokenId);
-      return res.status(401).json({ error: `PIN 번호가 올바르지 않습니다. (${failedAttempts}/${PIN_MAX_ATTEMPTS})` });
+      ).run(tokenId);
+    } else {
+      db.prepare("UPDATE mentor_briefing_tokens SET last_accessed_at=datetime('now') WHERE token_id=?").run(tokenId);
     }
-
-    db.prepare(
-      `
-      UPDATE mentor_briefing_tokens
-      SET failed_attempts=0, locked_until=NULL, last_accessed_at=datetime('now')
-      WHERE token_id=?
-      `
-    ).run(tokenId);
 
     const week = db
       .prepare('SELECT id, label, start_date, end_date FROM weeks WHERE id=?')
@@ -760,6 +962,98 @@ export default function mentorBriefingsRoutes(db) {
       item_count: items.length,
       items
     });
+  });
+
+  router.post('/send-sms', auth, async (req, res) => {
+    if (!['director', 'lead', 'admin'].includes(req.user?.role)) {
+      return res.status(403).json({ error: 'Only director/lead/admin can send briefing SMS' });
+    }
+
+    const tokenId = String(req.body?.token_id || '').trim();
+    const toPhone = normalizePhoneNumber(req.body?.to_phone);
+    if (!tokenId) return res.status(400).json({ error: 'token_id is required' });
+    if (!toPhone) return res.status(400).json({ error: '수신 번호를 입력해 주세요.' });
+
+    const tokenRow = db
+      .prepare(
+        `
+        SELECT token_id, week_id, mentor_name, mentor_role, mentor_phone, issued_by_user_id, expires_at, revoked_at
+        FROM mentor_briefing_tokens
+        WHERE token_id=?
+        `
+      )
+      .get(tokenId);
+    if (!tokenRow?.token_id) return res.status(404).json({ error: '브리핑 링크를 찾을 수 없습니다.' });
+    if (tokenRow.revoked_at) return res.status(410).json({ error: '회수된 링크입니다.' });
+
+    const expiresAtIso = toIso(tokenRow.expires_at);
+    if (!expiresAtIso || new Date(expiresAtIso).getTime() <= Date.now()) {
+      return res.status(410).json({ error: '링크 유효기간이 만료되었습니다. 새 링크를 발급해 주세요.' });
+    }
+
+    const week = db
+      .prepare('SELECT id, label FROM weeks WHERE id=?')
+      .get(Number(tokenRow.week_id || 0));
+    if (!week?.id) return res.status(404).json({ error: '회차 정보를 찾을 수 없습니다.' });
+
+    const { shareUrl } = buildShareUrlForTokenRow(req, tokenRow);
+    if (!shareUrl) return res.status(500).json({ error: '브리핑 링크 생성에 실패했습니다.' });
+
+    const { senderNumber } = getSolapiConfig();
+    const normalizedSender = normalizePhoneNumber(senderNumber || DEFAULT_SOLAPI_SENDER);
+    if (!normalizedSender) {
+      return res.status(500).json({ error: '발신 번호 설정이 올바르지 않습니다.' });
+    }
+
+    const smsText = buildMentorBriefingSmsText({
+      weekLabel: String(week.label || '').trim(),
+      mentorName: String(tokenRow.mentor_name || '').trim(),
+      shareUrl,
+      senderNumber: normalizedSender,
+      expiresAt: expiresAtIso
+    });
+
+    try {
+      const providerResult = await sendSolapiTextMessage({
+        to: toPhone,
+        from: normalizedSender,
+        text: smsText
+      });
+
+      db.prepare('UPDATE mentor_briefing_tokens SET mentor_phone=? WHERE token_id=?')
+        .run(toPhone, tokenId);
+
+      writeAudit(db, {
+        user_id: req.user.id,
+        action: 'create',
+        entity: 'mentor_briefing_sms',
+        entity_id: tokenId,
+        details: {
+          week_id: Number(week.id || 0),
+          mentor_name: String(tokenRow.mentor_name || '').trim(),
+          to_phone_masked: maskPhoneNumber(toPhone),
+          from_phone: normalizedSender
+        }
+      });
+
+      return res.json({
+        ok: true,
+        provider: 'solapi',
+        token_id: tokenId,
+        mentor_name: String(tokenRow.mentor_name || '').trim(),
+        week_label: String(week.label || '').trim(),
+        to_phone: toPhone,
+        to_phone_masked: maskPhoneNumber(toPhone),
+        from_phone: normalizedSender,
+        share_url: shareUrl,
+        expires_at: expiresAtIso,
+        provider_result: providerResult
+      });
+    } catch (err) {
+      return res.status(502).json({
+        error: err?.message || '문자 전송에 실패했습니다. SOLAPI 설정을 확인해 주세요.'
+      });
+    }
   });
 
   router.post('/revoke', auth, (req, res) => {

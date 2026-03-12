@@ -229,6 +229,9 @@ export default function AssignmentStatus() {
   const [briefingError, setBriefingError] = useState('');
   const [briefingResult, setBriefingResult] = useState(null);
   const [briefingCopyStatus, setBriefingCopyStatus] = useState('');
+  const [briefingSmsBusy, setBriefingSmsBusy] = useState(false);
+  const [briefingSmsStatus, setBriefingSmsStatus] = useState('');
+  const [briefingSmsError, setBriefingSmsError] = useState('');
   const [editForm, setEditForm] = useState({
     mentor_name: '',
     mentor_role: 'mentor',
@@ -442,6 +445,9 @@ export default function AssignmentStatus() {
     setBriefingResult(null);
     setBriefingCopyStatus('');
     setBriefingError('');
+    setBriefingSmsBusy(false);
+    setBriefingSmsStatus('');
+    setBriefingSmsError('');
   }, [weekId]);
 
   async function issueMentorBriefing() {
@@ -452,6 +458,8 @@ export default function AssignmentStatus() {
     setBriefingBusy(true);
     setBriefingError('');
     setBriefingCopyStatus('');
+    setBriefingSmsStatus('');
+    setBriefingSmsError('');
     try {
       const result = await api('/api/mentor-briefings/issue', {
         method: 'POST',
@@ -479,6 +487,38 @@ export default function AssignmentStatus() {
       setBriefingCopyStatus('링크를 복사했습니다.');
     } catch {
       setBriefingCopyStatus('복사에 실패했습니다. 링크를 직접 선택해 복사해 주세요.');
+    }
+  }
+
+  async function sendBriefingSms() {
+    const tokenId = String(briefingResult?.token_id || '').trim();
+    const toPhone = String(briefingPhone || '').trim();
+    if (!tokenId) {
+      setBriefingSmsError('먼저 링크를 생성해 주세요.');
+      return;
+    }
+    if (!toPhone) {
+      setBriefingSmsError('수신 번호를 입력해 주세요.');
+      return;
+    }
+
+    setBriefingSmsBusy(true);
+    setBriefingSmsStatus('');
+    setBriefingSmsError('');
+    try {
+      const result = await api('/api/mentor-briefings/send-sms', {
+        method: 'POST',
+        body: {
+          token_id: tokenId,
+          to_phone: toPhone
+        }
+      });
+      if (result?.to_phone) setBriefingPhone(String(result.to_phone));
+      setBriefingSmsStatus(`문자 전송 완료 (${result?.to_phone_masked || toPhone})`);
+    } catch (e) {
+      setBriefingSmsError(e?.message || '문자 전송에 실패했습니다.');
+    } finally {
+      setBriefingSmsBusy(false);
     }
   }
 
@@ -527,7 +567,7 @@ export default function AssignmentStatus() {
           <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
             <div className="text-sm font-semibold text-slate-800">멘토 사전 전송 링크 (48시간)</div>
             <div className="mt-1 text-xs text-slate-600">
-              멘토를 선택해 링크/PIN을 생성하면 QR로 바로 전달할 수 있습니다.
+              멘토를 선택해 링크를 생성하고 이 화면에서 바로 문자 전송할 수 있습니다.
             </div>
             <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto]">
               <select
@@ -549,7 +589,7 @@ export default function AssignmentStatus() {
                 className="input h-9"
                 value={briefingPhone}
                 onChange={(e) => setBriefingPhone(e.target.value)}
-                placeholder="연락처 (선택)"
+                placeholder="수신 번호 (예: 01012345678)"
                 maxLength={30}
               />
               <button
@@ -569,6 +609,9 @@ export default function AssignmentStatus() {
                 <div className="text-xs text-slate-700">
                   대상 멘토: <span className="font-semibold">{briefingResult.mentor_name || '-'}</span>
                   {' · '}만료: {fmtDateTime(briefingResult.expires_at)}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-600">
+                  발신번호: {briefingResult.sender_phone || '01055132733'}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <div className="rounded-md border border-emerald-200 bg-white px-2.5 py-1.5 text-sm font-semibold text-emerald-800">
@@ -591,9 +634,23 @@ export default function AssignmentStatus() {
                       링크 열기
                     </a>
                   ) : null}
+                  <button
+                    type="button"
+                    className="btn-primary h-8 px-2.5 text-xs"
+                    disabled={briefingSmsBusy || !briefingResult?.token_id || !String(briefingPhone || '').trim()}
+                    onClick={() => void sendBriefingSms()}
+                  >
+                    {briefingSmsBusy ? '문자 전송 중...' : '문자 전송'}
+                  </button>
                 </div>
                 {briefingCopyStatus ? (
                   <div className="mt-1 text-xs text-slate-600">{briefingCopyStatus}</div>
+                ) : null}
+                {briefingSmsStatus ? (
+                  <div className="mt-1 text-xs text-emerald-700">{briefingSmsStatus}</div>
+                ) : null}
+                {briefingSmsError ? (
+                  <div className="mt-1 text-xs text-rose-700">{briefingSmsError}</div>
                 ) : null}
                 {briefingResult.share_url ? (
                   <div className="mt-2 break-all rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-600">
