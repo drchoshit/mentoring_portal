@@ -440,28 +440,13 @@ function toIso(value) {
 
 function buildShareUrlForTokenRow(req, tokenRow) {
   const tokenId = String(tokenRow?.token_id || '').trim();
-  const weekId = Number(tokenRow?.week_id || 0);
-  const mentorName = String(tokenRow?.mentor_name || '').trim();
-  if (!tokenId || !weekId || !mentorName) return { shareUrl: '', token: '' };
-
-  const expiresAtIso = toIso(tokenRow?.expires_at);
-  const expiresMs = expiresAtIso ? new Date(expiresAtIso).getTime() : 0;
-  const nowMs = Date.now();
-  const remainingSeconds = Math.max(60, Math.floor((expiresMs - nowMs) / 1000));
-
-  const token = signMentorBriefingToken({
-    token_id: tokenId,
-    week_id: weekId,
-    mentor_name: mentorName,
-    mentor_role: normalizeMentorRole(tokenRow?.mentor_role),
-    issued_by: Number(tokenRow?.issued_by_user_id || 0)
-  }, `${remainingSeconds}s`);
+  if (!tokenId) return { shareUrl: '', token: '' };
 
   const baseUrl = requestPublicBaseUrl(req);
-  const viewPath = `/api/mentor-briefings/view?token=${encodeURIComponent(token)}`;
+  const viewPath = `/api/mentor-briefings/v/${encodeURIComponent(tokenId)}`;
   return {
     shareUrl: baseUrl ? `${baseUrl}${viewPath}` : viewPath,
-    token
+    token: ''
   };
 }
 
@@ -492,7 +477,12 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-function renderMentorBriefingPage({ token = '', openPath = '/api/mentor-briefings/open', error = '' } = {}) {
+function renderMentorBriefingPage({
+  token = '',
+  tokenId = '',
+  openPath = '/api/mentor-briefings/open',
+  error = ''
+} = {}) {
   const escapedError = escapeHtml(error);
 
   return `<!doctype html>
@@ -580,6 +570,7 @@ function renderMentorBriefingPage({ token = '', openPath = '/api/mentor-briefing
     </div>
     <script>
       const token = ${JSON.stringify(String(token || ''))};
+      const tokenId = ${JSON.stringify(String(tokenId || ''))};
       const openPath = ${JSON.stringify(String(openPath || '/api/mentor-briefings/open'))};
       const statusEl = document.getElementById('status');
       const metaEl = document.getElementById('meta');
@@ -686,7 +677,7 @@ function renderMentorBriefingPage({ token = '', openPath = '/api/mentor-briefing
       }
 
       async function openBriefing(pinCode) {
-        if (!token) {
+        if (!token && !tokenId) {
           setStatus('유효하지 않은 링크입니다.', true);
           return;
         }
@@ -695,7 +686,9 @@ function renderMentorBriefingPage({ token = '', openPath = '/api/mentor-briefing
         reloadBtn.disabled = true;
         pinSubmitBtn.disabled = true;
         try {
-          const payload = pinCode ? { token, pin_code: pinCode } : { token };
+          const payload = token
+            ? (pinCode ? { token, pin_code: pinCode } : { token })
+            : (pinCode ? { token_id: tokenId, pin_code: pinCode } : { token_id: tokenId });
           const res = await fetch(openPath, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -760,6 +753,17 @@ export default function mentorBriefingsRoutes(db) {
     return res.type('html').send(renderMentorBriefingPage({ token }));
   });
 
+  router.get('/v/:tokenId', (req, res) => {
+    const tokenId = String(req.params?.tokenId || '').trim();
+    if (!tokenId) {
+      return res
+        .status(400)
+        .type('html')
+        .send(renderMentorBriefingPage({ error: '유효하지 않은 링크입니다.' }));
+    }
+    return res.type('html').send(renderMentorBriefingPage({ tokenId }));
+  });
+
   router.post('/issue', auth, (req, res) => {
     if (!['director', 'lead', 'admin'].includes(req.user?.role)) {
       return res.status(403).json({ error: 'Only director/lead/admin can issue briefing links' });
@@ -776,7 +780,7 @@ export default function mentorBriefingsRoutes(db) {
     const week = db.prepare('SELECT id, label FROM weeks WHERE id=?').get(weekId);
     if (!week?.id) return res.status(404).json({ error: 'Week not found' });
 
-    const tokenId = `mbt_${Date.now().toString(36)}_${crypto.randomBytes(8).toString('hex')}`;
+    const tokenId = `mbt_${crypto.randomBytes(12).toString('base64url')}`;
     const pinCode = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
     const pinHash = bcrypt.hashSync(pinCode, 10);
     const expiresAt = new Date(Date.now() + (MENTOR_BRIEFING_TTL_HOURS * 60 * 60 * 1000)).toISOString();
@@ -809,7 +813,7 @@ export default function mentorBriefingsRoutes(db) {
     }, MENTOR_BRIEFING_DEFAULT_EXPIRES_IN);
 
     const baseUrl = requestPublicBaseUrl(req);
-    const viewPath = `/api/mentor-briefings/view?token=${encodeURIComponent(token)}`;
+    const viewPath = `/api/mentor-briefings/v/${encodeURIComponent(tokenId)}`;
     const shareUrl = baseUrl ? `${baseUrl}${viewPath}` : viewPath;
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=420x420&data=${encodeURIComponent(shareUrl)}`;
     const { senderNumber } = getSolapiConfig();
@@ -847,21 +851,25 @@ export default function mentorBriefingsRoutes(db) {
 
   router.post('/open', (req, res) => {
     const tokenRaw = String(req.body?.token || '').trim();
+    const tokenIdRaw = String(req.body?.token_id || '').trim();
     const pinCode = String(req.body?.pin_code || '').trim();
     const requirePin = isTruthyEnv(process.env.MENTOR_BRIEFING_REQUIRE_PIN);
-    if (!tokenRaw) return res.status(400).json({ error: 'token is required' });
+    if (!tokenRaw && !tokenIdRaw) return res.status(400).json({ error: 'token or token_id is required' });
     if (pinCode && !/^\d{6}$/.test(pinCode)) {
       return res.status(400).json({ error: 'PIN 6자리를 입력해 주세요.' });
     }
 
-    let decoded;
-    try {
-      decoded = verifyMentorBriefingToken(tokenRaw);
-    } catch {
-      return res.status(400).json({ error: '유효하지 않거나 만료된 링크입니다.' });
+    let decoded = null;
+    let tokenId = tokenIdRaw;
+    if (tokenRaw) {
+      try {
+        decoded = verifyMentorBriefingToken(tokenRaw);
+      } catch {
+        return res.status(400).json({ error: '유효하지 않거나 만료된 링크입니다.' });
+      }
+      tokenId = String(decoded?.token_id || '').trim();
     }
 
-    const tokenId = String(decoded?.token_id || '').trim();
     if (!tokenId) return res.status(400).json({ error: '유효하지 않은 토큰입니다.' });
 
     const row = db
@@ -883,13 +891,15 @@ export default function mentorBriefingsRoutes(db) {
       return res.status(410).json({ error: '링크 유효기간이 만료되었습니다.' });
     }
 
-    const decodedWeekId = Number(decoded?.week_id || 0);
-    if (decodedWeekId && Number(row.week_id || 0) && decodedWeekId !== Number(row.week_id || 0)) {
-      return res.status(400).json({ error: '토큰 정보가 일치하지 않습니다.' });
-    }
-    const decodedMentorKey = normalizeMentorKey(decoded?.mentor_name || '');
-    if (decodedMentorKey && decodedMentorKey !== String(row.mentor_key || '')) {
-      return res.status(400).json({ error: '토큰 정보가 일치하지 않습니다.' });
+    if (decoded) {
+      const decodedWeekId = Number(decoded?.week_id || 0);
+      if (decodedWeekId && Number(row.week_id || 0) && decodedWeekId !== Number(row.week_id || 0)) {
+        return res.status(400).json({ error: '토큰 정보가 일치하지 않습니다.' });
+      }
+      const decodedMentorKey = normalizeMentorKey(decoded?.mentor_name || '');
+      if (decodedMentorKey && decodedMentorKey !== String(row.mentor_key || '')) {
+        return res.status(400).json({ error: '토큰 정보가 일치하지 않습니다.' });
+      }
     }
 
     const shouldCheckPin = requirePin || Boolean(pinCode);
