@@ -78,9 +78,16 @@ async function sendSolapiTextMessage({ to, from, text }) {
 
   const endpoint = `${apiBase}/messages/v4/send`;
   const authHeader = buildSolapiAuthHeader(apiKey, apiSecret);
+  const bodyText = String(text || '').slice(0, 2000);
+  const subject = String(bodyText.split('\n')[0] || '멘토링 포털 브리핑').slice(0, 40);
   const payload = {
-    message: { to, from, text: String(text || '').slice(0, 2000) },
-    autoTypeDetect: true
+    message: {
+      to,
+      from,
+      type: 'LMS',
+      subject,
+      text: bodyText
+    }
   };
 
   const response = await fetch(endpoint, {
