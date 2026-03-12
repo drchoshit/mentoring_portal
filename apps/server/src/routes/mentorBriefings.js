@@ -556,7 +556,6 @@ function renderMentorBriefingPage({
         </div>
         <div class="toolbar">
           <button id="reloadBtn" type="button" class="btn primary">새로고침</button>
-          <button id="openAppBtn" type="button" class="btn">포털 열기</button>
         </div>
         <div id="status" class="status">브리핑 내용을 불러오는 중입니다...</div>
         <div id="pinBox" class="pin-box">
@@ -576,7 +575,6 @@ function renderMentorBriefingPage({
       const metaEl = document.getElementById('meta');
       const listEl = document.getElementById('list');
       const reloadBtn = document.getElementById('reloadBtn');
-      const openAppBtn = document.getElementById('openAppBtn');
       const pinBox = document.getElementById('pinBox');
       const pinInput = document.getElementById('pinInput');
       const pinSubmitBtn = document.getElementById('pinSubmitBtn');
@@ -724,9 +722,6 @@ function renderMentorBriefingPage({
           event.preventDefault();
           openBriefing(pinInput.value);
         }
-      });
-      openAppBtn.addEventListener('click', () => {
-        window.open('/', '_blank', 'noopener,noreferrer');
       });
 
       openBriefing('');
