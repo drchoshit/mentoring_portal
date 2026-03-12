@@ -223,6 +223,12 @@ export default function AssignmentStatus() {
   const [stateSavingKey, setStateSavingKey] = useState('');
   const [incompleteEditKey, setIncompleteEditKey] = useState('');
   const [incompleteReasonDraft, setIncompleteReasonDraft] = useState('');
+  const [briefingMentor, setBriefingMentor] = useState('');
+  const [briefingPhone, setBriefingPhone] = useState('');
+  const [briefingBusy, setBriefingBusy] = useState(false);
+  const [briefingError, setBriefingError] = useState('');
+  const [briefingResult, setBriefingResult] = useState(null);
+  const [briefingCopyStatus, setBriefingCopyStatus] = useState('');
   const [editForm, setEditForm] = useState({
     mentor_name: '',
     mentor_role: 'mentor',
@@ -235,6 +241,7 @@ export default function AssignmentStatus() {
   });
   const isDirector = viewer?.role === 'director';
   const canUpdateState = Boolean(viewer?.role && viewer.role !== 'parent');
+  const canIssueBriefing = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
 
   function setQueryParams(patch) {
     const cur = Object.fromEntries([...sp.entries()]);
@@ -249,6 +256,7 @@ export default function AssignmentStatus() {
     if (!targetWeekId) return;
     setBusy(true);
     setError('');
+    setBriefingError('');
     try {
       const data = await api(`/api/mentoring/assignment-status?weekId=${encodeURIComponent(targetWeekId)}`);
       setRows(Array.isArray(data?.assignments) ? data.assignments : []);
@@ -410,10 +418,69 @@ export default function AssignmentStatus() {
   }
 
   const grouped = useMemo(() => groupAssignments(rows), [rows]);
+  const mentorOptions = useMemo(() => {
+    return grouped.map((group) => ({
+      mentor_name: String(group?.mentor_name || '').trim(),
+      mentor_role: String(group?.mentor_role || '').trim() || 'mentor'
+    })).filter((row) => row.mentor_name);
+  }, [grouped]);
   const weekLabel = useMemo(() => {
     const found = (weeks || []).find((w) => String(w.id) === String(weekId));
     return found ? toRoundLabel(found.label) : '';
   }, [weeks, weekId]);
+
+  useEffect(() => {
+    if (!mentorOptions.length) {
+      if (briefingMentor) setBriefingMentor('');
+      return;
+    }
+    const hasCurrent = mentorOptions.some((row) => row.mentor_name === briefingMentor);
+    if (!hasCurrent) setBriefingMentor(mentorOptions[0].mentor_name);
+  }, [mentorOptions, briefingMentor]);
+
+  useEffect(() => {
+    setBriefingResult(null);
+    setBriefingCopyStatus('');
+    setBriefingError('');
+  }, [weekId]);
+
+  async function issueMentorBriefing() {
+    const mentorName = String(briefingMentor || '').trim();
+    if (!weekId || !mentorName) return;
+
+    const selected = mentorOptions.find((row) => row.mentor_name === mentorName);
+    setBriefingBusy(true);
+    setBriefingError('');
+    setBriefingCopyStatus('');
+    try {
+      const result = await api('/api/mentor-briefings/issue', {
+        method: 'POST',
+        body: {
+          week_id: Number(weekId || 0),
+          mentor_name: mentorName,
+          mentor_role: selected?.mentor_role || 'mentor',
+          mentor_phone: String(briefingPhone || '').trim()
+        }
+      });
+      setBriefingResult(result || null);
+    } catch (e) {
+      setBriefingResult(null);
+      setBriefingError(e?.message || '사전 전송 링크 생성에 실패했습니다.');
+    } finally {
+      setBriefingBusy(false);
+    }
+  }
+
+  async function copyBriefingLink() {
+    const link = String(briefingResult?.share_url || '').trim();
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setBriefingCopyStatus('링크를 복사했습니다.');
+    } catch {
+      setBriefingCopyStatus('복사에 실패했습니다. 링크를 직접 선택해 복사해 주세요.');
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -456,6 +523,96 @@ export default function AssignmentStatus() {
           {weekLabel ? `기준 회차: ${weekLabel}` : '회차를 선택해 주세요.'}
         </div>
         {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
+        {canIssueBriefing ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+            <div className="text-sm font-semibold text-slate-800">멘토 사전 전송 링크 (48시간)</div>
+            <div className="mt-1 text-xs text-slate-600">
+              멘토를 선택해 링크/PIN을 생성하면 QR로 바로 전달할 수 있습니다.
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto]">
+              <select
+                className="input h-9"
+                value={briefingMentor}
+                onChange={(e) => setBriefingMentor(String(e.target.value || ''))}
+              >
+                {mentorOptions.length ? (
+                  mentorOptions.map((opt) => (
+                    <option key={`briefing-mentor-${opt.mentor_name}`} value={opt.mentor_name}>
+                      {opt.mentor_name} ({ROLE_LABEL[opt.mentor_role] || opt.mentor_role})
+                    </option>
+                  ))
+                ) : (
+                  <option value="">멘토 없음</option>
+                )}
+              </select>
+              <input
+                className="input h-9"
+                value={briefingPhone}
+                onChange={(e) => setBriefingPhone(e.target.value)}
+                placeholder="연락처 (선택)"
+                maxLength={30}
+              />
+              <button
+                type="button"
+                className="btn-primary h-9 px-3 text-sm"
+                disabled={briefingBusy || !weekId || !briefingMentor}
+                onClick={() => void issueMentorBriefing()}
+              >
+                {briefingBusy ? '생성 중...' : '링크 생성'}
+              </button>
+            </div>
+            {briefingError ? (
+              <div className="mt-2 text-xs text-red-600">{briefingError}</div>
+            ) : null}
+            {briefingResult ? (
+              <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
+                <div className="text-xs text-slate-700">
+                  대상 멘토: <span className="font-semibold">{briefingResult.mentor_name || '-'}</span>
+                  {' · '}만료: {fmtDateTime(briefingResult.expires_at)}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <div className="rounded-md border border-emerald-200 bg-white px-2.5 py-1.5 text-sm font-semibold text-emerald-800">
+                    PIN: {briefingResult.pin_code || '------'}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-ghost h-8 px-2.5 text-xs"
+                    onClick={() => void copyBriefingLink()}
+                  >
+                    링크 복사
+                  </button>
+                  {briefingResult.share_url ? (
+                    <a
+                      className="btn-ghost h-8 px-2.5 text-xs"
+                      href={String(briefingResult.share_url)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      링크 열기
+                    </a>
+                  ) : null}
+                </div>
+                {briefingCopyStatus ? (
+                  <div className="mt-1 text-xs text-slate-600">{briefingCopyStatus}</div>
+                ) : null}
+                {briefingResult.share_url ? (
+                  <div className="mt-2 break-all rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-600">
+                    {String(briefingResult.share_url)}
+                  </div>
+                ) : null}
+                {briefingResult.qr_url ? (
+                  <div className="mt-2">
+                    <img
+                      src={String(briefingResult.qr_url)}
+                      alt="멘토 사전 전송 QR"
+                      className="h-40 w-40 rounded-md border border-slate-200 bg-white p-1"
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {busy ? (

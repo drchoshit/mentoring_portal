@@ -23,6 +23,7 @@ import backupRoutes from './routes/backups.js';
 import settingsRoutes from './routes/settings.js';
 import mentorAssignmentsRoutes from './routes/mentorAssignments.js';
 import problemUploadRoutes from './routes/problemUploads.js';
+import mentorBriefingsRoutes from './routes/mentorBriefings.js';
 
 dotenv.config();
 
@@ -192,6 +193,7 @@ app.options('*', cors(corsOptions));
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 app.use('/uploads/problem-images', express.static(PROBLEM_IMAGE_DIR));
 app.use('/api/problem-upload', problemUploadRoutes(db));
+app.use('/api/mentor-briefings', mentorBriefingsRoutes(db));
 
 app.use('/api/auth', authRoutes(db));
 app.use('/api/users', requireAuth(db), userRoutes(db));
