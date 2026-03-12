@@ -325,7 +325,13 @@ const DEFAULT_WRONG_ANSWER_ITEM = {
   problem_type: '',
   note: '',
   images: [],
-  assignment: null
+  assignment: null,
+  completion_status: 'pending',
+  incomplete_reason: '',
+  status_updated_at: '',
+  status_updated_by: '',
+  deleted_at: '',
+  deleted_by: ''
 };
 
 const KO_DAY = ['일', '월', '화', '수', '목', '금', '토'];
@@ -384,6 +390,10 @@ function normalizeWrongAnswerAssignment(raw) {
 
 function normalizeWrongAnswerItem(raw, fallbackAssignment = null) {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_WRONG_ANSWER_ITEM };
+  const statusRaw = String(raw.completion_status || '').trim();
+  const completionStatus = statusRaw === 'done' || statusRaw === 'incomplete' ? statusRaw : 'pending';
+  const incompleteReasonRaw = String(raw.incomplete_reason || '').replace(/\r\n/g, '\n');
+  const incompleteReason = completionStatus === 'incomplete' ? incompleteReasonRaw.trim().slice(0, 1000) : '';
   return {
     subject: String(raw.subject || '').trim(),
     material: String(raw.material || '').trim(),
@@ -391,6 +401,12 @@ function normalizeWrongAnswerItem(raw, fallbackAssignment = null) {
     problem_type: String(raw.problem_type || '').trim(),
     note: String(raw.note || '').trim(),
     assignment: normalizeWrongAnswerAssignment(raw.assignment || fallbackAssignment),
+    completion_status: completionStatus,
+    incomplete_reason: incompleteReason,
+    status_updated_at: String(raw.status_updated_at || '').trim(),
+    status_updated_by: String(raw.status_updated_by || '').trim(),
+    deleted_at: String(raw.deleted_at || '').trim(),
+    deleted_by: String(raw.deleted_by || '').trim(),
     images: Array.isArray(raw.images)
       ? raw.images
           .map((img) => ({
@@ -419,7 +435,7 @@ function normalizeWrongAnswerDistribution(value) {
       : [];
   const topLevelAssignment = normalizeWrongAnswerAssignment(value.assignment);
   const problems = problemsRaw.length
-    ? problemsRaw.map((item) => normalizeWrongAnswerItem(item, topLevelAssignment))
+    ? problemsRaw.map((item, idx) => normalizeWrongAnswerItem(item, idx === 0 ? topLevelAssignment : null))
     : [{ ...DEFAULT_WRONG_ANSWER_ITEM, assignment: topLevelAssignment }];
   const assignment = normalizeWrongAnswerAssignment(
     topLevelAssignment || problems.find((item) => item?.assignment)?.assignment || null
@@ -429,6 +445,17 @@ function normalizeWrongAnswerDistribution(value) {
     assignment,
     searched_at: String(value.searched_at || '').trim()
   };
+}
+
+function pickFirstWrongAnswerAssignment(problems, fallback = null) {
+  const list = Array.isArray(problems) ? problems : [];
+  for (const item of list) {
+    const normalized = normalizeWrongAnswerItem(item);
+    if (normalized.deleted_at) continue;
+    const assignment = normalizeWrongAnswerAssignment(normalized?.assignment || null);
+    if (assignment) return assignment;
+  }
+  return normalizeWrongAnswerAssignment(fallback);
 }
 
 function listWrongAnswerImages(db, student_id, week_id) {
@@ -1036,38 +1063,40 @@ export default function mentoringRoutes(db) {
 
     const assignments = [];
     for (const row of rows) {
+      const rawDist = safeJson(row.e_wrong_answer_distribution, {});
       const dist = mergeWrongAnswerDistributionWithImages(
         db,
         row.student_id,
         week_id,
-        safeJson(row.e_wrong_answer_distribution, {})
+        rawDist
       );
-      const assignment = dist.assignment && typeof dist.assignment === 'object' ? dist.assignment : null;
-      if (!assignment?.mentor_name) continue;
+      const mergedProblems = Array.isArray(dist?.problems) ? dist.problems : [];
+      const rawProblems = Array.isArray(rawDist?.problems) ? rawDist.problems : [];
+      const topLevelAssignment = normalizeWrongAnswerAssignment(rawDist?.assignment || dist?.assignment || null);
 
-      const mentorName = String(assignment.mentor_name || '').trim();
-      const mentorRole = String(assignment.mentor_role || '').trim();
-      const startTime = String(assignment.session_start_time || assignment.session_time || '').trim();
-      const duration = Math.max(5, Math.min(240, Number(assignment.session_duration_minutes || 20) || 20));
-      const startMinutes = parseTimePart(startTime);
-      const endTime = startMinutes == null ? '' : toHHMM(startMinutes + duration);
-      const dayLabel = resolveSessionDayLabel(week, assignment) || '-';
-      const sessionDateLabel = assignment.session_month && assignment.session_day
-        ? `${assignment.session_month}/${assignment.session_day}`
-        : '-';
-      const sessionMonth = String(assignment.session_month || '').trim();
-      const sessionDay = String(assignment.session_day || '').trim();
+      for (let problemIndex = 0; problemIndex < mergedProblems.length; problemIndex += 1) {
+        const problem = normalizeWrongAnswerItem(mergedProblems[problemIndex]);
+        if (problem.deleted_at) continue;
+        const explicitAssignment = normalizeWrongAnswerAssignment(rawProblems?.[problemIndex]?.assignment || null);
+        const assignment = normalizeWrongAnswerAssignment(
+          explicitAssignment || (problemIndex === 0 ? topLevelAssignment : null)
+        );
+        if (!assignment?.mentor_name) continue;
 
-      const problemItems = (Array.isArray(dist.problems) ? dist.problems : [])
-        .map((problem) => normalizeWrongAnswerItem(problem))
-        .filter((problem) => (
-          problem.subject ||
-          problem.material ||
-          problem.problem_name ||
-          problem.problem_type ||
-          (Array.isArray(problem.images) && problem.images.length > 0)
-        ))
-        .map((problem) => ({
+        const mentorName = String(assignment.mentor_name || '').trim();
+        const mentorRole = String(assignment.mentor_role || '').trim();
+        const startTime = String(assignment.session_start_time || assignment.session_time || '').trim();
+        const duration = Math.max(5, Math.min(240, Number(assignment.session_duration_minutes || 20) || 20));
+        const startMinutes = parseTimePart(startTime);
+        const endTime = startMinutes == null ? '' : toHHMM(startMinutes + duration);
+        const dayLabel = resolveSessionDayLabel(week, assignment) || '-';
+        const sessionDateLabel = assignment.session_month && assignment.session_day
+          ? `${assignment.session_month}/${assignment.session_day}`
+          : '-';
+        const sessionMonth = String(assignment.session_month || '').trim();
+        const sessionDay = String(assignment.session_day || '').trim();
+
+        const problemItem = {
           subject: String(problem.subject || '').trim(),
           material: String(problem.material || '').trim(),
           problem_name: String(problem.problem_name || '').trim(),
@@ -1081,28 +1110,35 @@ export default function mentoringRoutes(db) {
               uploaded_at: String(img?.uploaded_at || '').trim()
             }))
             .filter((img) => img.url)
-        }));
+        };
 
-      assignments.push({
-        week_record_id: row.week_record_id,
-        student_id: row.student_id,
-        student_name: String(row.student_name || '').trim(),
-        external_id: String(row.external_id || '').trim(),
-        mentor_name: mentorName,
-        mentor_role: mentorRole,
-        session_day_label: String(assignment.session_day_label || '').trim(),
-        day_label: dayLabel,
-        session_month: sessionMonth,
-        session_day: sessionDay,
-        session_date_label: sessionDateLabel,
-        session_start_time: startTime,
-        session_end_time: endTime,
-        session_duration_minutes: duration,
-        session_range_text: startTime && endTime ? `${startTime} ~ ${endTime}` : '-',
-        problem_count: problemItems.length,
-        problem_items: problemItems,
-        assigned_at: String(assignment.assigned_at || '').trim()
-      });
+        assignments.push({
+          week_record_id: row.week_record_id,
+          student_id: row.student_id,
+          student_name: String(row.student_name || '').trim(),
+          external_id: String(row.external_id || '').trim(),
+          problem_index: problemIndex,
+          problem_order: problemIndex + 1,
+          mentor_name: mentorName,
+          mentor_role: mentorRole,
+          session_day_label: String(assignment.session_day_label || '').trim(),
+          day_label: dayLabel,
+          session_month: sessionMonth,
+          session_day: sessionDay,
+          session_date_label: sessionDateLabel,
+          session_start_time: startTime,
+          session_end_time: endTime,
+          session_duration_minutes: duration,
+          session_range_text: startTime && endTime ? `${startTime} ~ ${endTime}` : '-',
+          problem_count: 1,
+          problem_items: [problemItem],
+          assigned_at: String(assignment.assigned_at || '').trim(),
+          completion_status: String(problem.completion_status || 'pending').trim() || 'pending',
+          incomplete_reason: String(problem.incomplete_reason || '').trim(),
+          status_updated_at: String(problem.status_updated_at || '').trim(),
+          status_updated_by: String(problem.status_updated_by || '').trim()
+        });
+      }
     }
 
     assignments.sort((a, b) => {
@@ -1148,6 +1184,102 @@ export default function mentoringRoutes(db) {
     });
   });
 
+  router.put('/assignment-status/:weekRecordId/problem-state', (req, res) => {
+    if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
+
+    const weekRecordId = Number(req.params.weekRecordId || 0);
+    if (!weekRecordId) return res.status(400).json({ error: 'Invalid weekRecordId' });
+
+    const weekRecord = db
+      .prepare('SELECT id, student_id, week_id, e_wrong_answer_distribution FROM week_records WHERE id=?')
+      .get(weekRecordId);
+    if (!weekRecord?.id) return res.status(404).json({ error: 'Week record not found' });
+
+    const requestedProblemIndex = Number(req.body?.problem_index);
+    const problemIndex = Number.isInteger(requestedProblemIndex) && requestedProblemIndex >= 0
+      ? requestedProblemIndex
+      : 0;
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    if (action === 'delete' && req.user.role !== 'director') {
+      return res.status(403).json({ error: 'Only director can delete assignment items' });
+    }
+
+    const dist = normalizeWrongAnswerDistribution(safeJson(weekRecord.e_wrong_answer_distribution, {}));
+    const problems = Array.isArray(dist.problems)
+      ? dist.problems.map((item) => normalizeWrongAnswerItem(item))
+      : [];
+    while (problems.length <= problemIndex) {
+      problems.push({ ...DEFAULT_WRONG_ANSWER_ITEM });
+    }
+
+    const currentProblem = normalizeWrongAnswerItem(
+      problems[problemIndex],
+      problemIndex === 0 ? dist.assignment : null
+    );
+    const nowIso = new Date().toISOString();
+    const updaterRole = String(req.user.role || '').trim();
+
+    let nextProblem;
+    if (action === 'delete') {
+      nextProblem = {
+        ...currentProblem,
+        deleted_at: nowIso,
+        deleted_by: updaterRole,
+        status_updated_at: nowIso,
+        status_updated_by: updaterRole
+      };
+    } else {
+      const statusRaw = String(req.body?.completion_status || '').trim();
+      const completionStatus = statusRaw === 'done' || statusRaw === 'incomplete' ? statusRaw : 'pending';
+      const incompleteReasonRaw = String(req.body?.incomplete_reason || '').replace(/\r\n/g, '\n');
+      const incompleteReason = completionStatus === 'incomplete' ? incompleteReasonRaw.trim().slice(0, 1000) : '';
+      nextProblem = {
+        ...currentProblem,
+        completion_status: completionStatus,
+        incomplete_reason: incompleteReason,
+        status_updated_at: nowIso,
+        status_updated_by: updaterRole,
+        deleted_at: '',
+        deleted_by: ''
+      };
+    }
+
+    problems[problemIndex] = nextProblem;
+    const summaryAssignment = pickFirstWrongAnswerAssignment(problems, dist.assignment || null);
+    const nextDist = {
+      ...dist,
+      problems,
+      assignment: summaryAssignment || null,
+      searched_at: String(dist.searched_at || '').trim() || nowIso
+    };
+
+    db.prepare(
+      "UPDATE week_records SET e_wrong_answer_distribution=?, updated_at=datetime('now'), updated_by=? WHERE id=?"
+    ).run(JSON.stringify(nextDist), req.user.id, weekRecordId);
+
+    writeAudit(db, {
+      user_id: req.user.id,
+      action: action === 'delete' ? 'delete' : 'update',
+      entity: 'assignment_problem_state',
+      entity_id: weekRecordId,
+      details: {
+        student_id: weekRecord.student_id,
+        week_id: weekRecord.week_id,
+        problem_index: problemIndex,
+        completion_status: nextProblem.completion_status || 'pending',
+        deleted_at: nextProblem.deleted_at || ''
+      }
+    });
+
+    return res.json({
+      ok: true,
+      problem_index: problemIndex,
+      completion_status: String(nextProblem.completion_status || 'pending').trim() || 'pending',
+      incomplete_reason: String(nextProblem.incomplete_reason || '').trim(),
+      deleted_at: String(nextProblem.deleted_at || '').trim()
+    });
+  });
+
   router.put('/assignment-status/:weekRecordId', (req, res) => {
     if (req.user.role !== 'director') return res.status(403).json({ error: 'Only director can update assignment status' });
 
@@ -1160,8 +1292,26 @@ export default function mentoringRoutes(db) {
     if (!weekRecord?.id) return res.status(404).json({ error: 'Week record not found' });
 
     const dist = normalizeWrongAnswerDistribution(safeJson(weekRecord.e_wrong_answer_distribution, {}));
+    const requestedProblemIndex = Number(req.body?.problem_index);
+    const problemIndex = Number.isInteger(requestedProblemIndex) && requestedProblemIndex >= 0
+      ? requestedProblemIndex
+      : 0;
+    const problems = Array.isArray(dist.problems)
+      ? dist.problems.map((item) => normalizeWrongAnswerItem(item))
+      : [];
+    while (problems.length <= problemIndex) {
+      problems.push({ ...DEFAULT_WRONG_ANSWER_ITEM });
+    }
+
+    const currentProblem = normalizeWrongAnswerItem(
+      problems[problemIndex],
+      problemIndex === 0 ? dist.assignment : null
+    );
+    if (currentProblem.deleted_at) {
+      return res.status(400).json({ error: 'Deleted problem item cannot be edited' });
+    }
     const currentAssignment = normalizeWrongAnswerAssignment(
-      dist.assignment || dist.problems?.[0]?.assignment || null
+      currentProblem.assignment || (problemIndex === 0 ? dist.assignment : null)
     ) || {};
 
     const mentorName = String(req.body?.mentor_name ?? currentAssignment.mentor_name ?? '').trim();
@@ -1193,21 +1343,16 @@ export default function mentoringRoutes(db) {
     });
     if (!nextAssignment) return res.status(400).json({ error: 'Invalid assignment payload' });
 
-    const problems = Array.isArray(dist.problems) ? [...dist.problems] : [];
-    if (!problems.length) {
-      problems.push({ ...DEFAULT_WRONG_ANSWER_ITEM, assignment: nextAssignment });
-    } else {
-      const first = normalizeWrongAnswerItem(problems[0]);
-      problems[0] = {
-        ...first,
-        assignment: nextAssignment
-      };
-    }
+    problems[problemIndex] = {
+      ...currentProblem,
+      assignment: nextAssignment
+    };
+    const summaryAssignment = pickFirstWrongAnswerAssignment(problems, dist.assignment || nextAssignment);
 
     const nextDist = {
       ...dist,
       problems,
-      assignment: nextAssignment,
+      assignment: summaryAssignment || nextAssignment,
       searched_at: String(dist.searched_at || '').trim() || new Date().toISOString()
     };
 
@@ -1223,6 +1368,7 @@ export default function mentoringRoutes(db) {
       details: {
         student_id: weekRecord.student_id,
         week_id: weekRecord.week_id,
+        problem_index: problemIndex,
         mentor_name: mentorName,
         session_day_label: dayLabel,
         session_month: monthRaw,
@@ -1231,7 +1377,7 @@ export default function mentoringRoutes(db) {
       }
     });
 
-    return res.json({ ok: true, assignment: nextAssignment });
+    return res.json({ ok: true, assignment: nextAssignment, problem_index: problemIndex });
   });
 
   router.post('/workflow/submit', (req, res) => {

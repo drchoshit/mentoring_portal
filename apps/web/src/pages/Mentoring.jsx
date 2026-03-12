@@ -54,6 +54,52 @@ const SUBJECT_INNER_TONES = [
   'border-violet-100/80 bg-violet-50/50',
   'border-sky-100/80 bg-sky-50/50'
 ];
+const WRONG_ANSWER_TONES = [
+  {
+    card: 'border-emerald-300/90 bg-emerald-50/35',
+    ring: 'ring-emerald-200',
+    assignButton: 'btn border border-emerald-700 bg-emerald-700 text-white hover:border-emerald-800 hover:bg-emerald-800',
+    assignButtonSoft: 'btn border border-emerald-300 bg-emerald-50 text-emerald-800 hover:border-emerald-400 hover:bg-emerald-100'
+  },
+  {
+    card: 'border-amber-300/90 bg-amber-50/35',
+    ring: 'ring-amber-200',
+    assignButton: 'btn border border-amber-700 bg-amber-600 text-white hover:border-amber-800 hover:bg-amber-700',
+    assignButtonSoft: 'btn border border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400 hover:bg-amber-100'
+  },
+  {
+    card: 'border-sky-300/90 bg-sky-50/35',
+    ring: 'ring-sky-200',
+    assignButton: 'btn border border-sky-700 bg-sky-600 text-white hover:border-sky-800 hover:bg-sky-700',
+    assignButtonSoft: 'btn border border-sky-300 bg-sky-50 text-sky-800 hover:border-sky-400 hover:bg-sky-100'
+  },
+  {
+    card: 'border-violet-300/90 bg-violet-50/35',
+    ring: 'ring-violet-200',
+    assignButton: 'btn border border-violet-700 bg-violet-600 text-white hover:border-violet-800 hover:bg-violet-700',
+    assignButtonSoft: 'btn border border-violet-300 bg-violet-50 text-violet-800 hover:border-violet-400 hover:bg-violet-100'
+  },
+  {
+    card: 'border-rose-300/90 bg-rose-50/35',
+    ring: 'ring-rose-200',
+    assignButton: 'btn border border-rose-700 bg-rose-600 text-white hover:border-rose-800 hover:bg-rose-700',
+    assignButtonSoft: 'btn border border-rose-300 bg-rose-50 text-rose-800 hover:border-rose-400 hover:bg-rose-100'
+  }
+];
+
+function wrongAnswerToneByIndex(index) {
+  const tones = WRONG_ANSWER_TONES.length
+    ? WRONG_ANSWER_TONES
+    : [
+        {
+          card: 'border-slate-200 bg-white/70',
+          ring: 'ring-brand-200',
+          assignButton: 'btn-primary',
+          assignButtonSoft: 'btn-ghost'
+        }
+      ];
+  return tones[Math.abs(Number(index) || 0) % tones.length];
+}
 
 function safeJson(v, fallback) {
   try {
@@ -191,7 +237,13 @@ const DEFAULT_WRONG_ANSWER_ITEM = {
   problem_type: '',
   note: '',
   images: [],
-  assignment: null
+  assignment: null,
+  completion_status: 'pending',
+  incomplete_reason: '',
+  status_updated_at: '',
+  status_updated_by: '',
+  deleted_at: '',
+  deleted_by: ''
 };
 
 const MIN_MENTOR_OVERLAP_MINUTES = 10;
@@ -258,12 +310,22 @@ function normalizeWrongAnswerImage(raw) {
 
 function normalizeWrongAnswerItem(raw) {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_WRONG_ANSWER_ITEM };
+  const statusRaw = String(raw.completion_status || '').trim();
+  const completionStatus = statusRaw === 'done' || statusRaw === 'incomplete' ? statusRaw : 'pending';
+  const incompleteReasonRaw = String(raw.incomplete_reason || '').replace(/\r\n/g, '\n');
+  const incompleteReason = completionStatus === 'incomplete' ? incompleteReasonRaw.trim().slice(0, 1000) : '';
   return {
     subject: String(raw.subject || '').trim(),
     material: String(raw.material || '').trim(),
     problem_name: String(raw.problem_name || '').trim(),
     problem_type: String(raw.problem_type || '').trim(),
     note: String(raw.note || '').trim(),
+    completion_status: completionStatus,
+    incomplete_reason: incompleteReason,
+    status_updated_at: String(raw.status_updated_at || '').trim(),
+    status_updated_by: String(raw.status_updated_by || '').trim(),
+    deleted_at: String(raw.deleted_at || '').trim(),
+    deleted_by: String(raw.deleted_by || '').trim(),
     images: Array.isArray(raw.images) ? raw.images.map(normalizeWrongAnswerImage).filter(Boolean) : [],
     assignment: normalizeWrongAnswerAssignment(raw.assignment)
   };
@@ -288,11 +350,13 @@ function normalizeWrongAnswerDistribution(value) {
       : [];
   const topLevelAssignment = normalizeWrongAnswerAssignment(value.assignment);
   const problems = problemsRaw.length
-    ? problemsRaw.map((item) => {
+    ? problemsRaw.map((item, idx) => {
         const normalized = normalizeWrongAnswerItem(item);
         return {
           ...normalized,
-          assignment: normalizeWrongAnswerAssignment(normalized.assignment || topLevelAssignment)
+          assignment: normalizeWrongAnswerAssignment(
+            normalized.assignment || (idx === 0 ? topLevelAssignment : null)
+          )
         };
       })
     : [{ ...DEFAULT_WRONG_ANSWER_ITEM, assignment: topLevelAssignment }];
@@ -1103,7 +1167,7 @@ export default function Mentoring() {
   const mentorInfo = useMemo(() => normalizeMentorInfo(rec?.mentor_info), [rec?.mentor_info]);
   const scheduleWeekStart = schedule?.week_start || rec?.week?.start_date || '';
   const currentWeekRound = useMemo(() => getWeekRound(rec?.week), [rec?.week?.id, rec?.week?.label]);
-  const showClinicSection = currentWeekRound >= 5 && user?.role !== 'lead';
+  const showClinicSection = currentWeekRound >= 5 && mentorMode;
   const useNewDailyTaskLayout = useMemo(() => {
     if (typeof rec?.use_new_daily_task_layout === 'boolean') return rec.use_new_daily_task_layout;
     return currentWeekRound >= 4;
@@ -2007,20 +2071,28 @@ export default function Mentoring() {
                 const problemAssignment = normalizeWrongAnswerAssignment(
                   item?.assignment || (idx === 0 ? wrongAnswerDistributionDraft?.assignment : null)
                 );
+                const tone = wrongAnswerToneByIndex(idx);
                 const isTargetProblem = Number(wrongAnswerTargetProblemIndex || 0) === idx;
                 const isCollapsed = Boolean(collapsedWrongAnswerProblems?.[idx]);
                 const showMentorPickerForProblem = wrongAnswerSearched && isTargetProblem;
                 return (
                 <div
                   key={idx}
-                  className={`rounded-2xl border bg-white/70 p-3 ${isTargetProblem ? 'border-brand-300 ring-1 ring-brand-200' : 'border-slate-200'}`}
+                  className={[
+                    'rounded-2xl border p-3',
+                    tone.card,
+                    isTargetProblem ? `ring-1 ${tone.ring}` : ''
+                  ].join(' ')}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold text-slate-900">오답 기록 {idx + 1}</div>
                     {canEditA('e_wrong_answer_distribution') && !parentMode ? (
                       <div className="flex items-center gap-2">
                         <button
-                          className={isTargetProblem ? 'btn-primary' : 'btn-ghost'}
+                          className={[
+                            tone.assignButton,
+                            isTargetProblem ? `ring-2 ring-offset-1 ${tone.ring}` : ''
+                          ].join(' ')}
                           type="button"
                           onClick={() => findWrongAnswerCandidates(idx)}
                         >
@@ -2143,8 +2215,8 @@ export default function Mentoring() {
                         ) : (
                           <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
                         )}
-                        <div className="mt-1 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_160px] md:items-end">
-                          <div>
+                        <div className="mt-1 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_160px] md:items-center">
+                          <div className="min-w-0">
                             <div className="text-[11px] text-slate-600">일정 (캘린더 선택)</div>
                             <input
                               className="input mt-1 h-9"
@@ -2172,13 +2244,8 @@ export default function Mentoring() {
                               }}
                               disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
                             />
-                            <div className="mt-1 text-[11px] text-slate-600">
-                              자동 반영: {problemAssignment?.session_day_label || '-'}요일 ·{' '}
-                              {problemAssignment?.session_month || '-'}월 {problemAssignment?.session_day || '-'}일 ·{' '}
-                              {problemAssignment?.session_start_time || '--:--'}
-                            </div>
                           </div>
-                          <div>
+                          <div className="md:self-center">
                             <div className="text-[11px] text-slate-600">진행 시간(분)</div>
                             <input
                               className="input mt-1 h-9"
@@ -2197,6 +2264,11 @@ export default function Mentoring() {
                               }
                               disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
                             />
+                          </div>
+                          <div className="text-[11px] text-slate-600 md:col-span-2">
+                            자동 반영: {problemAssignment?.session_day_label || '-'}요일 ·{' '}
+                            {problemAssignment?.session_month || '-'}월 {problemAssignment?.session_day || '-'}일 ·{' '}
+                            {problemAssignment?.session_start_time || '--:--'}
                           </div>
                         </div>
                         {problemAssignment?.session_start_time ? (
@@ -2310,7 +2382,7 @@ export default function Mentoring() {
                                     <td className="px-3 py-2 text-right">
                                       {canEditA('e_wrong_answer_distribution') && !parentMode ? (
                                         <button
-                                          className={isSelected ? 'btn-primary' : 'btn-ghost'}
+                                          className={isSelected ? tone.assignButton : tone.assignButtonSoft}
                                           type="button"
                                           onClick={() => assignWrongAnswerMentor(candidate, idx)}
                                         >
@@ -4029,4 +4101,3 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
     </div>
   );
 });
-

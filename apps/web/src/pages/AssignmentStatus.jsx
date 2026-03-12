@@ -188,7 +188,26 @@ function groupAssignments(items) {
 }
 
 function assignmentRowKey(item) {
-  return `${item?.week_record_id || ''}-${item?.student_id || ''}`;
+  return `${item?.week_record_id || ''}-${item?.student_id || ''}-${item?.problem_index ?? ''}`;
+}
+
+function normalizeCompletionStatus(value) {
+  const raw = String(value || '').trim();
+  if (raw === 'done') return 'done';
+  if (raw === 'incomplete') return 'incomplete';
+  return 'pending';
+}
+
+function completionStatusTone(status) {
+  if (status === 'done') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+  if (status === 'incomplete') return 'border-amber-200 bg-amber-50 text-amber-800';
+  return 'border-slate-200 bg-slate-50 text-slate-700';
+}
+
+function completionStatusLabel(status) {
+  if (status === 'done') return '완료';
+  if (status === 'incomplete') return '미완료';
+  return '진행중';
 }
 
 export default function AssignmentStatus() {
@@ -201,6 +220,9 @@ export default function AssignmentStatus() {
   const [busy, setBusy] = useState(false);
   const [editingKey, setEditingKey] = useState('');
   const [savingKey, setSavingKey] = useState('');
+  const [stateSavingKey, setStateSavingKey] = useState('');
+  const [incompleteEditKey, setIncompleteEditKey] = useState('');
+  const [incompleteReasonDraft, setIncompleteReasonDraft] = useState('');
   const [editForm, setEditForm] = useState({
     mentor_name: '',
     mentor_role: 'mentor',
@@ -212,6 +234,7 @@ export default function AssignmentStatus() {
     session_duration_minutes: 20
   });
   const isDirector = viewer?.role === 'director';
+  const canUpdateState = Boolean(viewer?.role && viewer.role !== 'parent');
 
   function setQueryParams(patch) {
     const cur = Object.fromEntries([...sp.entries()]);
@@ -232,6 +255,9 @@ export default function AssignmentStatus() {
       setViewer(data?.viewer || null);
       setEditingKey('');
       setSavingKey('');
+      setStateSavingKey('');
+      setIncompleteEditKey('');
+      setIncompleteReasonDraft('');
     } catch (e) {
       setError(e?.message || '배정현황을 불러오지 못했습니다.');
       setRows([]);
@@ -270,6 +296,8 @@ export default function AssignmentStatus() {
 
   function beginEdit(item) {
     if (!item) return;
+    setIncompleteEditKey('');
+    setIncompleteReasonDraft('');
     setEditingKey(assignmentRowKey(item));
     const sessionMonth = String(item.session_month || '').trim();
     const sessionDay = String(item.session_day || '').trim();
@@ -300,6 +328,7 @@ export default function AssignmentStatus() {
       await api(`/api/mentoring/assignment-status/${encodeURIComponent(String(item.week_record_id))}`, {
         method: 'PUT',
         body: {
+          problem_index: Number(item.problem_index || 0),
           mentor_name: String(editForm.mentor_name || '').trim(),
           mentor_role: String(editForm.mentor_role || '').trim() || 'mentor',
           session_day_label: String(editForm.session_day_label || '').trim(),
@@ -319,6 +348,65 @@ export default function AssignmentStatus() {
     } finally {
       setSavingKey('');
     }
+  }
+
+  function openIncompleteEditor(item) {
+    const rowKey = assignmentRowKey(item);
+    if (!rowKey) return;
+    setEditingKey('');
+    setIncompleteEditKey(rowKey);
+    setIncompleteReasonDraft(String(item?.incomplete_reason || ''));
+  }
+
+  function closeIncompleteEditor() {
+    setIncompleteEditKey('');
+    setIncompleteReasonDraft('');
+  }
+
+  async function updateProblemState(item, payload) {
+    const rowKey = assignmentRowKey(item);
+    if (!item?.week_record_id || !rowKey) return;
+    setStateSavingKey(rowKey);
+    setError('');
+    try {
+      await api(`/api/mentoring/assignment-status/${encodeURIComponent(String(item.week_record_id))}/problem-state`, {
+        method: 'PUT',
+        body: {
+          problem_index: Number(item.problem_index || 0),
+          ...payload
+        }
+      });
+      await loadStatus(weekId);
+    } catch (e) {
+      setError(e?.message || '상태 저장에 실패했습니다.');
+    } finally {
+      setStateSavingKey('');
+    }
+  }
+
+  async function markProblemDone(item) {
+    closeIncompleteEditor();
+    await updateProblemState(item, { completion_status: 'done', incomplete_reason: '' });
+  }
+
+  async function saveProblemIncomplete(item) {
+    const reason = String(incompleteReasonDraft || '').trim();
+    if (!reason) {
+      setError('미완료 사유를 입력해 주세요.');
+      return;
+    }
+    await updateProblemState(item, {
+      completion_status: 'incomplete',
+      incomplete_reason: reason
+    });
+    closeIncompleteEditor();
+  }
+
+  async function deleteProblemItem(item) {
+    const ok = window.confirm('이 배정 항목을 삭제할까요? 데이터와 이미지는 즉시 물리 삭제되지 않습니다.');
+    if (!ok) return;
+    closeIncompleteEditor();
+    await updateProblemState(item, { action: 'delete' });
   }
 
   const grouped = useMemo(() => groupAssignments(rows), [rows]);
@@ -399,21 +487,61 @@ export default function AssignmentStatus() {
                 const problems = Array.isArray(item.problem_items) ? item.problem_items : [];
                 const rowKey = assignmentRowKey(item);
                 const isEditing = isDirector && editingKey === rowKey;
+                const isIncompleteEditing = incompleteEditKey === rowKey;
+                const isStateSaving = stateSavingKey === rowKey;
+                const status = normalizeCompletionStatus(item?.completion_status);
+                const problemOrder = Math.max(
+                  1,
+                  Number(item.problem_order || (Number(item.problem_index || 0) + 1) || 1)
+                );
                 return (
                   <div
-                    key={`${item.week_record_id}-${item.student_id}`}
+                    key={rowKey}
                     className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2"
                   >
                     <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <div className="text-sm font-medium text-slate-900">
                           {item.external_id ? `${item.external_id} · ` : ''}
-                          {item.student_name || '-'}
+                          {item.student_name || '-'} · 오답 기록 {problemOrder}
                         </div>
                         <div className="text-xs text-slate-600 mt-0.5">예정: {scheduleLabel(item)}</div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap justify-end">
+                        <span className={['inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]', completionStatusTone(status)].join(' ')}>
+                          {completionStatusLabel(status)}
+                        </span>
                         <div className="text-[11px] text-slate-500">배정일시: {fmtDateTime(item.assigned_at)}</div>
+                        {canUpdateState ? (
+                          <>
+                            <button
+                              type="button"
+                              className={status === 'done' ? 'btn-primary h-8 px-2.5 text-xs' : 'btn-ghost h-8 px-2.5 text-xs'}
+                              disabled={isStateSaving || savingKey === rowKey}
+                              onClick={() => void markProblemDone(item)}
+                            >
+                              완료
+                            </button>
+                            <button
+                              type="button"
+                              className={status === 'incomplete' ? 'btn border border-amber-700 bg-amber-600 text-white h-8 px-2.5 text-xs hover:bg-amber-700' : 'btn-ghost h-8 px-2.5 text-xs'}
+                              disabled={isStateSaving || savingKey === rowKey}
+                              onClick={() => openIncompleteEditor(item)}
+                            >
+                              미완료
+                            </button>
+                          </>
+                        ) : null}
+                        {isDirector ? (
+                          <button
+                            type="button"
+                            className="btn-ghost h-8 px-2.5 text-xs text-rose-700 border-rose-200 hover:border-rose-300 hover:text-rose-800"
+                            disabled={isStateSaving || savingKey === rowKey}
+                            onClick={() => void deleteProblemItem(item)}
+                          >
+                            삭제
+                          </button>
+                        ) : null}
                         {isDirector ? (
                           isEditing ? (
                             <>
@@ -518,6 +646,45 @@ export default function AssignmentStatus() {
                               session_duration_minutes: Math.max(5, Math.min(240, Number(e.target.value || 20) || 20))
                             }))}
                           />
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {isIncompleteEditing ? (
+                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-2">
+                        <div className="text-[11px] text-amber-800">미완료 사유</div>
+                        <textarea
+                          rows={2}
+                          className="textarea mt-1 min-h-[56px]"
+                          value={incompleteReasonDraft}
+                          onChange={(e) => setIncompleteReasonDraft(e.target.value)}
+                          placeholder="예: 학생 결석으로 미진행, 문제 풀이 미제출 등"
+                          disabled={isStateSaving}
+                        />
+                        <div className="mt-2 flex justify-end gap-2">
+                          <button
+                            type="button"
+                            className="btn border border-amber-700 bg-amber-600 text-white h-8 px-2.5 text-xs hover:bg-amber-700"
+                            disabled={isStateSaving}
+                            onClick={() => void saveProblemIncomplete(item)}
+                          >
+                            저장
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost h-8 px-2.5 text-xs"
+                            disabled={isStateSaving}
+                            onClick={closeIncompleteEditor}
+                          >
+                            취소
+                          </button>
+                        </div>
+                      </div>
+                    ) : status === 'incomplete' && String(item?.incomplete_reason || '').trim() ? (
+                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-2">
+                        <div className="text-[11px] text-amber-800">미완료 사유</div>
+                        <div className="mt-1 whitespace-pre-wrap text-xs text-amber-900">
+                          {String(item.incomplete_reason || '').trim()}
                         </div>
                       </div>
                     ) : null}
