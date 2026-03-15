@@ -141,6 +141,28 @@ function joinNonEmpty(parts, separator = ' · ') {
     .join(separator);
 }
 
+function parseDateTimeValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
+function formatDateTimeLabel(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const date = parseDateTimeValue(raw);
+  if (!date) return raw;
+  return new Intl.DateTimeFormat('ko-KR', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(date);
+}
+
 function normalizeWrongAnswerAssignment(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const mentorName = String(raw.mentor_name || '').trim();
@@ -195,13 +217,13 @@ function parseWrongAnswerItems(value) {
 
 function QnaStatusBadge({ status }) {
   const tone = status === 'done'
-    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+    ? 'border-emerald-200/80 bg-emerald-50/90 text-emerald-800'
     : status === 'incomplete'
-      ? 'border-amber-200 bg-amber-50 text-amber-800'
-      : 'border-slate-200 bg-slate-50 text-slate-700';
+      ? 'border-amber-200/80 bg-amber-50/90 text-amber-800'
+      : 'border-slate-200/80 bg-slate-50/90 text-slate-700';
   const label = status === 'done' ? '완료' : status === 'incomplete' ? '미완료' : '진행중';
   return (
-    <span className={['inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]', tone].join(' ')}>
+    <span className={['inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm', tone].join(' ')}>
       {label}
     </span>
   );
@@ -209,48 +231,59 @@ function QnaStatusBadge({ status }) {
 
 function Badge({ children }) {
   return (
-    <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-100/70 px-2 py-0.5 text-[11px] text-amber-900">
+    <span className="inline-flex items-center rounded-full border border-amber-200/80 bg-white/88 px-3 py-1 text-[11px] font-semibold text-amber-900 shadow-sm">
       {children}
     </span>
   );
 }
 
 const SECTION_TONES = {
-  header: 'border-amber-200/60 bg-amber-50/35',
-  calendar: 'border-emerald-200/60 bg-emerald-50/35',
-  penalties: 'border-rose-200/60 bg-rose-50/35',
-  mentor: 'border-violet-200/60 bg-violet-50/30',
-  curriculum: 'border-sky-200/60 bg-sky-50/30',
-  subjects: 'border-amber-200/60 bg-amber-50/30',
-  daily: 'border-blue-200/60 bg-blue-50/30',
-  clinic: 'border-indigo-200/60 bg-indigo-50/30',
-  weekly: 'border-emerald-200/60 bg-emerald-50/30'
+  header: 'border-amber-200/70 bg-[linear-gradient(135deg,rgba(255,248,237,0.96),rgba(255,255,255,0.98))]',
+  calendar: 'border-emerald-200/70 bg-[linear-gradient(135deg,rgba(238,253,245,0.95),rgba(255,255,255,0.98))]',
+  penalties: 'border-rose-200/70 bg-[linear-gradient(135deg,rgba(255,241,242,0.95),rgba(255,255,255,0.98))]',
+  mentor: 'border-violet-200/70 bg-[linear-gradient(135deg,rgba(245,243,255,0.95),rgba(255,255,255,0.98))]',
+  curriculum: 'border-sky-200/70 bg-[linear-gradient(135deg,rgba(240,249,255,0.95),rgba(255,255,255,0.98))]',
+  subjects: 'border-amber-200/70 bg-[linear-gradient(135deg,rgba(255,251,235,0.95),rgba(255,255,255,0.98))]',
+  daily: 'border-cyan-200/70 bg-[linear-gradient(135deg,rgba(236,254,255,0.95),rgba(255,255,255,0.98))]',
+  clinic: 'border-indigo-200/70 bg-[linear-gradient(135deg,rgba(238,242,255,0.95),rgba(255,255,255,0.98))]',
+  weekly: 'border-emerald-200/70 bg-[linear-gradient(135deg,rgba(236,253,245,0.95),rgba(255,255,255,0.98))]'
 };
 
 const DEFAULT_PARENT_MENTOR_NOTICE = '멘토 및 멘토링 요일은 학생의 일정에 따라 변경될 수 있습니다.';
 
 const SUBJECT_TONES = [
-  'border-emerald-200/60 bg-emerald-50/35',
-  'border-amber-200/60 bg-amber-50/35',
-  'border-violet-200/60 bg-violet-50/30',
-  'border-sky-200/60 bg-sky-50/30',
-  'border-rose-200/60 bg-rose-50/30'
+  'border-emerald-200/70 bg-[linear-gradient(135deg,rgba(236,253,245,0.92),rgba(255,255,255,0.96))]',
+  'border-amber-200/70 bg-[linear-gradient(135deg,rgba(255,251,235,0.92),rgba(255,255,255,0.96))]',
+  'border-violet-200/70 bg-[linear-gradient(135deg,rgba(245,243,255,0.92),rgba(255,255,255,0.96))]',
+  'border-sky-200/70 bg-[linear-gradient(135deg,rgba(240,249,255,0.92),rgba(255,255,255,0.96))]',
+  'border-rose-200/70 bg-[linear-gradient(135deg,rgba(255,241,242,0.92),rgba(255,255,255,0.96))]'
 ];
+
+const SECTION_CARD_BASE =
+  'card overflow-hidden rounded-[28px] border bg-white/85 p-5 md:p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm';
+
+function sectionCardClass(tone) {
+  return [SECTION_CARD_BASE, tone].join(' ');
+}
 
 function InfoPill({ label, value }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 py-1 text-xs text-slate-700">
-      <span className="text-slate-500">{label}</span>
-      <span className="font-semibold text-slate-900">{value || '-'}</span>
+    <span className="inline-flex min-w-[120px] flex-col rounded-2xl border border-white/80 bg-white/88 px-3.5 py-2 text-left shadow-sm">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">{label}</span>
+      <span className="mt-1 text-sm font-semibold text-slate-900">{value || '-'}</span>
     </span>
   );
 }
 
 function SectionTitle({ title, right }) {
   return (
-    <div className="flex items-end justify-between gap-3">
-      <div className="text-sm font-semibold text-brand-900">{title}</div>
-      {right ? <div className="text-xs text-slate-500">{right}</div> : null}
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/70 pb-3">
+      <div className="text-[15px] font-semibold tracking-[-0.01em] text-brand-950">{title}</div>
+      {right ? (
+        <div className="inline-flex items-center rounded-full border border-white/80 bg-white/85 px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
+          {right}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -281,13 +314,13 @@ function WeeklyCalendar({ schedule, weekStart }) {
   return (
     <div className="mt-3">
       <div className="flex flex-wrap gap-2 text-[11px] text-slate-700">
-        <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5">센터</span>
-        <span className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5">센터 외</span>
-        <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5">결석/결강</span>
+        <span className="inline-flex items-center rounded-full border border-emerald-200/80 bg-white/90 px-3 py-1 shadow-sm">센터</span>
+        <span className="inline-flex items-center rounded-full border border-sky-200/80 bg-white/90 px-3 py-1 shadow-sm">센터 외</span>
+        <span className="inline-flex items-center rounded-full border border-rose-200/80 bg-white/90 px-3 py-1 shadow-sm">결석/결강</span>
       </div>
 
       <div className="mt-3 overflow-x-auto">
-        <div className="min-w-[940px] grid grid-cols-7 gap-3">
+        <div className="grid min-w-[980px] grid-cols-7 gap-4">
           {DAYS.map((d, idx) => {
             const dateLabel = start
               ? (() => {
@@ -298,21 +331,23 @@ function WeeklyCalendar({ schedule, weekStart }) {
               : DAY_LABELS[d.k];
             const items = Array.isArray(schedule?.[d.k]) ? schedule[d.k] : [];
             return (
-              <div key={d.k} className="rounded-2xl border border-slate-200 bg-white/70 p-3 shadow-sm">
+              <div key={d.k} className="rounded-[24px] border border-white/80 bg-white/88 p-4 shadow-[0_14px_34px_rgba(15,23,42,0.08)]">
                 <div className="text-sm font-semibold text-slate-900">{dateLabel}</div>
-                <div className="mt-2 space-y-2">
+                <div className="mt-3 space-y-2.5">
                   {items.length ? (
                     items.map((it, i) => {
                       const kind = classifySchedule(it);
                       return (
-                        <div key={i} className={['rounded-xl border px-3 py-2 shadow-sm', scheduleTone(kind)].join(' ')}>
-                          <div className="text-xs text-slate-700 whitespace-nowrap">{it.time || ''}</div>
-                          <div className="text-sm text-slate-900 whitespace-pre-wrap">{it.title || ''}</div>
+                        <div key={i} className={['rounded-2xl border px-3 py-2.5 shadow-sm', scheduleTone(kind)].join(' ')}>
+                          <div className="text-[11px] font-semibold text-slate-600 whitespace-nowrap">{it.time || ''}</div>
+                          <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-900">{it.title || ''}</div>
                         </div>
                       );
                     })
                   ) : (
-                    <div className="text-sm text-slate-700">일정 없음</div>
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-3 py-5 text-center text-sm text-slate-500">
+                      일정 없음
+                    </div>
                   )}
                 </div>
               </div>
@@ -327,18 +362,23 @@ function WeeklyCalendar({ schedule, weekStart }) {
 function RecordBox({ title, value, tone = 'border-slate-200 bg-white/60' }) {
   if (!value) return null;
   return (
-    <div className={['rounded-xl border p-3', tone].join(' ')}>
-      <div className="text-xs font-semibold text-brand-800">{title}</div>
-      <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{value}</div>
+    <div className={['rounded-2xl border p-4 shadow-sm', tone].join(' ')}>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-800">{title}</div>
+      <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{value}</div>
     </div>
   );
 }
 
 function DayNote({ label, value }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
-      <div className="text-xs font-semibold text-brand-800">{label}</div>
-      <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{value || '없음'}</div>
+    <div className="grid grid-cols-[56px,1fr] gap-3 rounded-[24px] border border-white/80 bg-white/88 p-3 shadow-sm">
+      <div className="flex h-14 items-center justify-center rounded-2xl bg-brand-900 text-lg font-semibold text-white shadow-sm">
+        {label}
+      </div>
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Daily Task</div>
+        <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-800">{value || '없음'}</div>
+      </div>
     </div>
   );
 }
@@ -483,7 +523,67 @@ export default function Parent() {
   const clinicEntries = useMemo(() => parseClinicEntries(weekRecord?.d_clinic_records), [weekRecord]);
   const wrongAnswerItems = useMemo(() => parseWrongAnswerItems(weekRecord?.e_wrong_answer_distribution), [weekRecord]);
   const scores = useMemo(() => safeJson(weekRecord?.scores_json, []), [weekRecord]);
-  const showQnaClinicSection = showClinicSection || wrongAnswerItems.length > 0;
+  const showQnaClinicSection = showClinicSection || wrongAnswerItems.length > 0 || clinicEntries.length > 0;
+  const combinedQnaEntries = useMemo(() => {
+    const wrongAnswerEntries = wrongAnswerItems.map((item, idx) => {
+      const question = joinNonEmpty([
+        item.subject,
+        item.material,
+        item.problem_name,
+        item.problem_type
+      ]) || '-';
+      const feedback = item.completion_status === 'done'
+        ? (item.completion_feedback || '완료 처리됨')
+        : item.completion_status === 'incomplete'
+          ? (item.incomplete_reason || '미완료 처리됨')
+          : '진행중';
+
+      return {
+        key: `wrong-answer-${idx}`,
+        question,
+        note: item.note,
+        feedbackLabel: item.completion_status === 'incomplete'
+          ? '마무리 메모'
+          : item.completion_status === 'done'
+            ? '멘토 피드백'
+            : '진행 상태',
+        feedback,
+        mentorName: item.assignment?.mentor_name || '',
+        dateLabel: formatDateTimeLabel(item.status_updated_at),
+        status: item.completion_status,
+        sortTime: parseDateTimeValue(item.status_updated_at)?.getTime() || 0,
+        originalOrder: idx
+      };
+    });
+
+    const clinicQnaEntries = clinicEntries.map((entry, idx) => ({
+      key: `clinic-${idx}`,
+      question: joinNonEmpty([
+        entry.subject,
+        entry.material,
+        entry.problem_name,
+        entry.problem_type
+      ]) || '-',
+      note: '',
+      feedbackLabel: '멘토 피드백',
+      feedback: entry.summary || '-',
+      mentorName: entry.mentor_name || '',
+      dateLabel: formatDateTimeLabel(entry.solved_date),
+      status: 'done',
+      sortTime: parseDateTimeValue(entry.solved_date)?.getTime() || 0,
+      originalOrder: wrongAnswerItems.length + idx
+    }));
+
+    return [...wrongAnswerEntries, ...clinicQnaEntries]
+      .sort((a, b) => {
+        if (b.sortTime !== a.sortTime) return b.sortTime - a.sortTime;
+        return a.originalOrder - b.originalOrder;
+      })
+      .map((entry, idx) => ({
+        ...entry,
+        title: `질답 기록 ${idx + 1}`
+      }));
+  }, [clinicEntries, wrongAnswerItems]);
 
   const penaltyItems = selected?.penalties?.items || [];
   const totalPenaltyPoints =
@@ -514,71 +614,80 @@ export default function Parent() {
   const recordUpdated = sharedWeek?.updated_at || '';
 
   return (
-    <div className="space-y-4 pb-10">
-      <div className={['card p-5', SECTION_TONES.header].join(' ')}>
-        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div>
-            <div className="text-lg font-semibold text-brand-900">학부모 확인 페이지</div>
-            <div className="text-sm text-slate-600">공유된 회차의 기록만 확인할 수 있습니다.</div>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-            <div>
-              <div className="text-xs text-slate-500">학생</div>
-              <select className="input" value={selectedStudentId} onChange={(e) => setSelectedStudentId(e.target.value)}>
-                {items.map((x) => (
-                  <option key={x.student.id} value={String(x.student.id)}>{x.student.name} {x.student.grade ? `(${x.student.grade})` : ''}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">회차</div>
-              <select className="input" value={selectedWeekId} onChange={(e) => setSelectedWeekId(e.target.value)}>
-                {visibleWeeks.length ? (
-                  visibleWeeks.map((w) => (
-                    <option key={w.id} value={String(w.id)}>
-                      {toRoundLabel(w.label)} {w.start_date && w.end_date ? `(${w.start_date}~${w.end_date})` : ''} · 공유됨
-                    </option>
-                  ))
-                ) : (
-                  <option value="">공유된 회차 없음</option>
-                )}
-              </select>
-            </div>
-          </div>
-        </div>
+    <div className="relative space-y-5 pb-12">
+      <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-80 rounded-[40px] bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.14),transparent_38%),radial-gradient(circle_at_top_right,rgba(245,158,11,0.16),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.72),rgba(255,255,255,0))]" />
 
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <InfoPill label="회차" value={toRoundLabel(selectedWeek?.label || '-')} />
-          <InfoPill label="기간" value={weekRange || '-'} />
-          <Badge>벌점 합계: {totalPenaltyPoints}점</Badge>
-          {recordUpdated ? <InfoPill label="기록 업데이트" value={recordUpdated} /> : null}
+      <div className={sectionCardClass(SECTION_TONES.header)}>
+        <div className="grid gap-5 xl:grid-cols-[1.35fr,0.95fr] xl:items-end">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-brand-700">Parent Dashboard</div>
+            <div className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-brand-950">
+              {selected?.student?.name || '학생'} 학생의 주간 멘토링 기록
+            </div>
+            <div className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+              공유가 완료된 회차만 확인할 수 있습니다. 학습 진행 상황, 질답 내용, 멘토 피드백을 한 화면에서 더 보기 쉽게 정리했습니다.
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-2.5">
+              <InfoPill label="회차" value={toRoundLabel(selectedWeek?.label || '-')} />
+              <InfoPill label="기간" value={weekRange || '-'} />
+              <InfoPill label="기록 업데이트" value={recordUpdated || '-'} />
+              <Badge>벌점 합계 {totalPenaltyPoints}점</Badge>
+            </div>
+          </div>
+
+          <div className="rounded-[24px] border border-white/80 bg-white/86 p-4 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">학생 선택</div>
+                <select className="input mt-2" value={selectedStudentId} onChange={(e) => setSelectedStudentId(e.target.value)}>
+                  {items.map((x) => (
+                    <option key={x.student.id} value={String(x.student.id)}>{x.student.name} {x.student.grade ? `(${x.student.grade})` : ''}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">회차 선택</div>
+                <select className="input mt-2" value={selectedWeekId} onChange={(e) => setSelectedWeekId(e.target.value)}>
+                  {visibleWeeks.length ? (
+                    visibleWeeks.map((w) => (
+                      <option key={w.id} value={String(w.id)}>
+                        {toRoundLabel(w.label)} {w.start_date && w.end_date ? `(${w.start_date}~${w.end_date})` : ''} · 공유됨
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">공유된 회차 없음</option>
+                  )}
+                </select>
+              </div>
+            </div>
+          </div>
         </div>
 
         {isLockedWeek ? (
-          <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+          <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50/90 px-4 py-3 text-sm font-medium text-amber-900">
             아직 멘토링 기록의 작성/검수가 끝나지 않았습니다. 보통 멘토링한 24시간 이내 공유됩니다.
           </div>
         ) : null}
 
-        {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
+        {error ? <div className="mt-4 text-sm text-red-600">{error}</div> : null}
       </div>
 
       <BlockedSection blocked={isLockedWeek}>
-        <div className={['card p-5', SECTION_TONES.calendar].join(' ')}>
+        <div className={sectionCardClass(SECTION_TONES.calendar)}>
           <SectionTitle title="주간 일정 캘린더" right={weekRange || '회차 선택'} />
           <WeeklyCalendar schedule={schedule} weekStart={selectedWeek?.start_date} />
         </div>
       </BlockedSection>
 
       <BlockedSection blocked={isLockedWeek}>
-        <div className={['card p-5', SECTION_TONES.penalties].join(' ')}>
+        <div className={sectionCardClass(SECTION_TONES.penalties)}>
           <SectionTitle title="벌점 내역" right={`총 ${totalPenaltyPoints}점 · ${penaltyItems.length}건`} />
-          <div className="mt-3 space-y-2 max-h-[420px] overflow-auto pr-1">
+          <div className="mt-4 space-y-2 max-h-[420px] overflow-auto pr-1">
             {penaltyItems.length ? penaltyItems.slice(0, 20).map((p) => (
-              <div key={p.id} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white/60 p-3">
+              <div key={p.id} className="flex items-start justify-between gap-3 rounded-2xl border border-white/80 bg-white/82 p-3.5 shadow-sm">
                 <div>
-                  <div className="text-sm text-slate-800">{p.reason}</div>
-                  <div className="text-xs text-slate-500">{p.created_at || p.date || ''}</div>
+                  <div className="text-sm font-medium text-slate-800">{p.reason}</div>
+                  <div className="mt-1 text-xs text-slate-500">{p.created_at || p.date || ''}</div>
                 </div>
                 <Badge>{p.points > 0 ? `+${p.points}` : p.points}</Badge>
               </div>
@@ -588,7 +697,7 @@ export default function Parent() {
           {Array.isArray(scores) && scores.length ? (
             <div className="mt-6 border-t border-slate-200/70 pt-4">
               <SectionTitle title="성적 / 진단" right={`총 ${scores.length}건`} />
-              <div className="mt-3 overflow-auto">
+              <div className="mt-4 overflow-auto rounded-[24px] border border-white/80 bg-white/82 p-3 shadow-sm">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-slate-500">
@@ -613,27 +722,27 @@ export default function Parent() {
         </div>
       </BlockedSection>
 
-      <div className={['card p-5', SECTION_TONES.mentor].join(' ')}>
+      <div className={sectionCardClass(SECTION_TONES.mentor)}>
         <SectionTitle title="이번회차 멘토 안내" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2.5">
           <InfoPill label="이번주 멘토" value={mentorName || '-'} />
           <InfoPill label="멘토링 진행 요일" value={mentorDays.length ? mentorDays.join(', ') : '-'} />
         </div>
-        <div className="mt-2 text-xs text-slate-600">{mentorNoticeText}</div>
+        <div className="mt-3 rounded-2xl border border-white/80 bg-white/78 px-4 py-3 text-sm leading-6 text-slate-600 shadow-sm">{mentorNoticeText}</div>
       </div>
 
       <BlockedSection blocked={isLockedWeek}>
-        <div className={['card p-5', SECTION_TONES.curriculum].join(' ')}>
+        <div className={sectionCardClass(SECTION_TONES.curriculum)}>
           <SectionTitle title="학습 커리큘럼" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {subjectRecords.length ? subjectRecords.map((sr, idx) => (
-                <div key={sr.id} className={['rounded-2xl border p-4 shadow-sm', SUBJECT_TONES[idx % SUBJECT_TONES.length]].join(' ')}>
+                <div key={sr.id} className={['rounded-[24px] border p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]', SUBJECT_TONES[idx % SUBJECT_TONES.length]].join(' ')}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold text-brand-900">{sr.subject_name}</div>
                     <div className="text-xs text-slate-500">{sr.updated_at ? `업데이트: ${sr.updated_at}` : ''}</div>
                   </div>
-                  {sr.a_curriculum ? <div className="mt-2 whitespace-pre-wrap text-sm text-slate-800">{sr.a_curriculum}</div> : <div className="mt-2 text-sm text-slate-400">커리큘럼 없음</div>}
+                  {sr.a_curriculum ? <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-800">{sr.a_curriculum}</div> : <div className="mt-3 text-sm text-slate-400">커리큘럼 없음</div>}
                 </div>
               )) : <div className="text-sm text-slate-400">과목 기록 없음</div>}
             </div>
@@ -642,22 +751,22 @@ export default function Parent() {
       </BlockedSection>
 
       <BlockedSection blocked={isLockedWeek}>
-        <div className={['card p-5', SECTION_TONES.subjects].join(' ')}>
+        <div className={sectionCardClass(SECTION_TONES.subjects)}>
           <SectionTitle title="과목별 기록" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-            <div className="mt-3 space-y-4">
+            <div className="mt-4 space-y-4">
               {subjectRecords.length ? subjectRecords.map((sr, idx) => {
                 const blocks = [
                   { key: 'a_this_hw', label: '이번주 과제', value: renderLastHw(sr.a_this_hw), tone: 'border-amber-200/60 bg-amber-50/70' },
                   { key: 'a_comment', label: '과목 별 코멘트', value: sr.a_comment, tone: 'border-amber-200/60 bg-amber-50/70' }
                 ].filter((b) => b.value);
                 return (
-                  <div key={sr.id} className={['rounded-2xl border p-4 shadow-sm', SUBJECT_TONES[idx % SUBJECT_TONES.length]].join(' ')}>
+                  <div key={sr.id} className={['rounded-[24px] border p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]', SUBJECT_TONES[idx % SUBJECT_TONES.length]].join(' ')}>
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-sm font-semibold text-brand-900">{sr.subject_name}</div>
                       <div className="text-xs text-slate-500">{sr.updated_at ? `업데이트: ${sr.updated_at}` : ''}</div>
                     </div>
-                    <div className="mt-3 space-y-3">
+                    <div className="mt-4 space-y-3">
                       {blocks.length ? blocks.map((b) => <RecordBox key={b.key} title={b.label} value={b.value} tone={b.tone} />) : <div className="text-sm text-slate-400">공유된 기록이 아직 없습니다.</div>}
                     </div>
                   </div>
@@ -670,10 +779,10 @@ export default function Parent() {
 
       {!useNewDailyTaskLayout ? (
         <BlockedSection blocked={isLockedWeek}>
-          <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
+          <div className={sectionCardClass(SECTION_TONES.daily)}>
             <SectionTitle title="일일 학습 과제" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
             {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-              <div className="mt-3 space-y-2">
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
                 {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasks?.[d.k]} />)}
               </div>
             ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
@@ -683,10 +792,10 @@ export default function Parent() {
 
       {useNewDailyTaskLayout ? (
         <BlockedSection blocked={isLockedWeek}>
-          <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
+          <div className={sectionCardClass(SECTION_TONES.daily)}>
             <SectionTitle title="일일 학습 과제(이번주)" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
             {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-              <div className="mt-3 space-y-2">
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
                 {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasksThisWeek?.[d.k]} />)}
               </div>
             ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
@@ -696,103 +805,63 @@ export default function Parent() {
 
       {showQnaClinicSection ? (
         <BlockedSection blocked={isLockedWeek}>
-          <div className={['card p-5', SECTION_TONES.clinic].join(' ')}>
+          <div className={sectionCardClass(SECTION_TONES.clinic)}>
             <SectionTitle title="학생 별 주간 질답 클리닉 내용" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
             {recordLoading ? (
               <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div>
             ) : record ? (
-              <div className="mt-3 space-y-3">
-                {wrongAnswerItems.length ? (
-                  <div className="space-y-3">
-                    <div className="text-xs font-semibold text-brand-800">학생 질문 / 오답 질답</div>
-                    {wrongAnswerItems.map((item, idx) => {
-                      const questionLine = joinNonEmpty([
-                        item.subject,
-                        item.material,
-                        item.problem_name,
-                        item.problem_type
-                      ]);
-                      const feedbackLabel = item.completion_status === 'done'
-                        ? '완료 피드백'
-                        : item.completion_status === 'incomplete'
-                          ? '미완료 사유'
-                          : '진행 상태';
-                      const feedbackText = item.completion_status === 'done'
-                        ? (item.completion_feedback || '완료 처리됨')
-                        : item.completion_status === 'incomplete'
-                          ? (item.incomplete_reason || '미완료 처리됨')
-                          : '진행중';
-                      const mentorLine = joinNonEmpty([
-                        item.assignment?.mentor_name ? `진행 멘토 ${item.assignment.mentor_name}` : '',
-                        item.status_updated_at || ''
-                      ]);
+              <div className="mt-4 space-y-4">
+                {combinedQnaEntries.length ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <InfoPill label="질답 기록" value={`${combinedQnaEntries.length}건`} />
+                      <InfoPill label="완료" value={`${combinedQnaEntries.filter((entry) => entry.status === 'done').length}건`} />
+                      <InfoPill label="진행중/미완료" value={`${combinedQnaEntries.filter((entry) => entry.status !== 'done').length}건`} />
+                    </div>
 
-                      return (
-                        <div key={`wrong-answer-${idx}`} className="rounded-xl border border-slate-200 bg-white/80 p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-brand-800">질답 기록 {idx + 1}</div>
-                            <QnaStatusBadge status={item.completion_status} />
-                          </div>
-                          {mentorLine ? <div className="mt-1 text-xs text-slate-500">{mentorLine}</div> : null}
-                          <div className="mt-2 grid gap-2 text-sm text-slate-800">
-                            <div>
-                              <div className="text-xs font-semibold text-brand-800">질문 문제</div>
-                              <div className="mt-1 whitespace-pre-wrap">{questionLine || '-'}</div>
-                            </div>
-                            {item.note ? (
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                      {combinedQnaEntries.map((entry) => {
+                        const metaLine = joinNonEmpty([
+                          entry.mentorName ? `진행 멘토 ${entry.mentorName}` : '',
+                          entry.dateLabel
+                        ]);
+
+                        return (
+                          <div key={entry.key} className="rounded-[24px] border border-white/80 bg-white/88 p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
                               <div>
-                                <div className="text-xs font-semibold text-brand-800">전달사항</div>
-                                <div className="mt-1 whitespace-pre-wrap">{item.note}</div>
+                                <div className="text-sm font-semibold text-brand-900">{entry.title}</div>
+                                {metaLine ? <div className="mt-1 text-xs text-slate-500">{metaLine}</div> : null}
                               </div>
-                            ) : null}
-                            <div>
-                              <div className="text-xs font-semibold text-brand-800">{feedbackLabel}</div>
-                              <div className="mt-1 whitespace-pre-wrap">{feedbackText}</div>
+                              <QnaStatusBadge status={entry.status} />
+                            </div>
+
+                            <div className="mt-4 space-y-3">
+                              <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-800">학생 질문</div>
+                                <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{entry.question || '-'}</div>
+                              </div>
+
+                              {entry.note ? (
+                                <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-3">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-800">추가 메모</div>
+                                  <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{entry.note}</div>
+                                </div>
+                              ) : null}
+
+                              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800">{entry.feedbackLabel}</div>
+                                <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{entry.feedback || '-'}</div>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
-
-                {clinicEntries.length ? (
-                  <div className="space-y-3">
-                    <div className="text-xs font-semibold text-brand-800">클리닉 질답 피드백</div>
-                    {clinicEntries.map((entry, idx) => {
-                      const questionLine = joinNonEmpty([
-                        entry.subject,
-                        entry.material,
-                        entry.problem_name,
-                        entry.problem_type
-                      ]);
-
-                      return (
-                        <div key={`${entry.mentor_name}-${entry.problem_name}-${idx}`} className="rounded-xl border border-slate-200 bg-white/80 p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-brand-800">클리닉 기록 {idx + 1}</div>
-                            <div className="text-xs text-slate-600">{entry.solved_date || '-'}</div>
-                          </div>
-                          {entry.mentor_name ? <div className="mt-1 text-xs text-slate-500">진행 멘토 {entry.mentor_name}</div> : null}
-                          <div className="mt-2 grid gap-2 text-sm text-slate-800">
-                            <div>
-                              <div className="text-xs font-semibold text-brand-800">학생 질문</div>
-                              <div className="mt-1 whitespace-pre-wrap">{questionLine || '-'}</div>
-                            </div>
-                            <div>
-                              <div className="text-xs font-semibold text-brand-800">피드백 내용</div>
-                              <div className="mt-1 whitespace-pre-wrap">{entry.summary || '-'}</div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
-
-                {!wrongAnswerItems.length && !clinicEntries.length ? (
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : (
                   <div className="mt-3 text-sm text-slate-500">공유된 질답/클리닉 기록이 없습니다.</div>
-                ) : null}
+                )}
               </div>
             ) : (
               <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>
@@ -802,30 +871,36 @@ export default function Parent() {
       ) : null}
 
       <BlockedSection blocked={isLockedWeek}>
-        <div className={['card p-5', SECTION_TONES.weekly].join(' ')}>
+        <div className={sectionCardClass(SECTION_TONES.weekly)}>
           <SectionTitle title="회차 총괄멘토 피드백" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
             <>
-              {weekRecord?.c_lead_weekly_feedback ? (
-                <div className="mt-3 rounded-xl border border-slate-200 bg-white/80 p-3">
-                  <div className="text-xs font-semibold text-brand-800">주간 총괄멘토 피드백</div>
-                  <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{weekRecord.c_lead_weekly_feedback}</div>
+              {weekRecord?.c_lead_weekly_feedback || weekRecord?.c_director_commentary ? (
+                <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  {weekRecord?.c_lead_weekly_feedback ? (
+                    <div className="rounded-[24px] border border-white/80 bg-white/88 p-4 shadow-sm">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-800">주간 총괄멘토 피드백</div>
+                      <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{weekRecord.c_lead_weekly_feedback}</div>
+                    </div>
+                  ) : null}
+                  {weekRecord?.c_director_commentary ? (
+                    <div className="rounded-[24px] border border-white/80 bg-white/88 p-4 shadow-sm">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-800">원장 코멘트</div>
+                      <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{weekRecord.c_director_commentary}</div>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div className="mt-3 text-sm text-slate-500">피드백 없음</div>
               )}
-              {weekRecord?.c_director_commentary ? (
-                <div className="mt-3 rounded-xl border border-slate-200 bg-white/80 p-3">
-                  <div className="text-xs font-semibold text-brand-800">원장 코멘트</div>
-                  <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{weekRecord.c_director_commentary}</div>
-                </div>
-              ) : null}
             </>
           ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
         </div>
       </BlockedSection>
 
-      <div className="text-xs text-slate-400 px-1">안내: 학부모 페이지는 조회 전용이며, 공유된 회차의 기록만 표시됩니다.</div>
+      <div className="rounded-2xl border border-slate-200/70 bg-white/70 px-4 py-3 text-xs leading-5 text-slate-500 shadow-sm">
+        안내: 학부모 페이지는 조회 전용이며, 공유가 완료된 회차의 기록만 표시됩니다.
+      </div>
     </div>
   );
 }
