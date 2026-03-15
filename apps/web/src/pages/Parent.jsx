@@ -770,6 +770,8 @@ export default function Parent() {
             <div className="mt-4 space-y-4">
               {subjectRecords.length ? subjectRecords.map((sr, idx) => {
                 const blocks = [
+                  { key: 'a_last_hw', label: '지난주 과제', value: renderLastHw(sr.a_last_hw), tone: 'border-blue-200/60 bg-blue-50/70' },
+                  { key: 'a_hw_exec', label: '과제 이행도', value: sr.a_hw_exec, tone: 'border-emerald-200/60 bg-emerald-50/70' },
                   { key: 'a_this_hw', label: '이번주 과제', value: renderLastHw(sr.a_this_hw), tone: 'border-amber-200/60 bg-amber-50/70' },
                   { key: 'a_comment', label: '과목 별 코멘트', value: sr.a_comment, tone: 'border-amber-200/60 bg-amber-50/70' }
                 ].filter((b) => b.value);
@@ -794,14 +796,12 @@ export default function Parent() {
         <div className={sectionCardClass(SECTION_TONES.daily)}>
           <SectionTitle title="일일 학습 과제" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-            <div className={['mt-4 grid grid-cols-1 gap-4', useNewDailyTaskLayout ? 'xl:grid-cols-2' : ''].join(' ').trim()}>
-              <DailyTasksWeekPanel
-                title={useNewDailyTaskLayout ? '일일 학습 과제(지난주)' : '일일 학습 과제'}
-                tasksByDay={dailyTasks}
-              />
+            <div className="mt-4 grid grid-cols-1 gap-4">
               {useNewDailyTaskLayout ? (
                 <DailyTasksWeekPanel title="일일 학습 과제(이번주)" tasksByDay={dailyTasksThisWeek} />
-              ) : null}
+              ) : (
+                <DailyTasksWeekPanel title="일일 학습 과제" tasksByDay={dailyTasks} />
+              )}
             </div>
           ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
         </div>
