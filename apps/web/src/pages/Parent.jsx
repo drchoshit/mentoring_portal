@@ -134,6 +134,79 @@ function parseClinicEntries(value) {
   return [];
 }
 
+function joinNonEmpty(parts, separator = ' · ') {
+  return (Array.isArray(parts) ? parts : [])
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(separator);
+}
+
+function normalizeWrongAnswerAssignment(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const mentorName = String(raw.mentor_name || '').trim();
+  const sessionMonth = String(raw.session_month || '').trim();
+  const sessionDay = String(raw.session_day || '').trim();
+  const sessionStartTime = String(raw.session_start_time || raw.session_time || '').trim();
+  if (!mentorName && !sessionMonth && !sessionDay && !sessionStartTime) return null;
+  return {
+    mentor_name: mentorName,
+    session_month: sessionMonth,
+    session_day: sessionDay,
+    session_start_time: sessionStartTime
+  };
+}
+
+function normalizeWrongAnswerItem(raw, fallbackAssignment = null) {
+  if (!raw || typeof raw !== 'object') return null;
+  const completionStatus = ['done', 'incomplete'].includes(String(raw.completion_status || '').trim())
+    ? String(raw.completion_status || '').trim()
+    : 'pending';
+  const item = {
+    subject: String(raw.subject || '').trim(),
+    material: String(raw.material || '').trim(),
+    problem_name: String(raw.problem_name || '').trim(),
+    problem_type: String(raw.problem_type || '').trim(),
+    note: String(raw.note || '').trim(),
+    completion_status: completionStatus,
+    completion_feedback: String(raw.completion_feedback || '').trim(),
+    incomplete_reason: String(raw.incomplete_reason || '').trim(),
+    status_updated_at: String(raw.status_updated_at || '').trim(),
+    deleted_at: String(raw.deleted_at || '').trim(),
+    assignment: normalizeWrongAnswerAssignment(raw.assignment || fallbackAssignment)
+  };
+  if (item.deleted_at) return null;
+  if (!item.subject && !item.material && !item.problem_name && !item.problem_type && !item.note) return null;
+  return item;
+}
+
+function parseWrongAnswerItems(value) {
+  const parsed = safeJson(value, {});
+  if (!parsed || typeof parsed !== 'object') return [];
+  const topLevelAssignment = normalizeWrongAnswerAssignment(parsed.assignment || null);
+  const problems = Array.isArray(parsed.problems)
+    ? parsed.problems
+    : Array.isArray(parsed.items)
+      ? parsed.items
+      : [];
+  return problems
+    .map((item, idx) => normalizeWrongAnswerItem(item, idx === 0 ? topLevelAssignment : null))
+    .filter(Boolean);
+}
+
+function QnaStatusBadge({ status }) {
+  const tone = status === 'done'
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+    : status === 'incomplete'
+      ? 'border-amber-200 bg-amber-50 text-amber-800'
+      : 'border-slate-200 bg-slate-50 text-slate-700';
+  const label = status === 'done' ? '완료' : status === 'incomplete' ? '미완료' : '진행중';
+  return (
+    <span className={['inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]', tone].join(' ')}>
+      {label}
+    </span>
+  );
+}
+
 function Badge({ children }) {
   return (
     <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-100/70 px-2 py-0.5 text-[11px] text-amber-900">
@@ -408,7 +481,9 @@ export default function Parent() {
   const dailyTasks = useMemo(() => safeJson(weekRecord?.b_daily_tasks, {}), [weekRecord]);
   const dailyTasksThisWeek = useMemo(() => safeJson(weekRecord?.b_daily_tasks_this_week, {}), [weekRecord]);
   const clinicEntries = useMemo(() => parseClinicEntries(weekRecord?.d_clinic_records), [weekRecord]);
+  const wrongAnswerItems = useMemo(() => parseWrongAnswerItems(weekRecord?.e_wrong_answer_distribution), [weekRecord]);
   const scores = useMemo(() => safeJson(weekRecord?.scores_json, []), [weekRecord]);
+  const showQnaClinicSection = showClinicSection || wrongAnswerItems.length > 0;
 
   const penaltyItems = selected?.penalties?.items || [];
   const totalPenaltyPoints =
@@ -573,7 +648,6 @@ export default function Parent() {
             <div className="mt-3 space-y-4">
               {subjectRecords.length ? subjectRecords.map((sr, idx) => {
                 const blocks = [
-                  { key: 'a_last_hw', label: '지난주 과제', value: renderLastHw(sr.a_last_hw) },
                   { key: 'a_this_hw', label: '이번주 과제', value: renderLastHw(sr.a_this_hw), tone: 'border-amber-200/60 bg-amber-50/70' },
                   { key: 'a_comment', label: '과목 별 코멘트', value: sr.a_comment, tone: 'border-amber-200/60 bg-amber-50/70' }
                 ].filter((b) => b.value);
@@ -594,16 +668,18 @@ export default function Parent() {
         </div>
       </BlockedSection>
 
-      <BlockedSection blocked={isLockedWeek}>
-        <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
-          <SectionTitle title={useNewDailyTaskLayout ? '일일 학습 과제(지난주)' : '일일 학습 과제'} right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
-          {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-            <div className="mt-3 space-y-2">
-              {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasks?.[d.k]} />)}
-            </div>
-          ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
-        </div>
-      </BlockedSection>
+      {!useNewDailyTaskLayout ? (
+        <BlockedSection blocked={isLockedWeek}>
+          <div className={['card p-5', SECTION_TONES.daily].join(' ')}>
+            <SectionTitle title="일일 학습 과제" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+            {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
+              <div className="mt-3 space-y-2">
+                {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasks?.[d.k]} />)}
+              </div>
+            ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
+          </div>
+        </BlockedSection>
+      ) : null}
 
       {useNewDailyTaskLayout ? (
         <BlockedSection blocked={isLockedWeek}>
@@ -618,37 +694,105 @@ export default function Parent() {
         </BlockedSection>
       ) : null}
 
-      {showClinicSection ? (
+      {showQnaClinicSection ? (
         <BlockedSection blocked={isLockedWeek}>
           <div className={['card p-5', SECTION_TONES.clinic].join(' ')}>
-            <SectionTitle title="클리닉 섹션" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+            <SectionTitle title="학생 별 주간 질답 클리닉 내용" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
             {recordLoading ? (
               <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div>
             ) : record ? (
               <div className="mt-3 space-y-3">
+                {wrongAnswerItems.length ? (
+                  <div className="space-y-3">
+                    <div className="text-xs font-semibold text-brand-800">학생 질문 / 오답 질답</div>
+                    {wrongAnswerItems.map((item, idx) => {
+                      const questionLine = joinNonEmpty([
+                        item.subject,
+                        item.material,
+                        item.problem_name,
+                        item.problem_type
+                      ]);
+                      const feedbackLabel = item.completion_status === 'done'
+                        ? '완료 피드백'
+                        : item.completion_status === 'incomplete'
+                          ? '미완료 사유'
+                          : '진행 상태';
+                      const feedbackText = item.completion_status === 'done'
+                        ? (item.completion_feedback || '완료 처리됨')
+                        : item.completion_status === 'incomplete'
+                          ? (item.incomplete_reason || '미완료 처리됨')
+                          : '진행중';
+                      const mentorLine = joinNonEmpty([
+                        item.assignment?.mentor_name ? `진행 멘토 ${item.assignment.mentor_name}` : '',
+                        item.status_updated_at || ''
+                      ]);
+
+                      return (
+                        <div key={`wrong-answer-${idx}`} className="rounded-xl border border-slate-200 bg-white/80 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-sm font-semibold text-brand-800">질답 기록 {idx + 1}</div>
+                            <QnaStatusBadge status={item.completion_status} />
+                          </div>
+                          {mentorLine ? <div className="mt-1 text-xs text-slate-500">{mentorLine}</div> : null}
+                          <div className="mt-2 grid gap-2 text-sm text-slate-800">
+                            <div>
+                              <div className="text-xs font-semibold text-brand-800">질문 문제</div>
+                              <div className="mt-1 whitespace-pre-wrap">{questionLine || '-'}</div>
+                            </div>
+                            {item.note ? (
+                              <div>
+                                <div className="text-xs font-semibold text-brand-800">전달사항</div>
+                                <div className="mt-1 whitespace-pre-wrap">{item.note}</div>
+                              </div>
+                            ) : null}
+                            <div>
+                              <div className="text-xs font-semibold text-brand-800">{feedbackLabel}</div>
+                              <div className="mt-1 whitespace-pre-wrap">{feedbackText}</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
                 {clinicEntries.length ? (
-                  clinicEntries.map((entry, idx) => (
-                    <div key={`${entry.mentor_name}-${entry.problem_name}-${idx}`} className="rounded-xl border border-slate-200 bg-white/80 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="text-sm font-semibold text-brand-800">클리닉 기록 {idx + 1}</div>
-                        <div className="text-xs text-slate-600">{entry.solved_date || '-'}</div>
-                      </div>
-                      <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-slate-800">
-                        <div>진행 멘토: {entry.mentor_name || '-'}</div>
-                        <div>과목: {entry.subject || '-'}</div>
-                        <div>교재명: {entry.material || '-'}</div>
-                        <div>문제명: {entry.problem_name || '-'}</div>
-                        <div className="md:col-span-2">유형 기록: {entry.problem_type || '-'}</div>
-                      </div>
-                      <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50/70 p-2">
-                        <div className="text-xs font-semibold text-brand-800">해결요약 피드백</div>
-                        <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{entry.summary || '-'}</div>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="mt-3 text-sm text-slate-500">공유된 클리닉 기록이 없습니다.</div>
-                )}
+                  <div className="space-y-3">
+                    <div className="text-xs font-semibold text-brand-800">클리닉 질답 피드백</div>
+                    {clinicEntries.map((entry, idx) => {
+                      const questionLine = joinNonEmpty([
+                        entry.subject,
+                        entry.material,
+                        entry.problem_name,
+                        entry.problem_type
+                      ]);
+
+                      return (
+                        <div key={`${entry.mentor_name}-${entry.problem_name}-${idx}`} className="rounded-xl border border-slate-200 bg-white/80 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-sm font-semibold text-brand-800">클리닉 기록 {idx + 1}</div>
+                            <div className="text-xs text-slate-600">{entry.solved_date || '-'}</div>
+                          </div>
+                          {entry.mentor_name ? <div className="mt-1 text-xs text-slate-500">진행 멘토 {entry.mentor_name}</div> : null}
+                          <div className="mt-2 grid gap-2 text-sm text-slate-800">
+                            <div>
+                              <div className="text-xs font-semibold text-brand-800">학생 질문</div>
+                              <div className="mt-1 whitespace-pre-wrap">{questionLine || '-'}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs font-semibold text-brand-800">피드백 내용</div>
+                              <div className="mt-1 whitespace-pre-wrap">{entry.summary || '-'}</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
+                {!wrongAnswerItems.length && !clinicEntries.length ? (
+                  <div className="mt-3 text-sm text-slate-500">공유된 질답/클리닉 기록이 없습니다.</div>
+                ) : null}
               </div>
             ) : (
               <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>
