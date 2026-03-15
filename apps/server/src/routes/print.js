@@ -506,7 +506,7 @@ export default function printRoutes(db) {
       display: grid;
       gap: 1.4mm;
     }
-    .bottom.bottom-clinic { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+    .bottom.bottom-clinic { grid-template-columns: minmax(0, 4fr) minmax(0, 6fr); }
     .dense th, .dense td { font-size: 8.1px; padding: 0.78mm 1.0mm; }
     .day-table thead th { background: #dfecfa; }
     .feedback-table thead th { background: #dff1e5; }
@@ -609,7 +609,7 @@ export default function printRoutes(db) {
           <table class="info-table dense">
             <tr>
               <th>이름</th><td colspan="3">${esc(student.name || '-')}</td>
-              <th>ID</th><td colspan="2">${esc(student.external_id || '-')}</td>
+              <th>ID</th><td>${esc(student.external_id || '-')}</td>
             </tr>
             <tr>
               <th>학교(학년)</th><td>${esc(schoolGradeLabel)}</td>
