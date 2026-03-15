@@ -198,7 +198,7 @@ function formatAssignmentSchedule(assignment) {
     ? `${assignment.session_duration_minutes}분`
     : '';
   return joinTextParts([
-    assignment.mentor_name ? `배정 멘토 ${assignment.mentor_name}` : '',
+    assignment.mentor_name ? `진행 멘토 ${assignment.mentor_name}` : '',
     joinTextParts([dateText, assignment.session_start_time], ' '),
     durationText
   ]);
@@ -334,7 +334,8 @@ export default function printRoutes(db) {
     const wrongAnswerHtml = printable('e_wrong_answer_distribution') && wrongAnswerProblems.length
       ? `
         <div class="qa-section">
-          <div class="qa-section-title">오답·질문 배정 정리</div>
+          <div class="qa-section-title">오답·질문 질답 정리</div>
+          <div class="qa-entry-grid">
           ${wrongAnswerProblems.map((problem, idx) => {
             const questionText = joinTextParts([
               problem.subject,
@@ -356,7 +357,7 @@ export default function printRoutes(db) {
             return `
               <div class="qa-entry">
                 <div class="qa-entry-head">
-                  <span>배정 ${idx + 1}</span>
+                  <span>질답 ${idx + 1}</span>
                   ${assignmentText ? `<span class="qa-meta">${esc(assignmentText)}</span>` : ''}
                 </div>
                 <div class="qa-line">
@@ -376,6 +377,7 @@ export default function printRoutes(db) {
               </div>
             `;
           }).join('')}
+          </div>
         </div>
       `
       : '';
@@ -535,6 +537,12 @@ export default function printRoutes(db) {
       padding: 0.85mm 1.0mm;
     }
     .qa-entry + .qa-entry { margin-top: 0.8mm; }
+    .qa-entry-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.8mm;
+    }
+    .qa-entry-grid .qa-entry + .qa-entry { margin-top: 0; }
     .qa-entry-head {
       display: flex;
       justify-content: space-between;
