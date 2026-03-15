@@ -24,6 +24,18 @@ function textToHtml(value) {
   return esc(value || '-').replace(/\n/g, '<br/>');
 }
 
+function optionalTextToHtml(value) {
+  const text = String(value ?? '').trim();
+  return text ? esc(text).replace(/\n/g, '<br/>') : '';
+}
+
+function joinTextParts(parts, separator = ' · ') {
+  return (Array.isArray(parts) ? parts : [])
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(separator);
+}
+
 function normalizeTask(raw) {
   if (!raw) return { text: '', done: null, progress: '' };
   if (typeof raw === 'string') return { text: raw, done: null, progress: '' };
@@ -95,6 +107,103 @@ function makeSubjectRow(label, records, valueFn, rowClass = '') {
   `;
 }
 
+function normalizeClinicEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const entry = {
+    mentor_name: String(raw.mentor_name || '').trim(),
+    subject: String(raw.subject || '').trim(),
+    material: String(raw.material || '').trim(),
+    problem_name: String(raw.problem_name || '').trim(),
+    problem_type: String(raw.problem_type || '').trim(),
+    solved_date: String(raw.solved_date || '').trim(),
+    summary: String(raw.summary || '').trim()
+  };
+  if (!entry.subject && !entry.material && !entry.problem_name && !entry.problem_type && !entry.summary) {
+    return null;
+  }
+  return entry;
+}
+
+function parseClinicEntries(value) {
+  const parsed = parseJson(value, []);
+  if (Array.isArray(parsed)) return parsed.map(normalizeClinicEntry).filter(Boolean);
+  if (parsed && typeof parsed === 'object' && Array.isArray(parsed.entries)) {
+    return parsed.entries.map(normalizeClinicEntry).filter(Boolean);
+  }
+  return [];
+}
+
+function normalizeWrongAnswerAssignment(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const assignment = {
+    mentor_name: String(raw.mentor_name || '').trim(),
+    session_month: String(raw.session_month || '').trim(),
+    session_day: String(raw.session_day || '').trim(),
+    session_start_time: String(raw.session_start_time || raw.session_time || '').trim(),
+    session_duration_minutes: Math.max(1, Math.min(240, Number(raw.session_duration_minutes || 20) || 20))
+  };
+  if (!assignment.mentor_name && !assignment.session_month && !assignment.session_day && !assignment.session_start_time) {
+    return null;
+  }
+  return assignment;
+}
+
+function normalizeWrongAnswerProblem(raw, fallbackAssignment = null) {
+  if (!raw || typeof raw !== 'object') return null;
+  const statusRaw = String(raw.completion_status || '').trim();
+  const completionStatus = statusRaw === 'done' || statusRaw === 'incomplete' ? statusRaw : 'pending';
+  const completionFeedbackRaw = String(raw.completion_feedback || '').replace(/\r\n/g, '\n');
+  const incompleteReasonRaw = String(raw.incomplete_reason || '').replace(/\r\n/g, '\n');
+
+  const problem = {
+    subject: String(raw.subject || '').trim(),
+    material: String(raw.material || '').trim(),
+    problem_name: String(raw.problem_name || '').trim(),
+    problem_type: String(raw.problem_type || '').trim(),
+    note: String(raw.note || '').trim(),
+    completion_status: completionStatus,
+    completion_feedback: completionStatus === 'done' ? completionFeedbackRaw.trim().slice(0, 1000) : '',
+    incomplete_reason: completionStatus === 'incomplete' ? incompleteReasonRaw.trim().slice(0, 1000) : '',
+    deleted_at: String(raw.deleted_at || '').trim(),
+    assignment: normalizeWrongAnswerAssignment(raw.assignment || fallbackAssignment)
+  };
+
+  if (problem.deleted_at) return null;
+  if (!problem.subject && !problem.material && !problem.problem_name && !problem.problem_type && !problem.note) {
+    return null;
+  }
+  return problem;
+}
+
+function parseWrongAnswerProblems(value) {
+  const parsed = parseJson(value, {});
+  if (!parsed || typeof parsed !== 'object') return [];
+  const topLevelAssignment = normalizeWrongAnswerAssignment(parsed.assignment || null);
+  const problemsRaw = Array.isArray(parsed.problems)
+    ? parsed.problems
+    : Array.isArray(parsed.items)
+      ? parsed.items
+      : [];
+  return problemsRaw
+    .map((item, idx) => normalizeWrongAnswerProblem(item, idx === 0 ? topLevelAssignment : null))
+    .filter(Boolean);
+}
+
+function formatAssignmentSchedule(assignment) {
+  if (!assignment) return '';
+  const dateText = assignment.session_month && assignment.session_day
+    ? `${assignment.session_month}/${assignment.session_day}`
+    : '';
+  const durationText = assignment.session_duration_minutes
+    ? `${assignment.session_duration_minutes}분`
+    : '';
+  return joinTextParts([
+    assignment.mentor_name ? `배정 멘토 ${assignment.mentor_name}` : '',
+    joinTextParts([dateText, assignment.session_start_time], ' '),
+    durationText
+  ]);
+}
+
 export default function printRoutes(db) {
   const router = express.Router();
 
@@ -124,37 +233,26 @@ export default function printRoutes(db) {
     const profile = parseJson(student.profile_json, {});
     const studentInfo = profile?.student_info || {};
     const mockScores = Array.isArray(profile?.mock_scores) ? profile.mock_scores : [];
-    const schoolGrades = profile?.school_grades && typeof profile.school_grades === 'object' ? profile.school_grades : {};
 
     const dailyTasks = parseJson(weekRecord?.b_daily_tasks, {});
     const dailyTasksThisWeek = parseJson(weekRecord?.b_daily_tasks_this_week, {});
-    const dailyFeedback = parseJson(weekRecord?.b_lead_daily_feedback, {});
+    const clinicEntries = parseClinicEntries(weekRecord?.d_clinic_records);
+    const wrongAnswerProblems = parseWrongAnswerProblems(weekRecord?.e_wrong_answer_distribution);
+    const weeklyLeadFeedback = String(weekRecord?.c_lead_weekly_feedback || '').trim();
 
-    const requiredPrintFields = new Set(
-      useNewDailyTaskLayout
-        ? [
-            'a_curriculum',
-            'a_last_hw',
-            'a_hw_exec',
-            'a_progress',
-            'a_this_hw',
-            'a_comment',
-            'b_daily_tasks',
-            'b_daily_tasks_this_week',
-            'b_lead_daily_feedback'
-          ]
-        : [
-            'a_curriculum',
-            'a_last_hw',
-            'a_hw_exec',
-            'a_progress',
-            'a_this_hw',
-            'a_comment',
-            'b_daily_tasks',
-            'b_lead_daily_feedback',
-            'c_lead_weekly_feedback'
-          ]
-    );
+    const requiredPrintFields = new Set([
+      'a_curriculum',
+      'a_last_hw',
+      'a_hw_exec',
+      'a_progress',
+      'a_this_hw',
+      'a_comment',
+      'b_daily_tasks',
+      'b_daily_tasks_this_week',
+      'd_clinic_records',
+      'e_wrong_answer_distribution',
+      'c_lead_weekly_feedback'
+    ]);
     const printable = (k) => canViewField(db, req.user.role, k) && (requiredPrintFields.has(k) || isEnabledPrint(db, k));
 
     const days = [
@@ -190,80 +288,134 @@ export default function printRoutes(db) {
         }).join('\n')
       : '-';
 
-    const schoolGradeText = [
-      `1학년: 1학기 ${schoolGrades?.['1']?.['1'] || '-'} / 2학기 ${schoolGrades?.['1']?.['2'] || '-'}`,
-      `2학년: 1학기 ${schoolGrades?.['2']?.['1'] || '-'} / 2학기 ${schoolGrades?.['2']?.['2'] || '-'}`,
-      `3학년: 1학기 ${schoolGrades?.['3']?.['1'] || '-'} / 2학기 ${schoolGrades?.['3']?.['2'] || '-'}`
-    ].join('\n');
+    const schoolGradeLabel = (() => {
+      const schoolName = String(studentInfo.school_name || '').trim();
+      const gradeText = String(studentInfo.school_grade || student.grade || '').trim();
+      if (schoolName && gradeText) return `${schoolName} (${gradeText})`;
+      return schoolName || gradeText || '-';
+    })();
 
-    const bottomSectionHtml = useNewDailyTaskLayout
+    const clinicEntryHtml = printable('d_clinic_records') && clinicEntries.length
       ? `
-        <div class="card tasks-card">
-          <h3>일일 학습 과제(지난주)</h3>
-          <table class="dense day-table">
-            <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
-            <tbody>
-              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_daily_tasks') ? dailyTasks?.[d.key] : '')}</td></tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-
-        <div class="card tasks-this-week-card">
-          <h3>일일 학습 과제(이번주)</h3>
-          <table class="dense day-table">
-            <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
-            <tbody>
-              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_daily_tasks_this_week') ? dailyTasksThisWeek?.[d.key] : '')}</td></tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-
-        <div class="card daily-feedback-card">
-          <h3>요일 별 총괄멘토 피드백</h3>
-          <table class="dense feedback-table">
-            <thead><tr><th style="width:12mm;">요일</th><th>피드백</th></tr></thead>
-            <tbody>
-              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_lead_daily_feedback') ? dailyFeedback?.[d.key] : '')}</td></tr>`).join('')}
-            </tbody>
-          </table>
+        <div class="qa-section">
+          <div class="qa-section-title">클리닉 질답 기록</div>
+          ${clinicEntries.map((entry, idx) => {
+            const questionText = joinTextParts([
+              entry.subject,
+              entry.material,
+              entry.problem_name,
+              entry.problem_type
+            ]);
+            const metaText = joinTextParts([
+              entry.mentor_name ? `진행 멘토 ${entry.mentor_name}` : '',
+              entry.solved_date ? `해결일 ${entry.solved_date}` : ''
+            ]);
+            return `
+              <div class="qa-entry">
+                <div class="qa-entry-head">
+                  <span>질답 ${idx + 1}</span>
+                  ${metaText ? `<span class="qa-meta">${esc(metaText)}</span>` : ''}
+                </div>
+                <div class="qa-line">
+                  <span class="qa-label">학생 질문</span>
+                  <div class="qa-value">${optionalTextToHtml(questionText) || '-'}</div>
+                </div>
+                <div class="qa-line">
+                  <span class="qa-label">마무리/피드백</span>
+                  <div class="qa-value">${optionalTextToHtml(entry.summary) || '-'}</div>
+                </div>
+              </div>
+            `;
+          }).join('')}
         </div>
       `
-      : `
-        <div class="card tasks-card">
-          <h3>일일 학습 과제</h3>
-          <table class="dense day-table">
-            <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
-            <tbody>
-              ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_daily_tasks') ? dailyTasks?.[d.key] : '')}</td></tr>`).join('')}
-            </tbody>
-          </table>
+      : '';
+
+    const wrongAnswerHtml = printable('e_wrong_answer_distribution') && wrongAnswerProblems.length
+      ? `
+        <div class="qa-section">
+          <div class="qa-section-title">오답·질문 배정 정리</div>
+          ${wrongAnswerProblems.map((problem, idx) => {
+            const questionText = joinTextParts([
+              problem.subject,
+              problem.material,
+              problem.problem_name,
+              problem.problem_type
+            ]);
+            const assignmentText = formatAssignmentSchedule(problem.assignment);
+            const resultText = problem.completion_status === 'done'
+              ? (problem.completion_feedback || '완료 처리됨')
+              : problem.completion_status === 'incomplete'
+                ? (problem.incomplete_reason || '미완료 처리됨')
+                : '진행중';
+            const resultLabel = problem.completion_status === 'done'
+              ? '마무리 상태'
+              : problem.completion_status === 'incomplete'
+                ? '미완료 사유'
+                : '진행 상태';
+            return `
+              <div class="qa-entry">
+                <div class="qa-entry-head">
+                  <span>배정 ${idx + 1}</span>
+                  ${assignmentText ? `<span class="qa-meta">${esc(assignmentText)}</span>` : ''}
+                </div>
+                <div class="qa-line">
+                  <span class="qa-label">질문 문제</span>
+                  <div class="qa-value">${optionalTextToHtml(questionText) || '-'}</div>
+                </div>
+                ${problem.note ? `
+                  <div class="qa-line">
+                    <span class="qa-label">전달사항</span>
+                    <div class="qa-value">${optionalTextToHtml(problem.note)}</div>
+                  </div>
+                ` : ''}
+                <div class="qa-line">
+                  <span class="qa-label">${esc(resultLabel)}</span>
+                  <div class="qa-value">${optionalTextToHtml(resultText) || '-'}</div>
+                </div>
+              </div>
+            `;
+          }).join('')}
         </div>
+      `
+      : '';
 
-        <div class="bottom-right">
-          <div class="card daily-feedback-card">
-            <h3>요일 별 총괄멘토 피드백</h3>
-            <table class="dense feedback-table">
-              <thead><tr><th style="width:12mm;">요일</th><th>피드백</th></tr></thead>
-              <tbody>
-                ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable('b_lead_daily_feedback') ? dailyFeedback?.[d.key] : '')}</td></tr>`).join('')}
-              </tbody>
-            </table>
-          </div>
-
-          <div class="card weekly-feedback-card">
-            <h3>주간 총괄멘토 피드백</h3>
-            <table class="dense weekly-table">
-              <tbody>
-                <tr>
-                  <td class="note">${textToHtml(printable('c_lead_weekly_feedback') ? weekRecord?.c_lead_weekly_feedback : '')}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+    const weeklyLeadFeedbackHtml = printable('c_lead_weekly_feedback') && weeklyLeadFeedback
+      ? `
+        <div class="qa-section qa-section-brief">
+          <div class="qa-section-title">총괄멘토 주간 피드백</div>
+          <div class="qa-brief">${optionalTextToHtml(weeklyLeadFeedback)}</div>
         </div>
-      `;
+      `
+      : '';
 
-    const bottomClass = useNewDailyTaskLayout ? 'bottom bottom-new' : 'bottom bottom-legacy';
+    const clinicSummaryHtml = clinicEntryHtml || wrongAnswerHtml || weeklyLeadFeedbackHtml
+      ? `${clinicEntryHtml}${wrongAnswerHtml}${weeklyLeadFeedbackHtml}`
+      : `<div class="qa-empty">기록된 주간 질답/클리닉 내용이 없습니다.</div>`;
+
+    const taskFieldKey = useNewDailyTaskLayout ? 'b_daily_tasks_this_week' : 'b_daily_tasks';
+    const taskCardClass = useNewDailyTaskLayout ? 'tasks-this-week-card' : 'tasks-card';
+    const taskTitle = useNewDailyTaskLayout ? '일일 학습 과제(이번주)' : '일일 학습 과제';
+    const taskSource = useNewDailyTaskLayout ? dailyTasksThisWeek : dailyTasks;
+
+    const bottomSectionHtml = `
+      <div class="card ${taskCardClass}">
+        <h3>${taskTitle}</h3>
+        <table class="dense day-table">
+          <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
+          <tbody>
+            ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable(taskFieldKey) ? taskSource?.[d.key] : '')}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card clinic-summary-card">
+        <h3>주간 질답 클리닉 내용</h3>
+        ${clinicSummaryHtml}
+      </div>
+    `;
+
+    const bottomClass = 'bottom bottom-clinic';
 
     const html = `<!doctype html>
 <html>
@@ -354,13 +506,7 @@ export default function printRoutes(db) {
       display: grid;
       gap: 1.4mm;
     }
-    .bottom.bottom-new { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .bottom.bottom-legacy { grid-template-columns: 1.05fr 1fr; }
-    .bottom-right {
-      display: grid;
-      grid-template-rows: auto auto;
-      gap: 1.4mm;
-    }
+    .bottom.bottom-clinic { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
     .dense th, .dense td { font-size: 8.1px; padding: 0.78mm 1.0mm; }
     .day-table thead th { background: #dfecfa; }
     .feedback-table thead th { background: #dff1e5; }
@@ -372,6 +518,77 @@ export default function printRoutes(db) {
     .info-table th { width: 13mm; background: #f3f7fb; }
     .info-table td { background: #fff; }
     .muted { color: #4b5563; }
+    .clinic-summary-card { background: #fff8ef; border-color: #d6bea2; }
+    .qa-section + .qa-section { margin-top: 1.0mm; }
+    .qa-section-title {
+      margin-bottom: 0.7mm;
+      padding: 0.6mm 0.9mm;
+      border: 1px solid #dcc7ad;
+      background: #fff3e3;
+      color: #6a4625;
+      font-size: 8.1px;
+      font-weight: 700;
+    }
+    .qa-entry {
+      border: 1px solid #e1d3bf;
+      background: #fffdf9;
+      padding: 0.85mm 1.0mm;
+    }
+    .qa-entry + .qa-entry { margin-top: 0.8mm; }
+    .qa-entry-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 1mm;
+      margin-bottom: 0.55mm;
+      font-size: 8.0px;
+      font-weight: 700;
+      color: #23405a;
+    }
+    .qa-meta {
+      font-weight: 400;
+      color: #5b6470;
+    }
+    .qa-line {
+      display: grid;
+      grid-template-columns: 14mm minmax(0, 1fr);
+      gap: 0.8mm;
+      align-items: start;
+    }
+    .qa-line + .qa-line { margin-top: 0.45mm; }
+    .qa-label {
+      display: inline-block;
+      padding: 0.2mm 0.45mm;
+      border-radius: 2px;
+      background: #edf4fb;
+      color: #27445d;
+      font-size: 7.8px;
+      font-weight: 700;
+      text-align: center;
+    }
+    .qa-value {
+      min-width: 0;
+      font-size: 7.95px;
+      line-height: 1.28;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .qa-section-brief .qa-brief {
+      border: 1px solid #ecd6b8;
+      background: #fffaf4;
+      padding: 0.9mm 1.0mm;
+      font-size: 7.95px;
+      line-height: 1.3;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .qa-empty {
+      border: 1px dashed #d4c3ae;
+      background: #fffdf9;
+      padding: 2.2mm 1.4mm;
+      text-align: center;
+      font-size: 8.0px;
+      color: #6b7280;
+    }
 
     .footer-note {
       margin-top: 0.8mm;
@@ -391,18 +608,13 @@ export default function printRoutes(db) {
           <h3>학생 정보</h3>
           <table class="info-table dense">
             <tr>
-              <th>이름</th><td>${esc(student.name || '-')}</td>
-              <th>ID</th><td>${esc(student.external_id || '-')}</td>
-              <th>학년</th><td>${esc(student.grade || '-')}</td>
+              <th>이름</th><td colspan="3">${esc(student.name || '-')}</td>
+              <th>ID</th><td colspan="2">${esc(student.external_id || '-')}</td>
             </tr>
             <tr>
+              <th>학교(학년)</th><td>${esc(schoolGradeLabel)}</td>
               <th>목표대학</th><td>${esc(studentInfo.goal_univ || '-')}</td>
               <th>목표학과</th><td>${esc(studentInfo.goal_major || '-')}</td>
-              <th>학교</th><td>${esc(studentInfo.school_name || '-')}</td>
-            </tr>
-            <tr>
-              <th>클리닉 멘토</th><td>${esc(studentInfo.mentor_name || '-')}</td>
-              <th>총괄멘토</th><td>${esc(studentInfo.lead_name || '-')}</td>
             </tr>
             <tr>
               <th>회차</th><td>${esc(String(week.label || '-').replace(/주차/g, '회차'))}</td>
@@ -413,10 +625,9 @@ export default function printRoutes(db) {
         </div>
 
         <div class="card score-card">
-          <h3>성적/내신 요약</h3>
+          <h3>성적 요약</h3>
           <table class="dense">
             <tr><th style="width:22mm;">모의/수능</th><td>${textToHtml(mockText)}</td></tr>
-            <tr><th>내신</th><td>${textToHtml(schoolGradeText)}</td></tr>
           </table>
         </div>
       </div>
