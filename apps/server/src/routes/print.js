@@ -191,17 +191,7 @@ function parseWrongAnswerProblems(value) {
 
 function formatAssignmentSchedule(assignment) {
   if (!assignment) return '';
-  const dateText = assignment.session_month && assignment.session_day
-    ? `${assignment.session_month}/${assignment.session_day}`
-    : '';
-  const durationText = assignment.session_duration_minutes
-    ? `${assignment.session_duration_minutes}분`
-    : '';
-  return joinTextParts([
-    assignment.mentor_name ? `진행 멘토 ${assignment.mentor_name}` : '',
-    joinTextParts([dateText, assignment.session_start_time], ' '),
-    durationText
-  ]);
+  return assignment.mentor_name ? `진행 멘토 ${assignment.mentor_name}` : '';
 }
 
 export default function printRoutes(db) {
@@ -284,7 +274,7 @@ export default function printRoutes(db) {
           const eng = m?.eng || '-';
           const soc = m?.soc || '-';
           const sci = m?.sci || '-';
-          return `${exam} | 국:${kor} 수:${math} 영:${eng} 탐1:${soc} 탐2:${sci}`;
+          return `${exam} | 국:${kor} 수:${math} 영:${eng} 탐구:${soc} 탐구:${sci}`;
         }).join('\n')
       : '-';
 
@@ -331,12 +321,16 @@ export default function printRoutes(db) {
       `
       : '';
 
-    const wrongAnswerHtml = printable('e_wrong_answer_distribution') && wrongAnswerProblems.length
+    const completedWrongAnswerProblems = wrongAnswerProblems.filter(
+      (problem) => String(problem?.completion_status || '').trim() === 'done'
+    );
+
+    const wrongAnswerHtml = printable('e_wrong_answer_distribution') && completedWrongAnswerProblems.length
       ? `
         <div class="qa-section">
-          <div class="qa-section-title">오답·질문 질답 정리</div>
+          <div class="qa-section-title">완료된 오답·질답 정리</div>
           <div class="qa-entry-grid">
-          ${wrongAnswerProblems.map((problem, idx) => {
+          ${completedWrongAnswerProblems.map((problem, idx) => {
             const questionText = joinTextParts([
               problem.subject,
               problem.material,
@@ -364,12 +358,6 @@ export default function printRoutes(db) {
                   <span class="qa-label">질문 문제</span>
                   <div class="qa-value">${optionalTextToHtml(questionText) || '-'}</div>
                 </div>
-                ${problem.note ? `
-                  <div class="qa-line">
-                    <span class="qa-label">전달사항</span>
-                    <div class="qa-value">${optionalTextToHtml(problem.note)}</div>
-                  </div>
-                ` : ''}
                 <div class="qa-line">
                   <span class="qa-label">${esc(resultLabel)}</span>
                   <div class="qa-value">${optionalTextToHtml(resultText) || '-'}</div>
@@ -616,24 +604,20 @@ export default function printRoutes(db) {
           <h3>학생 정보</h3>
           <table class="info-table dense">
             <tr>
-              <th>이름</th><td colspan="3">${esc(student.name || '-')}</td>
+              <th>이름</th><td>${esc(student.name || '-')}</td>
               <th>ID</th><td>${esc(student.external_id || '-')}</td>
+              <th>기간</th><td>${esc(`${week.start_date || ''} ~ ${week.end_date || ''}`)}</td>
             </tr>
             <tr>
               <th>학교(학년)</th><td>${esc(schoolGradeLabel)}</td>
               <th>목표대학</th><td>${esc(studentInfo.goal_univ || '-')}</td>
               <th>목표학과</th><td>${esc(studentInfo.goal_major || '-')}</td>
             </tr>
-            <tr>
-              <th>회차</th><td>${esc(String(week.label || '-').replace(/주차/g, '회차'))}</td>
-              <th>기간</th><td>${esc(`${week.start_date || ''} ~ ${week.end_date || ''}`)}</td>
-              <th>출력일</th><td>${esc(fmtDate(new Date().toISOString()))}</td>
-            </tr>
           </table>
         </div>
 
         <div class="card score-card">
-          <h3>성적 요약</h3>
+          <h3>모의고사</h3>
           <table class="dense">
             <tr><th style="width:22mm;">모의/수능</th><td>${textToHtml(mockText)}</td></tr>
           </table>
