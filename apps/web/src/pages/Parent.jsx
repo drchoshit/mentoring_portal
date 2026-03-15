@@ -39,19 +39,7 @@ function renderLastHw(value) {
       {tasks.map((t, idx) => (
         <div key={`${t.text}-${idx}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white/70 px-2 py-1.5 text-sm">
           <div className="flex-1 whitespace-pre-wrap text-slate-800">{t.text}</div>
-          {t.done === true ? (
-            <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-800">
-              완료
-            </span>
-          ) : t.done === false ? (
-            <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] text-rose-800">
-              진행중{t.progress ? ` · ${t.progress}` : ''}
-            </span>
-          ) : (
-            <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
-              상태 미선택
-            </span>
-          )}
+          <TaskStatusBadge done={t.done} progress={t.progress} />
         </div>
       ))}
     </div>
@@ -229,6 +217,32 @@ function QnaStatusBadge({ status }) {
   );
 }
 
+function TaskStatusBadge({ done, progress, hideWhenEmpty = false }) {
+  if (hideWhenEmpty && done == null && !progress) return null;
+
+  if (done === true) {
+    return (
+      <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-800">
+        완료
+      </span>
+    );
+  }
+
+  if (done === false) {
+    return (
+      <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] text-rose-800">
+        진행중{progress ? ` · ${progress}` : ''}
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+      상태 미선택
+    </span>
+  );
+}
+
 function Badge({ children }) {
   return (
     <span className="inline-flex items-center rounded-full border border-amber-200/80 bg-white/88 px-3 py-1 text-[11px] font-semibold text-amber-900 shadow-sm">
@@ -370,6 +384,8 @@ function RecordBox({ title, value, tone = 'border-slate-200 bg-white/60' }) {
 }
 
 function DayNote({ label, value }) {
+  const tasks = parseLastHwTasks(value);
+
   return (
     <div className="grid grid-cols-[56px,1fr] gap-3 rounded-[24px] border border-white/80 bg-white/88 p-3 shadow-sm">
       <div className="flex h-14 items-center justify-center rounded-2xl bg-brand-900 text-lg font-semibold text-white shadow-sm">
@@ -377,7 +393,31 @@ function DayNote({ label, value }) {
       </div>
       <div className="min-w-0">
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Daily Task</div>
-        <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-800">{value || '없음'}</div>
+        {tasks.length ? (
+          <div className="mt-2 space-y-2">
+            {tasks.map((task, idx) => (
+              <div key={`${task.text}-${idx}`} className="rounded-2xl border border-slate-100 bg-slate-50/70 px-3 py-2.5">
+                <div className="flex flex-wrap items-start gap-2">
+                  <div className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-6 text-slate-800">{task.text}</div>
+                  <TaskStatusBadge done={task.done} progress={task.progress} hideWhenEmpty />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-500">없음</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DailyTasksWeekPanel({ title, tasksByDay }) {
+  return (
+    <div className="rounded-[24px] border border-white/80 bg-white/76 p-4 shadow-sm">
+      <div className="text-sm font-semibold text-brand-900">{title}</div>
+      <div className="mt-3 grid grid-cols-1 gap-3">
+        {DAYS.map((d) => <DayNote key={`${title}-${d.k}`} label={d.label} value={tasksByDay?.[d.k]} />)}
       </div>
     </div>
   );
@@ -531,23 +571,12 @@ export default function Parent() {
         item.material,
         item.problem_name,
         item.problem_type
-      ]) || '-';
-      const feedback = item.completion_status === 'done'
-        ? (item.completion_feedback || '완료 처리됨')
-        : item.completion_status === 'incomplete'
-          ? (item.incomplete_reason || '미완료 처리됨')
-          : '진행중';
+      ]);
+      if (!question) return null;
 
       return {
         key: `wrong-answer-${idx}`,
         question,
-        note: item.note,
-        feedbackLabel: item.completion_status === 'incomplete'
-          ? '마무리 메모'
-          : item.completion_status === 'done'
-            ? '멘토 피드백'
-            : '진행 상태',
-        feedback,
         mentorName: item.assignment?.mentor_name || '',
         dateLabel: formatDateTimeLabel(item.status_updated_at),
         status: item.completion_status,
@@ -556,25 +585,28 @@ export default function Parent() {
       };
     });
 
-    const clinicQnaEntries = clinicEntries.map((entry, idx) => ({
-      key: `clinic-${idx}`,
-      question: joinNonEmpty([
+    const clinicQnaEntries = clinicEntries.map((entry, idx) => {
+      const question = joinNonEmpty([
         entry.subject,
         entry.material,
         entry.problem_name,
         entry.problem_type
-      ]) || '-',
-      note: '',
-      feedbackLabel: '멘토 피드백',
-      feedback: entry.summary || '-',
-      mentorName: entry.mentor_name || '',
-      dateLabel: formatDateTimeLabel(entry.solved_date),
-      status: 'done',
-      sortTime: parseDateTimeValue(entry.solved_date)?.getTime() || 0,
-      originalOrder: wrongAnswerItems.length + idx
-    }));
+      ]);
+      if (!question) return null;
+
+      return {
+        key: `clinic-${idx}`,
+        question,
+        mentorName: entry.mentor_name || '',
+        dateLabel: formatDateTimeLabel(entry.solved_date),
+        status: 'done',
+        sortTime: parseDateTimeValue(entry.solved_date)?.getTime() || 0,
+        originalOrder: wrongAnswerItems.length + idx
+      };
+    }).filter(Boolean);
 
     return [...wrongAnswerEntries, ...clinicQnaEntries]
+      .filter(Boolean)
       .sort((a, b) => {
         if (b.sortTime !== a.sortTime) return b.sortTime - a.sortTime;
         return a.originalOrder - b.originalOrder;
@@ -732,25 +764,6 @@ export default function Parent() {
       </div>
 
       <BlockedSection blocked={isLockedWeek}>
-        <div className={sectionCardClass(SECTION_TONES.curriculum)}>
-          <SectionTitle title="학습 커리큘럼" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
-          {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {subjectRecords.length ? subjectRecords.map((sr, idx) => (
-                <div key={sr.id} className={['rounded-[24px] border p-4 shadow-[0_16px_40px_rgba(15,23,42,0.08)]', SUBJECT_TONES[idx % SUBJECT_TONES.length]].join(' ')}>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm font-semibold text-brand-900">{sr.subject_name}</div>
-                    <div className="text-xs text-slate-500">{sr.updated_at ? `업데이트: ${sr.updated_at}` : ''}</div>
-                  </div>
-                  {sr.a_curriculum ? <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-800">{sr.a_curriculum}</div> : <div className="mt-3 text-sm text-slate-400">커리큘럼 없음</div>}
-                </div>
-              )) : <div className="text-sm text-slate-400">과목 기록 없음</div>}
-            </div>
-          ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
-        </div>
-      </BlockedSection>
-
-      <BlockedSection blocked={isLockedWeek}>
         <div className={sectionCardClass(SECTION_TONES.subjects)}>
           <SectionTitle title="과목별 기록" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
@@ -777,31 +790,22 @@ export default function Parent() {
         </div>
       </BlockedSection>
 
-      {!useNewDailyTaskLayout ? (
-        <BlockedSection blocked={isLockedWeek}>
-          <div className={sectionCardClass(SECTION_TONES.daily)}>
-            <SectionTitle title="일일 학습 과제" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
-            {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
-                {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasks?.[d.k]} />)}
-              </div>
-            ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
-          </div>
-        </BlockedSection>
-      ) : null}
-
-      {useNewDailyTaskLayout ? (
-        <BlockedSection blocked={isLockedWeek}>
-          <div className={sectionCardClass(SECTION_TONES.daily)}>
-            <SectionTitle title="일일 학습 과제(이번주)" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
-            {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
-                {DAYS.map((d) => <DayNote key={d.k} label={d.label} value={dailyTasksThisWeek?.[d.k]} />)}
-              </div>
-            ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
-          </div>
-        </BlockedSection>
-      ) : null}
+      <BlockedSection blocked={isLockedWeek}>
+        <div className={sectionCardClass(SECTION_TONES.daily)}>
+          <SectionTitle title="일일 학습 과제" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+          {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
+            <div className={['mt-4 grid grid-cols-1 gap-4', useNewDailyTaskLayout ? 'xl:grid-cols-2' : ''].join(' ').trim()}>
+              <DailyTasksWeekPanel
+                title={useNewDailyTaskLayout ? '일일 학습 과제(지난주)' : '일일 학습 과제'}
+                tasksByDay={dailyTasks}
+              />
+              {useNewDailyTaskLayout ? (
+                <DailyTasksWeekPanel title="일일 학습 과제(이번주)" tasksByDay={dailyTasksThisWeek} />
+              ) : null}
+            </div>
+          ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
+        </div>
+      </BlockedSection>
 
       {showQnaClinicSection ? (
         <BlockedSection blocked={isLockedWeek}>
@@ -839,19 +843,7 @@ export default function Parent() {
                             <div className="mt-4 space-y-3">
                               <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
                                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-800">학생 질문</div>
-                                <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{entry.question || '-'}</div>
-                              </div>
-
-                              {entry.note ? (
-                                <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-3">
-                                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-800">추가 메모</div>
-                                  <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{entry.note}</div>
-                                </div>
-                              ) : null}
-
-                              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3">
-                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800">{entry.feedbackLabel}</div>
-                                <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{entry.feedback || '-'}</div>
+                                <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{entry.question}</div>
                               </div>
                             </div>
                           </div>
@@ -869,34 +861,6 @@ export default function Parent() {
           </div>
         </BlockedSection>
       ) : null}
-
-      <BlockedSection blocked={isLockedWeek}>
-        <div className={sectionCardClass(SECTION_TONES.weekly)}>
-          <SectionTitle title="회차 총괄멘토 피드백" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
-          {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-            <>
-              {weekRecord?.c_lead_weekly_feedback || weekRecord?.c_director_commentary ? (
-                <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {weekRecord?.c_lead_weekly_feedback ? (
-                    <div className="rounded-[24px] border border-white/80 bg-white/88 p-4 shadow-sm">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-800">주간 총괄멘토 피드백</div>
-                      <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{weekRecord.c_lead_weekly_feedback}</div>
-                    </div>
-                  ) : null}
-                  {weekRecord?.c_director_commentary ? (
-                    <div className="rounded-[24px] border border-white/80 bg-white/88 p-4 shadow-sm">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-800">원장 코멘트</div>
-                      <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{weekRecord.c_director_commentary}</div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="mt-3 text-sm text-slate-500">피드백 없음</div>
-              )}
-            </>
-          ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
-        </div>
-      </BlockedSection>
 
       <div className="rounded-2xl border border-slate-200/70 bg-white/70 px-4 py-3 text-xs leading-5 text-slate-500 shadow-sm">
         안내: 학부모 페이지는 조회 전용이며, 공유가 완료된 회차의 기록만 표시됩니다.
