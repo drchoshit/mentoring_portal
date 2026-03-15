@@ -221,6 +221,8 @@ export default function AssignmentStatus() {
   const [editingKey, setEditingKey] = useState('');
   const [savingKey, setSavingKey] = useState('');
   const [stateSavingKey, setStateSavingKey] = useState('');
+  const [doneEditKey, setDoneEditKey] = useState('');
+  const [completionFeedbackDraft, setCompletionFeedbackDraft] = useState('');
   const [incompleteEditKey, setIncompleteEditKey] = useState('');
   const [incompleteReasonDraft, setIncompleteReasonDraft] = useState('');
   const [briefingMentor, setBriefingMentor] = useState('');
@@ -267,6 +269,8 @@ export default function AssignmentStatus() {
       setEditingKey('');
       setSavingKey('');
       setStateSavingKey('');
+      setDoneEditKey('');
+      setCompletionFeedbackDraft('');
       setIncompleteEditKey('');
       setIncompleteReasonDraft('');
     } catch (e) {
@@ -307,6 +311,7 @@ export default function AssignmentStatus() {
 
   function beginEdit(item) {
     if (!item) return;
+    closeDoneEditor();
     setIncompleteEditKey('');
     setIncompleteReasonDraft('');
     setEditingKey(assignmentRowKey(item));
@@ -364,9 +369,25 @@ export default function AssignmentStatus() {
   function openIncompleteEditor(item) {
     const rowKey = assignmentRowKey(item);
     if (!rowKey) return;
+    closeDoneEditor();
     setEditingKey('');
     setIncompleteEditKey(rowKey);
     setIncompleteReasonDraft(String(item?.incomplete_reason || ''));
+  }
+
+  function openDoneEditor(item) {
+    const rowKey = assignmentRowKey(item);
+    if (!rowKey) return;
+    setEditingKey('');
+    setIncompleteEditKey('');
+    setIncompleteReasonDraft('');
+    setDoneEditKey(rowKey);
+    setCompletionFeedbackDraft(String(item?.completion_feedback || ''));
+  }
+
+  function closeDoneEditor() {
+    setDoneEditKey('');
+    setCompletionFeedbackDraft('');
   }
 
   function closeIncompleteEditor() {
@@ -376,7 +397,7 @@ export default function AssignmentStatus() {
 
   async function updateProblemState(item, payload) {
     const rowKey = assignmentRowKey(item);
-    if (!item?.week_record_id || !rowKey) return;
+    if (!item?.week_record_id || !rowKey) return false;
     setStateSavingKey(rowKey);
     setError('');
     try {
@@ -388,16 +409,28 @@ export default function AssignmentStatus() {
         }
       });
       await loadStatus(weekId);
+      return true;
     } catch (e) {
       setError(e?.message || '상태 저장에 실패했습니다.');
+      return false;
     } finally {
       setStateSavingKey('');
     }
   }
 
-  async function markProblemDone(item) {
+  function markProblemDone(item) {
+    openDoneEditor(item);
+  }
+
+  async function saveProblemDone(item) {
+    const feedback = String(completionFeedbackDraft || '');
     closeIncompleteEditor();
-    await updateProblemState(item, { completion_status: 'done', incomplete_reason: '' });
+    const ok = await updateProblemState(item, {
+      completion_status: 'done',
+      incomplete_reason: '',
+      completion_feedback: feedback
+    });
+    if (ok) closeDoneEditor();
   }
 
   async function saveProblemIncomplete(item) {
@@ -406,16 +439,17 @@ export default function AssignmentStatus() {
       setError('미완료 사유를 입력해 주세요.');
       return;
     }
-    await updateProblemState(item, {
+    const ok = await updateProblemState(item, {
       completion_status: 'incomplete',
       incomplete_reason: reason
     });
-    closeIncompleteEditor();
+    if (ok) closeIncompleteEditor();
   }
 
   async function deleteProblemItem(item) {
     const ok = window.confirm('이 배정 항목을 삭제할까요? 데이터와 이미지는 즉시 물리 삭제되지 않습니다.');
     if (!ok) return;
+    closeDoneEditor();
     closeIncompleteEditor();
     await updateProblemState(item, { action: 'delete' });
   }
@@ -701,9 +735,11 @@ export default function AssignmentStatus() {
                 const problems = Array.isArray(item.problem_items) ? item.problem_items : [];
                 const rowKey = assignmentRowKey(item);
                 const isEditing = isDirector && editingKey === rowKey;
+                const isDoneEditing = doneEditKey === rowKey;
                 const isIncompleteEditing = incompleteEditKey === rowKey;
                 const isStateSaving = stateSavingKey === rowKey;
                 const status = normalizeCompletionStatus(item?.completion_status);
+                const completionFeedback = String(item?.completion_feedback || '').trim();
                 const problemOrder = Math.max(
                   1,
                   Number(item.problem_order || (Number(item.problem_index || 0) + 1) || 1)
@@ -730,7 +766,7 @@ export default function AssignmentStatus() {
                           <>
                             <button
                               type="button"
-                              className={status === 'done' ? 'btn-primary h-8 px-2.5 text-xs' : 'btn-ghost h-8 px-2.5 text-xs'}
+                              className={status === 'done' || isDoneEditing ? 'btn-primary h-8 px-2.5 text-xs' : 'btn-ghost h-8 px-2.5 text-xs'}
                               disabled={isStateSaving || savingKey === rowKey}
                               onClick={() => void markProblemDone(item)}
                             >
@@ -738,7 +774,7 @@ export default function AssignmentStatus() {
                             </button>
                             <button
                               type="button"
-                              className={status === 'incomplete' ? 'btn border border-amber-700 bg-amber-600 text-white h-8 px-2.5 text-xs hover:bg-amber-700' : 'btn-ghost h-8 px-2.5 text-xs'}
+                              className={status === 'incomplete' || isIncompleteEditing ? 'btn border border-amber-700 bg-amber-600 text-white h-8 px-2.5 text-xs hover:bg-amber-700' : 'btn-ghost h-8 px-2.5 text-xs'}
                               disabled={isStateSaving || savingKey === rowKey}
                               onClick={() => openIncompleteEditor(item)}
                             >
@@ -864,7 +900,47 @@ export default function AssignmentStatus() {
                       </div>
                     ) : null}
 
-                    {isIncompleteEditing ? (
+                    {isDoneEditing ? (
+                      <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-2.5 py-2">
+                        <div className="text-[11px] font-semibold text-emerald-800">완료 피드백</div>
+                        <div className="mt-1 text-[11px] text-emerald-900">
+                          학생의 이해도 및 완료 사유에 대해 간략히 기록해주세요.
+                        </div>
+                        <textarea
+                          rows={3}
+                          className="textarea mt-2 min-h-[72px]"
+                          value={completionFeedbackDraft}
+                          onChange={(e) => setCompletionFeedbackDraft(e.target.value)}
+                          placeholder="예: 핵심 개념은 이해했고, 같은 유형 1문제는 스스로 해결 가능하다고 확인했습니다."
+                          disabled={isStateSaving}
+                        />
+                        <div className="mt-2 flex justify-end gap-2">
+                          <button
+                            type="button"
+                            className="btn-primary h-8 px-2.5 text-xs"
+                            disabled={isStateSaving}
+                            onClick={() => void saveProblemDone(item)}
+                          >
+                            저장
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost h-8 px-2.5 text-xs"
+                            disabled={isStateSaving}
+                            onClick={closeDoneEditor}
+                          >
+                            취소
+                          </button>
+                        </div>
+                      </div>
+                    ) : status === 'done' && completionFeedback ? (
+                      <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-2.5 py-2">
+                        <div className="text-[11px] font-semibold text-emerald-800">완료 피드백</div>
+                        <div className="mt-1 whitespace-pre-wrap text-xs text-emerald-900">
+                          {completionFeedback}
+                        </div>
+                      </div>
+                    ) : isIncompleteEditing ? (
                       <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-2">
                         <div className="text-[11px] text-amber-800">미완료 사유</div>
                         <textarea
@@ -915,6 +991,14 @@ export default function AssignmentStatus() {
                             return (
                               <div key={`${item.week_record_id}-${item.student_id}-problem-${idx}`} className="text-xs text-slate-700">
                                 <div>{idx + 1}. {formatProblemLine(problem)}</div>
+                                {String(problem?.note || '').trim() ? (
+                                  <div className="mt-1 rounded-md border border-sky-100 bg-sky-50/70 px-2 py-1.5">
+                                    <div className="text-[11px] font-medium text-sky-800">전달사항</div>
+                                    <div className="mt-0.5 whitespace-pre-wrap text-[11px] text-sky-900">
+                                      {String(problem.note || '').trim()}
+                                    </div>
+                                  </div>
+                                ) : null}
                                 {images.length ? (
                                   <div className="mt-1 flex flex-wrap gap-1.5">
                                     {images.map((img, imageIdx) => {

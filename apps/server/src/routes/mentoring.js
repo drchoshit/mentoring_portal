@@ -327,6 +327,7 @@ const DEFAULT_WRONG_ANSWER_ITEM = {
   images: [],
   assignment: null,
   completion_status: 'pending',
+  completion_feedback: '',
   incomplete_reason: '',
   status_updated_at: '',
   status_updated_by: '',
@@ -392,6 +393,8 @@ function normalizeWrongAnswerItem(raw, fallbackAssignment = null) {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_WRONG_ANSWER_ITEM };
   const statusRaw = String(raw.completion_status || '').trim();
   const completionStatus = statusRaw === 'done' || statusRaw === 'incomplete' ? statusRaw : 'pending';
+  const completionFeedbackRaw = String(raw.completion_feedback || '').replace(/\r\n/g, '\n');
+  const completionFeedback = completionStatus === 'done' ? completionFeedbackRaw.trim().slice(0, 1000) : '';
   const incompleteReasonRaw = String(raw.incomplete_reason || '').replace(/\r\n/g, '\n');
   const incompleteReason = completionStatus === 'incomplete' ? incompleteReasonRaw.trim().slice(0, 1000) : '';
   return {
@@ -402,6 +405,7 @@ function normalizeWrongAnswerItem(raw, fallbackAssignment = null) {
     note: String(raw.note || '').trim(),
     assignment: normalizeWrongAnswerAssignment(raw.assignment || fallbackAssignment),
     completion_status: completionStatus,
+    completion_feedback: completionFeedback,
     incomplete_reason: incompleteReason,
     status_updated_at: String(raw.status_updated_at || '').trim(),
     status_updated_by: String(raw.status_updated_by || '').trim(),
@@ -1101,6 +1105,7 @@ export default function mentoringRoutes(db) {
           material: String(problem.material || '').trim(),
           problem_name: String(problem.problem_name || '').trim(),
           problem_type: String(problem.problem_type || '').trim(),
+          note: String(problem.note || '').trim(),
           images: (Array.isArray(problem.images) ? problem.images : [])
             .map((img) => ({
               id: String(img?.id || '').trim(),
@@ -1134,6 +1139,7 @@ export default function mentoringRoutes(db) {
           problem_items: [problemItem],
           assigned_at: String(assignment.assigned_at || '').trim(),
           completion_status: String(problem.completion_status || 'pending').trim() || 'pending',
+          completion_feedback: String(problem.completion_feedback || '').trim(),
           incomplete_reason: String(problem.incomplete_reason || '').trim(),
           status_updated_at: String(problem.status_updated_at || '').trim(),
           status_updated_by: String(problem.status_updated_by || '').trim()
@@ -1231,11 +1237,14 @@ export default function mentoringRoutes(db) {
     } else {
       const statusRaw = String(req.body?.completion_status || '').trim();
       const completionStatus = statusRaw === 'done' || statusRaw === 'incomplete' ? statusRaw : 'pending';
+      const completionFeedbackRaw = String(req.body?.completion_feedback || '').replace(/\r\n/g, '\n');
+      const completionFeedback = completionStatus === 'done' ? completionFeedbackRaw.trim().slice(0, 1000) : '';
       const incompleteReasonRaw = String(req.body?.incomplete_reason || '').replace(/\r\n/g, '\n');
       const incompleteReason = completionStatus === 'incomplete' ? incompleteReasonRaw.trim().slice(0, 1000) : '';
       nextProblem = {
         ...currentProblem,
         completion_status: completionStatus,
+        completion_feedback: completionFeedback,
         incomplete_reason: incompleteReason,
         status_updated_at: nowIso,
         status_updated_by: updaterRole,
@@ -1275,6 +1284,7 @@ export default function mentoringRoutes(db) {
       ok: true,
       problem_index: problemIndex,
       completion_status: String(nextProblem.completion_status || 'pending').trim() || 'pending',
+      completion_feedback: String(nextProblem.completion_feedback || '').trim(),
       incomplete_reason: String(nextProblem.incomplete_reason || '').trim(),
       deleted_at: String(nextProblem.deleted_at || '').trim()
     });

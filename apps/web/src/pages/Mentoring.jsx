@@ -239,6 +239,7 @@ const DEFAULT_WRONG_ANSWER_ITEM = {
   images: [],
   assignment: null,
   completion_status: 'pending',
+  completion_feedback: '',
   incomplete_reason: '',
   status_updated_at: '',
   status_updated_by: '',
@@ -312,6 +313,8 @@ function normalizeWrongAnswerItem(raw) {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_WRONG_ANSWER_ITEM };
   const statusRaw = String(raw.completion_status || '').trim();
   const completionStatus = statusRaw === 'done' || statusRaw === 'incomplete' ? statusRaw : 'pending';
+  const completionFeedbackRaw = String(raw.completion_feedback || '').replace(/\r\n/g, '\n');
+  const completionFeedback = completionStatus === 'done' ? completionFeedbackRaw.trim().slice(0, 1000) : '';
   const incompleteReasonRaw = String(raw.incomplete_reason || '').replace(/\r\n/g, '\n');
   const incompleteReason = completionStatus === 'incomplete' ? incompleteReasonRaw.trim().slice(0, 1000) : '';
   return {
@@ -321,6 +324,7 @@ function normalizeWrongAnswerItem(raw) {
     problem_type: String(raw.problem_type || '').trim(),
     note: String(raw.note || '').trim(),
     completion_status: completionStatus,
+    completion_feedback: completionFeedback,
     incomplete_reason: incompleteReason,
     status_updated_at: String(raw.status_updated_at || '').trim(),
     status_updated_by: String(raw.status_updated_by || '').trim(),
