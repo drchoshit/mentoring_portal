@@ -274,7 +274,7 @@ export default function AssignmentStatus() {
       setIncompleteEditKey('');
       setIncompleteReasonDraft('');
     } catch (e) {
-      setError(e?.message || '배정현황을 불러오지 못했습니다.');
+      setError(e?.message || '질답 배정현황을 불러오지 못했습니다.');
       setRows([]);
     } finally {
       setBusy(false);
@@ -465,6 +465,35 @@ export default function AssignmentStatus() {
     const found = (weeks || []).find((w) => String(w.id) === String(weekId));
     return found ? toRoundLabel(found.label) : '';
   }, [weeks, weekId]);
+  const summaryDayColumns = useMemo(() => DAY_ORDER.filter((day) => day !== '-'), []);
+  const mentorDaySummaryRows = useMemo(() => {
+    const byMentor = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const mentorName = String(row?.mentor_name || '').trim() || '미배정';
+      const mentorRole = String(row?.mentor_role || '').trim() || 'mentor';
+      const dayLabelRaw = String(row?.day_label || row?.session_day_label || '').trim();
+      const dayLabel = summaryDayColumns.includes(dayLabelRaw) ? dayLabelRaw : '-';
+
+      if (!byMentor.has(mentorName)) {
+        const counts = {};
+        for (const day of summaryDayColumns) counts[day] = 0;
+        counts['-'] = 0;
+        byMentor.set(mentorName, {
+          mentor_name: mentorName,
+          mentor_role: mentorRole,
+          counts,
+          total: 0
+        });
+      }
+      const target = byMentor.get(mentorName);
+      target.counts[dayLabel] = Number(target.counts[dayLabel] || 0) + 1;
+      target.total += 1;
+    }
+
+    return Array.from(byMentor.values()).sort((a, b) =>
+      String(a.mentor_name || '').localeCompare(String(b.mentor_name || ''))
+    );
+  }, [rows, summaryDayColumns]);
 
   useEffect(() => {
     if (!mentorOptions.length) {
@@ -561,7 +590,7 @@ export default function AssignmentStatus() {
       <div className="card p-5">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
           <div>
-            <div className="text-lg font-semibold text-brand-800">배정현황</div>
+            <div className="text-lg font-semibold text-brand-800">질답 배정현황</div>
             <div className="text-sm text-slate-600">
               멘토별 배정 목록을 예정 시간순으로 확인합니다.
             </div>
@@ -597,6 +626,50 @@ export default function AssignmentStatus() {
           {weekLabel ? `기준 회차: ${weekLabel}` : '회차를 선택해 주세요.'}
         </div>
         {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
+        {mentorDaySummaryRows.length ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-white/80 p-3">
+            <div className="text-sm font-semibold text-slate-800">멘토별 요일 배정 질문 수</div>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full min-w-[680px] text-sm">
+                <thead className="bg-slate-50 text-slate-600">
+                  <tr>
+                    <th className="px-2 py-2 text-left border-b border-slate-200">멘토</th>
+                    {summaryDayColumns.map((day) => (
+                      <th key={`summary-day-head-${day}`} className="px-2 py-2 text-center border-b border-slate-200">
+                        {day}
+                      </th>
+                    ))}
+                    <th className="px-2 py-2 text-center border-b border-slate-200">미지정</th>
+                    <th className="px-2 py-2 text-center border-b border-slate-200">합계</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mentorDaySummaryRows.map((row) => (
+                    <tr key={`summary-row-${row.mentor_name}`} className="border-t border-slate-100">
+                      <td className="px-2 py-2">
+                        <div className="font-medium text-slate-900">{row.mentor_name}</div>
+                        <div className="text-[11px] text-slate-500">{ROLE_LABEL[row.mentor_role] || row.mentor_role}</div>
+                      </td>
+                      {summaryDayColumns.map((day) => (
+                        <td key={`summary-count-${row.mentor_name}-${day}`} className="px-2 py-2 text-center text-slate-800">
+                          {Number(row?.counts?.[day] || 0)}
+                        </td>
+                      ))}
+                      <td className="px-2 py-2 text-center text-slate-700">
+                        {Number(row?.counts?.['-'] || 0)}
+                      </td>
+                      <td className="px-2 py-2 text-center">
+                        <span className="inline-flex min-w-8 items-center justify-center rounded-full border border-brand-200 bg-brand-50 px-2 py-0.5 font-semibold text-brand-800">
+                          {Number(row?.total || 0)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
         {canIssueBriefing ? (
           <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
             <div className="text-sm font-semibold text-slate-800">멘토 사전 전송 링크 (48시간)</div>

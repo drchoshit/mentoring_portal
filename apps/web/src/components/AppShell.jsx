@@ -31,13 +31,17 @@ function Item({ to, children }) {
 
 export default function AppShell({ children }) {
   const { user, logout } = useAuth();
+  const role = String(user?.role || '').trim();
 
   const menu = [];
-  if (user?.role !== 'parent') {
+  if (role !== 'parent') {
     menu.push({ to: '/', label: '피드' });
     menu.push({ to: '/students', label: '학생' });
-    menu.push({ to: '/assignment-status', label: '배정현황' });
-    if (user?.role === 'director') menu.push({ to: '/settings', label: '설정' });
+    menu.push({ to: '/assignment-status', label: '질답 배정현황' });
+    if (['director', 'lead', 'admin'].includes(role)) {
+      menu.push({ to: '/lead-assignment-board', label: '총괄멘토 배정표' });
+    }
+    if (role === 'director') menu.push({ to: '/settings', label: '설정' });
   } else {
     menu.push({ to: '/parent', label: '마이페이지' });
   }
@@ -47,7 +51,7 @@ export default function AppShell({ children }) {
       <header className="sticky top-0 z-40 border-b border-gold-400/30 bg-white/70 backdrop-blur">
         <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
           <Link
-            to={user?.role === 'parent' ? '/parent' : '/'}
+            to={role === 'parent' ? '/parent' : '/'}
             className="font-semibold tracking-wide text-brand-800"
           >
             Mentoring Portal
@@ -55,7 +59,7 @@ export default function AppShell({ children }) {
 
           <div className="flex items-center gap-3 text-sm">
             <div className="text-slate-700">
-              {user?.display_name} ({ROLE_LABEL[user?.role] || user?.role})
+              {user?.display_name} ({ROLE_LABEL[role] || role})
             </div>
             <button className="btn-ghost" onClick={logout}>
               로그아웃
@@ -66,9 +70,9 @@ export default function AppShell({ children }) {
         <div className="border-t border-slate-200/60">
           <div className="mx-auto max-w-7xl px-4 py-2">
             <nav className="flex flex-wrap gap-2 overflow-x-auto">
-              {menu.map((m) => (
-                <Item key={m.to} to={m.to}>
-                  {m.label}
+              {menu.map((item) => (
+                <Item key={item.to} to={item.to}>
+                  {item.label}
                 </Item>
               ))}
             </nav>

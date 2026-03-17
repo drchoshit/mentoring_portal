@@ -413,101 +413,6 @@ function buildForcedAssignmentSeed(problem) {
   };
 }
 
-const KO_DAY_LABELS_BY_INDEX = ['일', '월', '화', '수', '목', '금', '토'];
-
-function pad2(value) {
-  return String(value).padStart(2, '0');
-}
-
-function buildSessionDateTimeLocal(monthValue, dayValue, timeValue) {
-  const month = Number(monthValue || 0);
-  const day = Number(dayValue || 0);
-  const timeMatch = String(timeValue || '').trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31 ||
-    !timeMatch
-  ) {
-    return '';
-  }
-
-  const hour = Number(timeMatch[1]);
-  const minute = Number(timeMatch[2]);
-  if (
-    !Number.isInteger(hour) ||
-    !Number.isInteger(minute) ||
-    hour < 0 ||
-    hour > 23 ||
-    minute < 0 ||
-    minute > 59
-  ) {
-    return '';
-  }
-
-  const year = new Date().getFullYear();
-  const date = new Date(year, month - 1, day);
-  if (
-    date.getFullYear() !== year ||
-    date.getMonth() !== month - 1 ||
-    date.getDate() !== day
-  ) {
-    return '';
-  }
-
-  return `${year}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:${pad2(minute)}`;
-}
-
-function parseSessionDateTimeLocal(value) {
-  const match = String(value || '').trim().match(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
-  );
-  if (!match) return null;
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    !Number.isInteger(hour) ||
-    !Number.isInteger(minute) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31 ||
-    hour < 0 ||
-    hour > 23 ||
-    minute < 0 ||
-    minute > 59
-  ) {
-    return null;
-  }
-
-  const date = new Date(year, month - 1, day);
-  if (
-    date.getFullYear() !== year ||
-    date.getMonth() !== month - 1 ||
-    date.getDate() !== day
-  ) {
-    return null;
-  }
-
-  return {
-    session_day_label: KO_DAY_LABELS_BY_INDEX[date.getDay()] || '',
-    session_month: String(month),
-    session_day: String(day),
-    session_start_time: `${pad2(hour)}:${pad2(minute)}`
-  };
-}
-
 const KO_TO_EN_DAY = {
   월: 'Mon',
   화: 'Tue',
@@ -1621,15 +1526,8 @@ export default function Mentoring() {
 
   function applyForcedWrongAnswerAssignment(problemIndex = wrongAnswerTargetProblemIndex) {
     const mentorName = String(forcedWrongAnswerAssignment?.mentor_name || '').trim();
-    const sessionMonth = String(forcedWrongAnswerAssignment?.session_month || '').trim();
-    const sessionDay = String(forcedWrongAnswerAssignment?.session_day || '').trim();
-    const sessionStart = String(forcedWrongAnswerAssignment?.session_start_time || '').trim();
     if (!mentorName) {
       setError('강제 배정 멘토 이름을 입력해 주세요.');
-      return;
-    }
-    if (!sessionMonth || !sessionDay || !sessionStart) {
-      setError('강제 배정 시 날짜/시간을 모두 입력해 주세요.');
       return;
     }
     const forcedCandidate = {
@@ -1642,9 +1540,9 @@ export default function Mentoring() {
     };
     assignWrongAnswerMentor(forcedCandidate, problemIndex, {
       session_day_label: String(forcedWrongAnswerAssignment?.session_day_label || '').trim(),
-      session_month: sessionMonth,
-      session_day: sessionDay,
-      session_start_time: sessionStart,
+      session_month: String(forcedWrongAnswerAssignment?.session_month || '').trim(),
+      session_day: String(forcedWrongAnswerAssignment?.session_day || '').trim(),
+      session_start_time: String(forcedWrongAnswerAssignment?.session_start_time || '').trim(),
       session_duration_minutes: Math.max(
         1,
         Math.min(240, Number(forcedWrongAnswerAssignment?.session_duration_minutes || 20) || 20)
@@ -2219,36 +2117,7 @@ export default function Mentoring() {
                         ) : (
                           <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
                         )}
-                        <div className="mt-1 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_160px] md:items-center">
-                          <div className="min-w-0">
-                            <div className="text-[11px] text-slate-600">일정 (캘린더 선택)</div>
-                            <input
-                              className="input mt-1 h-9"
-                              type="datetime-local"
-                              step={60}
-                              value={buildSessionDateTimeLocal(
-                                problemAssignment?.session_month,
-                                problemAssignment?.session_day,
-                                problemAssignment?.session_start_time
-                              )}
-                              onChange={(e) => {
-                                const value = String(e.target.value || '');
-                                if (!value) {
-                                  updateWrongAnswerAssignment(idx, {
-                                    session_day_label: '',
-                                    session_month: '',
-                                    session_day: '',
-                                    session_start_time: ''
-                                  });
-                                  return;
-                                }
-                                const parsed = parseSessionDateTimeLocal(value);
-                                if (!parsed) return;
-                                updateWrongAnswerAssignment(idx, parsed);
-                              }}
-                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                            />
-                          </div>
+                        <div className="mt-1 grid grid-cols-1 gap-2 md:grid-cols-[180px_minmax(0,1fr)] md:items-center">
                           <div className="md:self-center">
                             <div className="text-[11px] text-slate-600">진행 시간(분)</div>
                             <input
@@ -2269,20 +2138,20 @@ export default function Mentoring() {
                               disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
                             />
                           </div>
-                          <div className="text-[11px] text-slate-600 md:col-span-2">
-                            자동 반영: {problemAssignment?.session_day_label || '-'}요일 ·{' '}
-                            {problemAssignment?.session_month || '-'}월 {problemAssignment?.session_day || '-'}일 ·{' '}
-                            {problemAssignment?.session_start_time || '--:--'}
+                          <div className="text-[11px] text-slate-600">
+                            시작 시각 입력은 필수가 아닙니다. 오답 배분은 소요 시간 기준으로 저장됩니다.
                           </div>
                         </div>
                         {problemAssignment?.session_start_time ? (
                           <div className="mt-2 text-[11px] text-slate-600">
-                            범위: {makeSessionRangeText(
+                            등록된 시작 시각: {problemAssignment.session_start_time} · 범위: {makeSessionRangeText(
                               problemAssignment.session_start_time,
                               problemAssignment.session_duration_minutes
                             )}
                           </div>
-                        ) : null}
+                        ) : (
+                          <div className="mt-2 text-[11px] text-slate-500">시작 시각: 미지정</div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2412,7 +2281,7 @@ export default function Mentoring() {
                           <div className="mt-1 text-xs text-amber-800">
                             후보 리스트에 없어도 멘토 이름을 직접 입력해 오답 기록 {idx + 1}에 배정할 수 있습니다.
                           </div>
-                          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-6">
+                          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-4">
                             <div className="md:col-span-2">
                               <div className="text-[11px] text-amber-900">멘토 이름</div>
                               <input
@@ -2435,41 +2304,6 @@ export default function Mentoring() {
                                 <option value="admin">관리자</option>
                               </select>
                             </div>
-                            <div className="md:col-span-2">
-                              <div className="text-[11px] text-amber-900">일정 (캘린더 선택)</div>
-                              <input
-                                className="input mt-1 h-9"
-                                type="datetime-local"
-                                step={60}
-                                value={buildSessionDateTimeLocal(
-                                  forcedWrongAnswerAssignment.session_month,
-                                  forcedWrongAnswerAssignment.session_day,
-                                  forcedWrongAnswerAssignment.session_start_time
-                                )}
-                                onChange={(e) =>
-                                  setForcedWrongAnswerAssignment((prev) => {
-                                    const value = String(e.target.value || '');
-                                    if (!value) {
-                                      return {
-                                        ...prev,
-                                        session_day_label: '',
-                                        session_month: '',
-                                        session_day: '',
-                                        session_start_time: ''
-                                      };
-                                    }
-                                    const parsed = parseSessionDateTimeLocal(value);
-                                    if (!parsed) return prev;
-                                    return { ...prev, ...parsed };
-                                  })
-                                }
-                              />
-                              <div className="mt-1 text-[11px] text-amber-900">
-                                자동 반영: {forcedWrongAnswerAssignment.session_day_label || '-'}요일 ·{' '}
-                                {forcedWrongAnswerAssignment.session_month || '-'}월 {forcedWrongAnswerAssignment.session_day || '-'}일 ·{' '}
-                                {forcedWrongAnswerAssignment.session_start_time || '--:--'}
-                              </div>
-                            </div>
                             <div>
                               <div className="text-[11px] text-amber-900">진행 시간(분)</div>
                               <input
@@ -2484,6 +2318,9 @@ export default function Mentoring() {
                                   session_duration_minutes: Math.max(1, Math.min(240, Number(e.target.value || 20) || 20))
                                 }))}
                               />
+                            </div>
+                            <div className="md:col-span-2 text-[11px] text-amber-900">
+                              시작 시각 입력 없이 소요 시간만으로 강제 배정할 수 있습니다.
                             </div>
                           </div>
                           <div className="mt-2 flex justify-end">

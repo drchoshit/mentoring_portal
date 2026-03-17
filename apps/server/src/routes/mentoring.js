@@ -565,6 +565,88 @@ function dayOrderValue(day) {
   return DAY_ORDER_MAP.get(key) || 999;
 }
 
+function parseIsoDateValue(value) {
+  const raw = String(value || '').trim();
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+  const date = new Date(year, month - 1, day);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+}
+
+function isDateWithinWeek(week, date) {
+  const start = parseIsoDateValue(week?.start_date);
+  const end = parseIsoDateValue(week?.end_date);
+  if (!start || !end || !date) return false;
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const startOnly = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const endOnly = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  return target >= startOnly && target <= endOnly;
+}
+
+function resolveAssignmentTargetWeekId(weeks, assignment, fallbackWeek = null) {
+  const month = Number(assignment?.session_month || 0);
+  const day = Number(assignment?.session_day || 0);
+  const fallbackWeekId = Number(fallbackWeek?.id || 0) || 0;
+  if (
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return fallbackWeekId;
+  }
+
+  const years = [];
+  const addYear = (y) => {
+    const n = Number(y);
+    if (Number.isInteger(n) && !years.includes(n)) years.push(n);
+  };
+
+  addYear(parseIsoDateValue(fallbackWeek?.start_date)?.getFullYear());
+  addYear(parseIsoDateValue(fallbackWeek?.end_date)?.getFullYear());
+  addYear(new Date().getFullYear());
+
+  for (const year of years) {
+    const date = new Date(year, month - 1, day);
+    if (
+      Number.isNaN(date.getTime()) ||
+      date.getFullYear() !== year ||
+      date.getMonth() !== month - 1 ||
+      date.getDate() !== day
+    ) {
+      continue;
+    }
+    const matched = (Array.isArray(weeks) ? weeks : []).find((week) => isDateWithinWeek(week, date));
+    if (matched?.id) return Number(matched.id);
+  }
+
+  return fallbackWeekId;
+}
+
 function resolveSessionDayLabel(week, assignment) {
   const explicitDay = String(assignment?.session_day_label || '').trim();
   if (['월', '화', '수', '목', '금', '토', '일'].includes(explicitDay)) return explicitDay;
@@ -1052,26 +1134,32 @@ export default function mentoringRoutes(db) {
     const week_id = Number(req.query.weekId || 0);
     if (!week_id) return res.status(400).json({ error: 'Missing weekId' });
 
-    const week = db.prepare('SELECT id, label, start_date, end_date FROM weeks WHERE id=?').get(week_id);
+    const weeks = db
+      .prepare('SELECT id, label, start_date, end_date FROM weeks ORDER BY id')
+      .all();
+    const week = (weeks || []).find((item) => Number(item?.id || 0) === week_id) || null;
     if (!week?.id) return res.status(404).json({ error: 'Week not found' });
+    const weeksById = new Map((weeks || []).map((item) => [Number(item?.id || 0), item]));
 
     const rows = db
       .prepare(
-        `SELECT wr.id AS week_record_id, wr.student_id, wr.e_wrong_answer_distribution, s.external_id, s.name AS student_name
+        `SELECT wr.id AS week_record_id, wr.week_id AS source_week_id, wr.student_id, wr.e_wrong_answer_distribution, s.external_id, s.name AS student_name
          FROM week_records wr
          JOIN students s ON s.id = wr.student_id
-         WHERE wr.week_id = ?
+         WHERE wr.e_wrong_answer_distribution IS NOT NULL
          ORDER BY s.name`
       )
-      .all(week_id);
+      .all();
 
     const assignments = [];
     for (const row of rows) {
+      const sourceWeekId = Number(row?.source_week_id || 0) || 0;
+      const sourceWeek = weeksById.get(sourceWeekId) || null;
       const rawDist = safeJson(row.e_wrong_answer_distribution, {});
       const dist = mergeWrongAnswerDistributionWithImages(
         db,
         row.student_id,
-        week_id,
+        sourceWeekId || week_id,
         rawDist
       );
       const mergedProblems = Array.isArray(dist?.problems) ? dist.problems : [];
@@ -1086,6 +1174,9 @@ export default function mentoringRoutes(db) {
           explicitAssignment || (problemIndex === 0 ? topLevelAssignment : null)
         );
         if (!assignment?.mentor_name) continue;
+        const targetWeekId = resolveAssignmentTargetWeekId(weeks, assignment, sourceWeek || week);
+        if (targetWeekId !== week_id) continue;
+        const targetWeek = weeksById.get(targetWeekId) || week;
 
         const mentorName = String(assignment.mentor_name || '').trim();
         const mentorRole = String(assignment.mentor_role || '').trim();
@@ -1093,7 +1184,7 @@ export default function mentoringRoutes(db) {
         const duration = Math.max(5, Math.min(240, Number(assignment.session_duration_minutes || 20) || 20));
         const startMinutes = parseTimePart(startTime);
         const endTime = startMinutes == null ? '' : toHHMM(startMinutes + duration);
-        const dayLabel = resolveSessionDayLabel(week, assignment) || '-';
+        const dayLabel = resolveSessionDayLabel(targetWeek, assignment) || '-';
         const sessionDateLabel = assignment.session_month && assignment.session_day
           ? `${assignment.session_month}/${assignment.session_day}`
           : '-';
@@ -1450,6 +1541,87 @@ export default function mentoringRoutes(db) {
 
     writeAudit(db, { user_id: req.user.id, action: 'workflow', entity: 'share_with_parent_force', details: { student_id, week_id } });
     res.json({ ok: true, shared_with_parent: 1 });
+  });
+
+  router.post('/workflow/share-with-parent/force/bulk', (req, res) => {
+    try {
+      const { student_ids, week_id } = req.body || {};
+      const weekId = Number(week_id);
+      if (!weekId) return res.status(400).json({ error: 'Missing week_id' });
+      if (req.user.role !== 'director') {
+        return res.status(403).json({ error: 'Only director can bulk force share' });
+      }
+
+      const requested = Array.isArray(student_ids)
+        ? Array.from(
+            new Set(
+              student_ids
+                .map((v) => Number(v))
+                .filter((n) => Number.isInteger(n) && n > 0)
+            )
+          )
+        : [];
+      if (!requested.length) {
+        return res.status(400).json({ error: 'Missing student_ids' });
+      }
+
+      const week = db.prepare('SELECT id FROM weeks WHERE id=?').get(weekId);
+      if (!week?.id) return res.status(404).json({ error: 'Week not found' });
+
+      const actor = db
+        .prepare('SELECT id FROM users WHERE id=?')
+        .get(Number(req.user.id));
+      const actorId = actor?.id ? Number(actor.id) : null;
+
+      const findStudent = db.prepare('SELECT id FROM students WHERE id=?');
+      const markShared = db.prepare(
+        "UPDATE week_records SET shared_with_parent=1, shared_at=datetime('now'), updated_at=datetime('now'), updated_by=? WHERE student_id=? AND week_id=?"
+      );
+
+      const updated = [];
+      const skipped = [];
+      const tx = db.transaction(() => {
+        for (const studentId of requested) {
+          if (!findStudent.get(studentId)?.id) {
+            skipped.push({ student_id: studentId, reason: 'student_not_found' });
+            continue;
+          }
+          ensureWeekRecord(db, studentId, weekId);
+          const info = markShared.run(actorId, studentId, weekId);
+          if (info.changes) {
+            updated.push(studentId);
+          } else {
+            skipped.push({ student_id: studentId, reason: 'not_updated' });
+          }
+        }
+      });
+      tx();
+
+      writeAudit(db, {
+        user_id: req.user.id,
+        action: 'workflow',
+        entity: 'share_with_parent_force_bulk',
+        details: {
+          week_id: weekId,
+          requested_count: requested.length,
+          updated_count: updated.length,
+          skipped_count: skipped.length,
+          student_ids: requested
+        }
+      });
+
+      return res.json({
+        ok: true,
+        week_id: weekId,
+        requested_count: requested.length,
+        updated_count: updated.length,
+        skipped_count: skipped.length,
+        updated,
+        skipped
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e?.message || 'Bulk force share failed' });
+    }
   });
 
   router.post('/workflow/share-with-parent/bulk', (req, res) => {
