@@ -626,7 +626,7 @@ export default function AssignmentStatus() {
           {weekLabel ? `기준 회차: ${weekLabel}` : '회차를 선택해 주세요.'}
         </div>
         {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
-        {mentorDaySummaryRows.length ? (
+        {isDirector && mentorDaySummaryRows.length ? (
           <div className="mt-4 rounded-xl border border-slate-200 bg-white/80 p-3">
             <div className="text-sm font-semibold text-slate-800">멘토별 요일 배정 질문 수</div>
             <div className="mt-2 overflow-x-auto">

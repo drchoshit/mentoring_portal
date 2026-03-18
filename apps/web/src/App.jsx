@@ -70,7 +70,7 @@ export default function App() {
       <Route
         path="/assignment-status"
         element={
-          <Guard roles={['director']}>
+          <Guard roles={['director','lead','mentor','admin']}>
             <Shell><AssignmentStatus /></Shell>
           </Guard>
         }
