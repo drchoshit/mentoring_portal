@@ -397,6 +397,40 @@ function normalizeWrongAnswerDraftWithSummary(value) {
   };
 }
 
+function mergeWrongAnswerDraftKeepingLocalInputs(localValue, remoteValue) {
+  const local = normalizeWrongAnswerDraftWithSummary(localValue);
+  const remote = normalizeWrongAnswerDraftWithSummary(remoteValue);
+  const localProblems = Array.isArray(local.problems) ? local.problems : [];
+  const remoteProblems = Array.isArray(remote.problems) ? remote.problems : [];
+  const maxLen = Math.max(localProblems.length, remoteProblems.length, 1);
+
+  const mergedProblems = Array.from({ length: maxLen }, (_, idx) => {
+    const hasLocal = idx < localProblems.length;
+    const hasRemote = idx < remoteProblems.length;
+    const localItem = normalizeWrongAnswerItem(localProblems[idx] || {});
+    const remoteItem = normalizeWrongAnswerItem(remoteProblems[idx] || {});
+
+    if (!hasLocal && hasRemote) return remoteItem;
+    if (!hasLocal) return { ...DEFAULT_WRONG_ANSWER_ITEM };
+
+    return {
+      ...localItem,
+      // 이미지 목록만 서버 최신값으로 동기화해서, 입력 중 텍스트/배정 정보는 유지
+      images: hasRemote ? remoteItem.images : localItem.images
+    };
+  });
+
+  return {
+    ...local,
+    searched_at: local.searched_at || remote.searched_at || '',
+    problems: mergedProblems,
+    assignment: pickSummaryAssignmentFromProblems(
+      mergedProblems,
+      local.assignment || remote.assignment || null
+    )
+  };
+}
+
 function buildForcedAssignmentSeed(problem) {
   const assignment = normalizeWrongAnswerAssignment(problem?.assignment || null);
   return {
@@ -1428,6 +1462,26 @@ export default function Mentoring() {
         uploadUrl: '',
         problemIndex
       });
+    }
+  }
+
+  async function refreshWrongAnswerUploadedImages() {
+    if (!studentId || !weekId) return;
+    setBusy(true);
+    try {
+      const latest = await api(
+        `/api/mentoring/record?studentId=${encodeURIComponent(studentId)}&weekId=${encodeURIComponent(weekId)}`
+      );
+      const latestWrongAnswer = normalizeWrongAnswerDraftWithSummary(
+        safeJson(latest?.week_record?.e_wrong_answer_distribution, {})
+      );
+      setWrongAnswerDistributionDraft((prev) =>
+        mergeWrongAnswerDraftKeepingLocalInputs(prev, latestWrongAnswer)
+      );
+    } catch (e) {
+      setError(e?.message || '업로드 반영 새로고침에 실패했습니다.');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -2782,7 +2836,7 @@ export default function Mentoring() {
           uploadUrl={wrongAnswerUploadModal.uploadUrl}
           problemIndex={wrongAnswerUploadModal.problemIndex}
           onClose={closeWrongAnswerUploadModal}
-          onRefresh={loadAll}
+          onRefresh={refreshWrongAnswerUploadedImages}
         />
       ) : null}
 
@@ -2801,6 +2855,7 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
   const qrImageUrl = uploadUrl
     ? `https://api.qrserver.com/v1/create-qr-code/?size=420x420&data=${encodeURIComponent(uploadUrl)}`
     : '';
+  const [refreshing, setRefreshing] = useState(false);
 
   async function copyUploadUrl() {
     if (!uploadUrl) return;
@@ -2811,6 +2866,16 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
       }
     } catch {
       window.alert('링크 복사에 실패했습니다.');
+    }
+  }
+
+  async function refreshUploadedImages() {
+    if (typeof onRefresh !== 'function' || refreshing) return;
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -2851,8 +2916,13 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
                 <button className="btn-ghost" type="button" onClick={copyUploadUrl}>
                   링크 복사
                 </button>
-                <button className="btn-primary" type="button" onClick={onRefresh}>
-                  업로드 반영 새로고침
+                <button
+                  className="btn-primary"
+                  type="button"
+                  disabled={loading || refreshing}
+                  onClick={() => void refreshUploadedImages()}
+                >
+                  {refreshing ? '반영 중...' : '업로드 반영 새로고침'}
                 </button>
               </div>
             </div>

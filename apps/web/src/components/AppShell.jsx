@@ -37,7 +37,9 @@ export default function AppShell({ children }) {
   if (role !== 'parent') {
     menu.push({ to: '/', label: '피드' });
     menu.push({ to: '/students', label: '학생' });
-    menu.push({ to: '/assignment-status', label: '질답 배정현황' });
+    if (role === 'director') {
+      menu.push({ to: '/assignment-status', label: '질답 배정현황' });
+    }
     if (['director', 'lead', 'admin'].includes(role)) {
       menu.push({ to: '/lead-assignment-board', label: '총괄멘토 배정표' });
     }
