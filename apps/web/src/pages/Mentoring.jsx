@@ -12,6 +12,8 @@ import { useAuth } from '../auth/AuthProvider.jsx';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_LABELS = { Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금', Sat: '토', Sun: '일' };
+const KO_WEEK_DAYS = ['월', '화', '수', '목', '금', '토', '일'];
+const JS_DAY_TO_KO = ['일', '월', '화', '수', '목', '금', '토'];
 
 const ROLE_KO = {
   director: '원장',
@@ -155,8 +157,65 @@ function fmtWeekLabel(week) {
   const start = parseDateOnly(week.start_date);
   const end = parseDateOnly(week.end_date);
   const label = toRoundLabel(week.label);
-  if (start && end) return `${label} (${fmtMD(start)}~${fmtMD(end)})`;
+  if (start && end) return `${label} (${fmtMD(start)} ~ ${fmtMD(end)})`;
   return label || '';
+}
+
+function resolveWeekBaseYear(week) {
+  const start = parseDateOnly(week?.start_date);
+  if (start) return start.getFullYear();
+  const end = parseDateOnly(week?.end_date);
+  if (end) return end.getFullYear();
+  return new Date().getFullYear();
+}
+
+function toPadded2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function buildDateInputValue(month, day, fallbackYear = new Date().getFullYear()) {
+  const m = Number(month);
+  const d = Number(day);
+  if (!Number.isInteger(m) || !Number.isInteger(d)) return '';
+  if (m < 1 || m > 12 || d < 1 || d > 31) return '';
+  const year = Number(fallbackYear);
+  if (!Number.isInteger(year) || year < 1000) return '';
+  const date = new Date(year, m - 1, d);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== m - 1 ||
+    date.getDate() !== d
+  ) {
+    return '';
+  }
+  return `${year}-${toPadded2(m)}-${toPadded2(d)}`;
+}
+
+function parseDateInputValue(value) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const date = new Date(year, month - 1, day);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return {
+    year,
+    month,
+    day,
+    dayLabel: JS_DAY_TO_KO[date.getDay()] || ''
+  };
 }
 
 function normalizeLastHwTask(raw) {
@@ -1109,6 +1168,10 @@ export default function Mentoring() {
   const schedule = useMemo(() => safeJson(rec?.student?.schedule_json, {}), [rec]);
   const mentorInfo = useMemo(() => normalizeMentorInfo(rec?.mentor_info), [rec?.mentor_info]);
   const scheduleWeekStart = schedule?.week_start || rec?.week?.start_date || '';
+  const weekBaseYear = useMemo(
+    () => resolveWeekBaseYear(rec?.week),
+    [rec?.week?.start_date, rec?.week?.end_date]
+  );
   const currentWeekRound = useMemo(() => getWeekRound(rec?.week), [rec?.week?.id, rec?.week?.label]);
   const showClinicSection = currentWeekRound >= 5 && mentorMode;
   const useNewDailyTaskLayout = useMemo(() => {
@@ -2027,6 +2090,16 @@ export default function Mentoring() {
                 const problemAssignment = normalizeWrongAnswerAssignment(
                   item?.assignment || (idx === 0 ? wrongAnswerDistributionDraft?.assignment : null)
                 );
+                const problemDateInputValue = buildDateInputValue(
+                  problemAssignment?.session_month,
+                  problemAssignment?.session_day,
+                  weekBaseYear
+                );
+                const forcedDateInputValue = buildDateInputValue(
+                  forcedWrongAnswerAssignment?.session_month,
+                  forcedWrongAnswerAssignment?.session_day,
+                  weekBaseYear
+                );
                 const tone = wrongAnswerToneByIndex(idx);
                 const isTargetProblem = Number(wrongAnswerTargetProblemIndex || 0) === idx;
                 const isCollapsed = Boolean(collapsedWrongAnswerProblems?.[idx]);
@@ -2171,8 +2244,67 @@ export default function Mentoring() {
                         ) : (
                           <div className="mt-1 text-xs text-slate-600">멘토를 먼저 배정해 주세요.</div>
                         )}
-                        <div className="mt-1 grid grid-cols-1 gap-2 md:grid-cols-[180px_minmax(0,1fr)] md:items-center">
-                          <div className="md:self-center">
+                        <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-4">
+                          <div>
+                            <div className="text-[11px] text-slate-600">배정 날짜</div>
+                            <input
+                              className="input mt-1 h-9"
+                              type="date"
+                              value={problemDateInputValue}
+                              onChange={(e) => {
+                                const nextDate = String(e.target.value || '').trim();
+                                if (!nextDate) {
+                                  updateWrongAnswerAssignment(idx, {
+                                    session_month: '',
+                                    session_day: '',
+                                    session_day_label: ''
+                                  });
+                                  return;
+                                }
+                                const parsed = parseDateInputValue(nextDate);
+                                if (!parsed) return;
+                                updateWrongAnswerAssignment(idx, {
+                                  session_month: String(parsed.month),
+                                  session_day: String(parsed.day),
+                                  session_day_label: parsed.dayLabel || ''
+                                });
+                              }}
+                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-slate-600">시작 시각(선택)</div>
+                            <input
+                              className="input mt-1 h-9"
+                              type="time"
+                              value={problemAssignment?.session_start_time || ''}
+                              onChange={(e) =>
+                                updateWrongAnswerAssignment(idx, {
+                                  session_start_time: String(e.target.value || '').trim()
+                                })
+                              }
+                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-slate-600">요일(수동)</div>
+                            <select
+                              className="input mt-1 h-9"
+                              value={problemAssignment?.session_day_label || ''}
+                              onChange={(e) =>
+                                updateWrongAnswerAssignment(idx, {
+                                  session_day_label: String(e.target.value || '').trim()
+                                })
+                              }
+                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                            >
+                              <option value="">선택</option>
+                              {KO_WEEK_DAYS.map((day) => (
+                                <option key={`wrong-answer-day-${idx}-${day}`} value={day}>{day}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
                             <div className="text-[11px] text-slate-600">진행 시간(분)</div>
                             <input
                               className="input mt-1 h-9"
@@ -2192,9 +2324,12 @@ export default function Mentoring() {
                               disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
                             />
                           </div>
-                          <div className="text-[11px] text-slate-600">
-                            시작 시각 입력은 필수가 아닙니다. 오답 배분은 소요 시간 기준으로 저장됩니다.
-                          </div>
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-600">
+                          자동 반영: {problemAssignment?.session_day_label || '-'}요일 · {problemAssignment?.session_month || '-'}월 {problemAssignment?.session_day || '-'}일 · {problemAssignment?.session_start_time || '--:--'}
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-600">
+                          시작 시각 입력은 필수가 아닙니다. 날짜만 배정해도 해당 회차에 반영됩니다.
                         </div>
                         {problemAssignment?.session_start_time ? (
                           <div className="mt-2 text-[11px] text-slate-600">
@@ -2335,7 +2470,7 @@ export default function Mentoring() {
                           <div className="mt-1 text-xs text-amber-800">
                             후보 리스트에 없어도 멘토 이름을 직접 입력해 오답 기록 {idx + 1}에 배정할 수 있습니다.
                           </div>
-                          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-4">
+                          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
                             <div className="md:col-span-2">
                               <div className="text-[11px] text-amber-900">멘토 이름</div>
                               <input
@@ -2373,9 +2508,68 @@ export default function Mentoring() {
                                 }))}
                               />
                             </div>
-                            <div className="md:col-span-2 text-[11px] text-amber-900">
-                              시작 시각 입력 없이 소요 시간만으로 강제 배정할 수 있습니다.
+                            <div>
+                              <div className="text-[11px] text-amber-900">배정 날짜</div>
+                              <input
+                                className="input mt-1 h-9"
+                                type="date"
+                                value={forcedDateInputValue}
+                                onChange={(e) => {
+                                  const nextDate = String(e.target.value || '').trim();
+                                  if (!nextDate) {
+                                    setForcedWrongAnswerAssignment((prev) => ({
+                                      ...prev,
+                                      session_month: '',
+                                      session_day: '',
+                                      session_day_label: ''
+                                    }));
+                                    return;
+                                  }
+                                  const parsed = parseDateInputValue(nextDate);
+                                  if (!parsed) return;
+                                  setForcedWrongAnswerAssignment((prev) => ({
+                                    ...prev,
+                                    session_month: String(parsed.month),
+                                    session_day: String(parsed.day),
+                                    session_day_label: parsed.dayLabel || ''
+                                  }));
+                                }}
+                              />
                             </div>
+                            <div>
+                              <div className="text-[11px] text-amber-900">시작 시각(선택)</div>
+                              <input
+                                className="input mt-1 h-9"
+                                type="time"
+                                value={forcedWrongAnswerAssignment.session_start_time || ''}
+                                onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
+                                  ...prev,
+                                  session_start_time: String(e.target.value || '').trim()
+                                }))}
+                              />
+                            </div>
+                            <div>
+                              <div className="text-[11px] text-amber-900">요일(수동)</div>
+                              <select
+                                className="input mt-1 h-9"
+                                value={forcedWrongAnswerAssignment.session_day_label || ''}
+                                onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
+                                  ...prev,
+                                  session_day_label: String(e.target.value || '').trim()
+                                }))}
+                              >
+                                <option value="">선택</option>
+                                {KO_WEEK_DAYS.map((day) => (
+                                  <option key={`forced-day-${idx}-${day}`} value={day}>{day}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                          <div className="mt-1 text-[11px] text-amber-900">
+                            자동 반영: {forcedWrongAnswerAssignment.session_day_label || '-'}요일 · {forcedWrongAnswerAssignment.session_month || '-'}월 {forcedWrongAnswerAssignment.session_day || '-'}일 · {forcedWrongAnswerAssignment.session_start_time || '--:--'}
+                          </div>
+                          <div className="mt-1 text-[11px] text-amber-900">
+                            시작 시각 입력 없이 날짜/소요 시간만으로 강제 배정할 수 있습니다.
                           </div>
                           <div className="mt-2 flex justify-end">
                             <button className="btn-primary" type="button" onClick={() => applyForcedWrongAnswerAssignment(idx)}>

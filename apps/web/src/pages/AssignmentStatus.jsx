@@ -18,6 +18,50 @@ function toRoundLabel(label) {
   return String(label || '').replace(/주차/g, '회차');
 }
 
+function parseDateOnly(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+  const date = new Date(year, month - 1, day);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+}
+
+function fmtMD(date) {
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function fmtWeekLabel(week) {
+  if (!week) return '';
+  const label = toRoundLabel(week.label);
+  const start = parseDateOnly(week.start_date);
+  const end = parseDateOnly(week.end_date);
+  if (start && end) return `${label} (${fmtMD(start)} ~ ${fmtMD(end)})`;
+  return label || '';
+}
+
 function fmtDateTime(value) {
   if (!value) return '-';
   return String(value).replace('T', ' ').slice(0, 16);
@@ -463,7 +507,7 @@ export default function AssignmentStatus() {
   }, [grouped]);
   const weekLabel = useMemo(() => {
     const found = (weeks || []).find((w) => String(w.id) === String(weekId));
-    return found ? toRoundLabel(found.label) : '';
+    return found ? fmtWeekLabel(found) : '';
   }, [weeks, weekId]);
   const summaryDayColumns = useMemo(() => DAY_ORDER.filter((day) => day !== '-'), []);
   const mentorDaySummaryRows = useMemo(() => {
@@ -613,7 +657,7 @@ export default function AssignmentStatus() {
             >
               {(weeks || []).map((w) => (
                 <option key={w.id} value={w.id}>
-                  {toRoundLabel(w.label)}
+                  {fmtWeekLabel(w)}
                 </option>
               ))}
             </select>
