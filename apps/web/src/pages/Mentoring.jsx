@@ -483,10 +483,7 @@ function mergeWrongAnswerDraftKeepingLocalInputs(localValue, remoteValue) {
     ...local,
     searched_at: local.searched_at || remote.searched_at || '',
     problems: mergedProblems,
-    assignment: pickSummaryAssignmentFromProblems(
-      mergedProblems,
-      local.assignment || remote.assignment || null
-    )
+    assignment: pickSummaryAssignmentFromProblems(mergedProblems, null)
   };
 }
 
@@ -1341,7 +1338,7 @@ export default function Mentoring() {
       return {
         ...base,
         problems: list,
-        assignment: pickSummaryAssignmentFromProblems(list, base.assignment || null)
+        assignment: pickSummaryAssignmentFromProblems(list, null)
       };
     });
   }
@@ -1360,8 +1357,8 @@ export default function Mentoring() {
     setWrongAnswerDistributionDraft((prev) => {
       const base = normalizeWrongAnswerDraftWithSummary(prev);
       const next = (base.problems || []).filter((_, idx) => idx !== index);
-      const nextProblems = next.length ? next : [{ ...DEFAULT_WRONG_ANSWER_ITEM, assignment: base.assignment || null }];
-      const summaryAssignment = pickSummaryAssignmentFromProblems(nextProblems, base.assignment || null);
+      const nextProblems = next.length ? next : [{ ...DEFAULT_WRONG_ANSWER_ITEM, assignment: null }];
+      const summaryAssignment = pickSummaryAssignmentFromProblems(nextProblems, null);
       return {
         ...base,
         problems: nextProblems,
@@ -1417,7 +1414,7 @@ export default function Mentoring() {
       return {
         ...base,
         problems: list,
-        assignment: pickSummaryAssignmentFromProblems(list, base.assignment || null)
+        assignment: pickSummaryAssignmentFromProblems(list, null)
       };
     });
   }
@@ -1441,7 +1438,10 @@ export default function Mentoring() {
         }
       });
       if (result?.e_wrong_answer_distribution) {
-        setWrongAnswerDistributionDraft(normalizeWrongAnswerDraftWithSummary(result.e_wrong_answer_distribution));
+        const latestWrongAnswer = normalizeWrongAnswerDraftWithSummary(result.e_wrong_answer_distribution);
+        setWrongAnswerDistributionDraft((prev) =>
+          mergeWrongAnswerDraftKeepingLocalInputs(prev, latestWrongAnswer)
+        );
       } else {
         removeWrongAnswerImageLocal(problemIndex, targetImage, imageIndex);
       }
@@ -1599,7 +1599,7 @@ export default function Mentoring() {
         assignment: nextAssignment
       };
 
-      const summaryAssignment = pickSummaryAssignmentFromProblems(list, base.assignment || null);
+      const summaryAssignment = pickSummaryAssignmentFromProblems(list, null);
       return {
         ...base,
         problems: list,
@@ -1632,7 +1632,7 @@ export default function Mentoring() {
         ...currentItem,
         assignment: nextAssignment
       };
-      const summaryAssignment = pickSummaryAssignmentFromProblems(list, base.assignment || null);
+      const summaryAssignment = pickSummaryAssignmentFromProblems(list, null);
       return {
         ...base,
         problems: list,
@@ -2095,6 +2095,11 @@ export default function Mentoring() {
                   problemAssignment?.session_day,
                   weekBaseYear
                 );
+                const problemSessionStartTime = String(problemAssignment?.session_start_time || '').trim();
+                const problemSessionRangeText = makeSessionRangeText(
+                  problemSessionStartTime,
+                  problemAssignment?.session_duration_minutes
+                );
                 const forcedDateInputValue = buildDateInputValue(
                   forcedWrongAnswerAssignment?.session_month,
                   forcedWrongAnswerAssignment?.session_day,
@@ -2128,7 +2133,7 @@ export default function Mentoring() {
                           멘토 배정하기
                         </button>
                         <button
-                          className="btn-ghost border-emerald-200 text-emerald-700 hover:border-emerald-300 hover:text-emerald-800"
+                          className="btn border border-blue-700 bg-blue-600 text-white hover:border-blue-800 hover:bg-blue-700"
                           type="button"
                           disabled={busy}
                           onClick={() => submitWrongAnswerProblem(idx)}
@@ -2274,35 +2279,67 @@ export default function Mentoring() {
                           </div>
                           <div>
                             <div className="text-[11px] text-slate-600">시작 시각(선택)</div>
-                            <input
-                              className="input mt-1 h-9"
-                              type="time"
-                              value={problemAssignment?.session_start_time || ''}
-                              onChange={(e) =>
-                                updateWrongAnswerAssignment(idx, {
-                                  session_start_time: String(e.target.value || '').trim()
-                                })
-                              }
-                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                            />
+                            <div className="mt-1 space-y-1.5">
+                              <input
+                                className="input h-9 w-full"
+                                type="time"
+                                value={problemAssignment?.session_start_time || ''}
+                                onChange={(e) =>
+                                  updateWrongAnswerAssignment(idx, {
+                                    session_start_time: String(e.target.value || '').trim()
+                                  })
+                                }
+                                disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                              />
+                              <div className="flex justify-end">
+                                <button
+                                  className="btn-ghost h-8 px-2 text-[11px]"
+                                  type="button"
+                                  onClick={() =>
+                                    updateWrongAnswerAssignment(idx, {
+                                      session_start_time: ''
+                                    })
+                                  }
+                                  disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                                >
+                                  미선택
+                                </button>
+                              </div>
+                            </div>
                           </div>
                           <div>
                             <div className="text-[11px] text-slate-600">요일(수동)</div>
-                            <select
-                              className="input mt-1 h-9"
-                              value={problemAssignment?.session_day_label || ''}
-                              onChange={(e) =>
-                                updateWrongAnswerAssignment(idx, {
-                                  session_day_label: String(e.target.value || '').trim()
-                                })
-                              }
-                              disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
-                            >
-                              <option value="">선택</option>
-                              {KO_WEEK_DAYS.map((day) => (
-                                <option key={`wrong-answer-day-${idx}-${day}`} value={day}>{day}</option>
-                              ))}
-                            </select>
+                            <div className="mt-1 space-y-1.5">
+                              <select
+                                className="input h-9 w-full"
+                                value={problemAssignment?.session_day_label || ''}
+                                onChange={(e) =>
+                                  updateWrongAnswerAssignment(idx, {
+                                    session_day_label: String(e.target.value || '').trim()
+                                  })
+                                }
+                                disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                              >
+                                <option value="">선택</option>
+                                {KO_WEEK_DAYS.map((day) => (
+                                  <option key={`wrong-answer-day-${idx}-${day}`} value={day}>{day}</option>
+                                ))}
+                              </select>
+                              <div className="flex justify-end">
+                                <button
+                                  className="btn-ghost h-8 px-2 text-[11px]"
+                                  type="button"
+                                  onClick={() =>
+                                    updateWrongAnswerAssignment(idx, {
+                                      session_day_label: ''
+                                    })
+                                  }
+                                  disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
+                                >
+                                  미선택
+                                </button>
+                              </div>
+                            </div>
                           </div>
                           <div>
                             <div className="text-[11px] text-slate-600">진행 시간(분)</div>
@@ -2326,21 +2363,15 @@ export default function Mentoring() {
                           </div>
                         </div>
                         <div className="mt-1 text-[11px] text-slate-600">
-                          자동 반영: {problemAssignment?.session_day_label || '-'}요일 · {problemAssignment?.session_month || '-'}월 {problemAssignment?.session_day || '-'}일 · {problemAssignment?.session_start_time || '--:--'}
+                          자동 반영: {problemAssignment?.session_day_label || '-'}요일 · {problemAssignment?.session_month || '-'}월 {problemAssignment?.session_day || '-'}일 · {problemSessionStartTime || '--:--'}
                         </div>
                         <div className="mt-1 text-[11px] text-slate-600">
                           시작 시각 입력은 필수가 아닙니다. 날짜만 배정해도 해당 회차에 반영됩니다.
                         </div>
-                        {problemAssignment?.session_start_time ? (
-                          <div className="mt-2 text-[11px] text-slate-600">
-                            등록된 시작 시각: {problemAssignment.session_start_time} · 범위: {makeSessionRangeText(
-                              problemAssignment.session_start_time,
-                              problemAssignment.session_duration_minutes
-                            )}
-                          </div>
-                        ) : (
-                          <div className="mt-2 text-[11px] text-slate-500">시작 시각: 미지정</div>
-                        )}
+                        <div className={`mt-2 text-[11px] ${problemSessionRangeText ? 'text-slate-600' : 'text-slate-500'}`}>
+                          등록된 시작 시각: {problemSessionStartTime || '--:--'}
+                          {problemSessionRangeText ? ` · 범위: ${problemSessionRangeText}` : ''}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2538,31 +2569,59 @@ export default function Mentoring() {
                             </div>
                             <div>
                               <div className="text-[11px] text-amber-900">시작 시각(선택)</div>
-                              <input
-                                className="input mt-1 h-9"
-                                type="time"
-                                value={forcedWrongAnswerAssignment.session_start_time || ''}
-                                onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
-                                  ...prev,
-                                  session_start_time: String(e.target.value || '').trim()
-                                }))}
-                              />
+                              <div className="mt-1 space-y-1.5">
+                                <input
+                                  className="input h-9 w-full"
+                                  type="time"
+                                  value={forcedWrongAnswerAssignment.session_start_time || ''}
+                                  onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
+                                    ...prev,
+                                    session_start_time: String(e.target.value || '').trim()
+                                  }))}
+                                />
+                                <div className="flex justify-end">
+                                  <button
+                                    className="btn-ghost h-8 px-2 text-[11px]"
+                                    type="button"
+                                    onClick={() => setForcedWrongAnswerAssignment((prev) => ({
+                                      ...prev,
+                                      session_start_time: ''
+                                    }))}
+                                  >
+                                    미선택
+                                  </button>
+                                </div>
+                              </div>
                             </div>
                             <div>
                               <div className="text-[11px] text-amber-900">요일(수동)</div>
-                              <select
-                                className="input mt-1 h-9"
-                                value={forcedWrongAnswerAssignment.session_day_label || ''}
-                                onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
-                                  ...prev,
-                                  session_day_label: String(e.target.value || '').trim()
-                                }))}
-                              >
-                                <option value="">선택</option>
-                                {KO_WEEK_DAYS.map((day) => (
-                                  <option key={`forced-day-${idx}-${day}`} value={day}>{day}</option>
-                                ))}
-                              </select>
+                              <div className="mt-1 space-y-1.5">
+                                <select
+                                  className="input h-9 w-full"
+                                  value={forcedWrongAnswerAssignment.session_day_label || ''}
+                                  onChange={(e) => setForcedWrongAnswerAssignment((prev) => ({
+                                    ...prev,
+                                    session_day_label: String(e.target.value || '').trim()
+                                  }))}
+                                >
+                                  <option value="">선택</option>
+                                  {KO_WEEK_DAYS.map((day) => (
+                                    <option key={`forced-day-${idx}-${day}`} value={day}>{day}</option>
+                                  ))}
+                                </select>
+                                <div className="flex justify-end">
+                                  <button
+                                    className="btn-ghost h-8 px-2 text-[11px]"
+                                    type="button"
+                                    onClick={() => setForcedWrongAnswerAssignment((prev) => ({
+                                      ...prev,
+                                      session_day_label: ''
+                                    }))}
+                                  >
+                                    미선택
+                                  </button>
+                                </div>
+                              </div>
                             </div>
                           </div>
                           <div className="mt-1 text-[11px] text-amber-900">

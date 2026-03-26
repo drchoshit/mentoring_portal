@@ -1382,7 +1382,9 @@ export default function mentoringRoutes(db) {
   });
 
   router.put('/assignment-status/:weekRecordId', (req, res) => {
-    if (req.user.role !== 'director') return res.status(403).json({ error: 'Only director can update assignment status' });
+    if (!['director', 'lead'].includes(String(req.user.role || '').trim())) {
+      return res.status(403).json({ error: 'Only director/lead can update assignment status' });
+    }
 
     const weekRecordId = Number(req.params.weekRecordId || 0);
     if (!weekRecordId) return res.status(400).json({ error: 'Invalid weekRecordId' });
