@@ -180,7 +180,89 @@ function toHHMM(totalMinutes) {
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
-function resolveSessionDayLabel(assignment) {
+function parseIsoDateValue(value) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+  const date = new Date(year, month - 1, day);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+}
+
+function isDateWithinWeek(week, date) {
+  const start = parseIsoDateValue(week?.start_date);
+  const end = parseIsoDateValue(week?.end_date);
+  if (!start || !end || !date) return false;
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const startOnly = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const endOnly = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  return target >= startOnly && target <= endOnly;
+}
+
+function resolveAssignmentTargetWeekId(weeks, assignment, fallbackWeek = null) {
+  const month = Number(assignment?.session_month || 0);
+  const day = Number(assignment?.session_day || 0);
+  const fallbackWeekId = Number(fallbackWeek?.id || 0) || 0;
+  if (
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return fallbackWeekId;
+  }
+
+  const years = [];
+  const addYear = (value) => {
+    const year = Number(value);
+    if (Number.isInteger(year) && !years.includes(year)) years.push(year);
+  };
+
+  addYear(parseIsoDateValue(fallbackWeek?.start_date)?.getFullYear());
+  addYear(parseIsoDateValue(fallbackWeek?.end_date)?.getFullYear());
+  addYear(new Date().getFullYear());
+
+  for (const year of years) {
+    const date = new Date(year, month - 1, day);
+    if (
+      Number.isNaN(date.getTime()) ||
+      date.getFullYear() !== year ||
+      date.getMonth() !== month - 1 ||
+      date.getDate() !== day
+    ) {
+      continue;
+    }
+    const matchedWeek = (Array.isArray(weeks) ? weeks : []).find((week) => isDateWithinWeek(week, date));
+    if (matchedWeek?.id) return Number(matchedWeek.id);
+  }
+
+  return fallbackWeekId;
+}
+
+function resolveSessionDayLabel(week, assignment) {
   const explicitDay = normalizeDayLabel(assignment?.session_day_label);
   if (explicitDay) return explicitDay;
 
@@ -188,8 +270,17 @@ function resolveSessionDayLabel(assignment) {
   const day = Number(assignment?.session_day || 0);
   if (!Number.isInteger(month) || !Number.isInteger(day)) return '-';
   if (month < 1 || month > 12 || day < 1 || day > 31) return '-';
-  const now = new Date();
-  const date = new Date(now.getFullYear(), month - 1, day);
+  const years = [];
+  const addYear = (value) => {
+    const year = Number(value);
+    if (Number.isInteger(year) && !years.includes(year)) years.push(year);
+  };
+  addYear(parseIsoDateValue(week?.start_date)?.getFullYear());
+  addYear(parseIsoDateValue(week?.end_date)?.getFullYear());
+  addYear(new Date().getFullYear());
+  const year = years[0];
+  if (!year) return '-';
+  const date = new Date(year, month - 1, day);
   if (date.getMonth() !== month - 1 || date.getDate() !== day) return '-';
   return KO_DAY[date.getDay()] || '-';
 }
@@ -338,24 +429,32 @@ function assignmentSortValue(item) {
 }
 
 function collectMentorBriefingItems(db, { weekId, mentorKey, baseUrl }) {
+  const weeks = db
+    .prepare('SELECT id, label, start_date, end_date FROM weeks ORDER BY id')
+    .all();
+  const weekById = new Map((weeks || []).map((item) => [Number(item?.id || 0), item]));
+  const targetWeek = weekById.get(Number(weekId || 0)) || null;
+
   const rows = db
     .prepare(
       `
-      SELECT wr.id AS week_record_id, wr.student_id, wr.e_wrong_answer_distribution, s.external_id, s.name AS student_name
+      SELECT wr.id AS week_record_id, wr.week_id AS source_week_id, wr.student_id, wr.e_wrong_answer_distribution, s.external_id, s.name AS student_name
       FROM week_records wr
       JOIN students s ON s.id = wr.student_id
-      WHERE wr.week_id=?
+      WHERE wr.e_wrong_answer_distribution IS NOT NULL
       ORDER BY s.name
       `
     )
-    .all(weekId);
+    .all();
 
   const items = [];
   for (const row of rows) {
+    const sourceWeekId = Number(row?.source_week_id || 0) || 0;
+    const sourceWeek = weekById.get(sourceWeekId) || targetWeek;
     const distribution = safeJson(row.e_wrong_answer_distribution, {});
     const problems = Array.isArray(distribution?.problems) ? distribution.problems : [];
     const topAssignment = normalizeAssignment(distribution?.assignment || null);
-    const tableImagesByProblem = listWrongAnswerImagesByProblem(db, row.student_id, weekId, baseUrl);
+    const tableImagesByProblem = listWrongAnswerImagesByProblem(db, row.student_id, sourceWeekId || weekId, baseUrl);
     const maxProblemIndex = Math.max(
       problems.length - 1,
       ...Array.from(tableImagesByProblem.keys(), (v) => Number(v || 0))
@@ -370,6 +469,8 @@ function collectMentorBriefingItems(db, { weekId, mentorKey, baseUrl }) {
       const assignment = normalizeAssignment(rawProblem?.assignment || (index === 0 ? topAssignment : null));
       if (!assignment?.mentor_name) continue;
       if (normalizeMentorKey(assignment.mentor_name) !== mentorKey) continue;
+      const targetWeekId = resolveAssignmentTargetWeekId(weeks, assignment, sourceWeek || targetWeek);
+      if (targetWeekId !== Number(weekId || 0)) continue;
 
       const duration = Math.max(
         5,
@@ -377,7 +478,8 @@ function collectMentorBriefingItems(db, { weekId, mentorKey, baseUrl }) {
       );
       const startMinutes = parseTimePart(assignment.session_start_time);
       const endTime = startMinutes == null ? '' : toHHMM(startMinutes + duration);
-      const dayLabel = resolveSessionDayLabel(assignment);
+      const weekForSchedule = weekById.get(targetWeekId) || sourceWeek || targetWeek || null;
+      const dayLabel = resolveSessionDayLabel(weekForSchedule, assignment);
       const sessionDateLabel = assignment.session_month && assignment.session_day
         ? `${assignment.session_month}/${assignment.session_day}`
         : '-';
