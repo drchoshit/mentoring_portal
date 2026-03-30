@@ -17,6 +17,16 @@ function parseJsonFile(req) {
   return JSON.parse(txt);
 }
 
+function importUploadHandler(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err?.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: '파일이 너무 큽니다. 5MB 이하 JSON 파일만 업로드할 수 있습니다.' });
+    }
+    return res.status(400).json({ error: String(err?.message || '파일 업로드에 실패했습니다.') });
+  });
+}
+
 function ensureAppSettingsTable(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS app_settings (
@@ -321,7 +331,7 @@ export default function mentorAssignmentsRoutes(db) {
     return res.json({ data });
   });
 
-  router.post('/import', requireRole('director', 'admin'), upload.single('file'), (req, res) => {
+  router.post('/import', requireRole('director', 'admin'), importUploadHandler, (req, res) => {
     let payload;
     try {
       payload = parseJsonFile(req);
@@ -343,7 +353,13 @@ export default function mentorAssignmentsRoutes(db) {
 
     rows.forEach((row) => {
       if (!row) return;
-      const rawId = row.id;
+      const rawId = firstNonEmptyText(
+        row?.id,
+        row?.student_id,
+        row?.studentId,
+        row?.external_id,
+        row?.externalId
+      );
       if (rawId === undefined || rawId === null || rawId === '') return;
       const key = String(rawId).trim();
       if (!key) return;
@@ -367,7 +383,11 @@ export default function mentorAssignmentsRoutes(db) {
       }
 
       if (!student) {
-        const nameKey = String(row?.name || '').trim();
+        const nameKey = firstNonEmptyText(
+          row?.name,
+          row?.student_name,
+          row?.studentName
+        );
         const nameMatches = nameKey ? (studentsByName.get(nameKey) || []) : [];
         if (nameMatches.length === 1) {
           student = nameMatches[0];
@@ -377,13 +397,17 @@ export default function mentorAssignmentsRoutes(db) {
       if (!student) {
         if (!missingSet.has(key)) {
           missingSet.add(key);
-          missing.push({ id: key, name: String(row?.name || '').trim() });
+          missing.push({
+            id: key,
+            name: firstNonEmptyText(row?.name, row?.student_name, row?.studentName)
+          });
         }
         return;
       }
 
       const mentor = firstNonEmptyText(
         row?.mentor,
+        row?.manualMentor,
         row?.mentor_name,
         row?.clinic_mentor,
         row?.clinicMentor,
@@ -408,7 +432,9 @@ export default function mentorAssignmentsRoutes(db) {
         row?.master_mentor,
         row?.masterMentor
       );
-      const scheduledDays = normalizeDays(row?.scheduledDays ?? row?.scheduled_days ?? row?.days);
+      const scheduledDays = normalizeDays(
+        row?.scheduledDays ?? row?.scheduled_days ?? row?.days ?? row?.day ?? row?.rescheduleDay
+      );
 
       byStudentId.set(String(student.id), {
         student_id: student.id,
@@ -421,6 +447,13 @@ export default function mentorAssignmentsRoutes(db) {
     });
 
     const assignments = Array.from(byStudentId.values());
+    if (rows.length > 0 && assignments.length === 0) {
+      return res.status(422).json({
+        error: '학생 매칭 0건으로 반영을 중단했습니다. 파일 형식(아이디/이름 키)을 확인해 주세요.',
+        missing
+      });
+    }
+
     const stored = {
       periodId: parsed.periodId ? String(parsed.periodId).trim() : '',
       exportedAt: parsed.exportedAt ? String(parsed.exportedAt).trim() : '',
