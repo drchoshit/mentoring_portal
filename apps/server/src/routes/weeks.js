@@ -125,5 +125,30 @@ export default function weekRoutes(db) {
     return res.json({ ok: true });
   });
 
+  router.delete('/:id', requireRole('director'), (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: 'Invalid week id' });
+    }
+
+    const existing = db.prepare('SELECT id, label FROM weeks WHERE id=?').get(id);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+
+    const totalWeeks = Number(db.prepare('SELECT COUNT(*) AS cnt FROM weeks').get()?.cnt || 0);
+    if (totalWeeks <= 1) {
+      return res.status(400).json({ error: 'At least one week must remain' });
+    }
+
+    db.prepare('DELETE FROM weeks WHERE id=?').run(id);
+    writeAudit(db, {
+      user_id: req.user.id,
+      action: 'delete',
+      entity: 'week',
+      entity_id: id,
+      details: { label: String(existing.label || '') }
+    });
+    return res.json({ ok: true, deleted_id: id });
+  });
+
   return router;
 }

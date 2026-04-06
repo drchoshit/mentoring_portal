@@ -734,6 +734,101 @@ function mergeWrongAnswerDraftKeepingLocalInputs(localValue, remoteValue) {
   };
 }
 
+function isMeaningfulWrongAnswerProblem(item) {
+  const normalized = normalizeWrongAnswerItem(item || {});
+  if (String(normalized.deleted_at || '').trim()) return false;
+  const assignment = normalizeWrongAnswerAssignment(normalized.assignment || null);
+  const hasCoreText = [
+    normalized.subject,
+    normalized.material,
+    normalized.problem_name,
+    normalized.problem_type,
+    normalized.note
+  ].some((value) => String(value || '').trim());
+  const hasStatusText = [
+    normalized.completion_feedback,
+    normalized.incomplete_reason
+  ].some((value) => String(value || '').trim());
+  const hasImages = Array.isArray(normalized.images) && normalized.images.length > 0;
+  const hasAssignment = Boolean(
+    String(assignment?.mentor_id || '').trim() ||
+    String(assignment?.mentor_name || '').trim() ||
+    String(assignment?.session_month || '').trim() ||
+    String(assignment?.session_day || '').trim() ||
+    String(assignment?.session_start_time || '').trim() ||
+    String(assignment?.session_day_label || '').trim()
+  );
+  return hasCoreText || hasStatusText || hasImages || hasAssignment;
+}
+
+function makeWrongAnswerProblemSignature(item) {
+  const normalized = normalizeWrongAnswerItem(item || {});
+  const assignment = normalizeWrongAnswerAssignment(normalized.assignment || null) || {};
+  const imageKeys = (Array.isArray(normalized.images) ? normalized.images : [])
+    .map((img) => {
+      const id = String(img?.id || '').trim();
+      const url = String(img?.url || '').trim();
+      const filename = String(img?.filename || '').trim();
+      return [id, url, filename].join('|');
+    })
+    .filter(Boolean)
+    .sort();
+
+  return JSON.stringify({
+    subject: String(normalized.subject || '').trim(),
+    material: String(normalized.material || '').trim(),
+    problem_name: String(normalized.problem_name || '').trim(),
+    problem_type: String(normalized.problem_type || '').trim(),
+    note: String(normalized.note || '').trim(),
+    completion_status: String(normalized.completion_status || '').trim(),
+    completion_feedback: String(normalized.completion_feedback || '').trim(),
+    incomplete_reason: String(normalized.incomplete_reason || '').trim(),
+    deleted_at: String(normalized.deleted_at || '').trim(),
+    mentor_id: String(assignment.mentor_id || '').trim(),
+    mentor_name: String(assignment.mentor_name || '').trim(),
+    mentor_role: String(assignment.mentor_role || '').trim(),
+    session_day_label: String(assignment.session_day_label || '').trim(),
+    session_month: String(assignment.session_month || '').trim(),
+    session_day: String(assignment.session_day || '').trim(),
+    session_start_time: String(assignment.session_start_time || '').trim(),
+    session_duration_minutes: Number(assignment.session_duration_minutes || 0) || 0,
+    images: imageKeys
+  });
+}
+
+function composeQuickWrongAnswerPayload(localDraft, persistedDraft, mode = 'full') {
+  const local = normalizeWrongAnswerDraftWithSummary(localDraft);
+  if (mode !== 'append') return local;
+
+  const persisted = normalizeWrongAnswerDraftWithSummary(persistedDraft);
+  const persistedProblems = (Array.isArray(persisted.problems) ? persisted.problems : [])
+    .map((problem) => normalizeWrongAnswerItem(problem));
+  const localNewProblems = (Array.isArray(local.problems) ? local.problems : [])
+    .map((problem) => normalizeWrongAnswerItem(problem))
+    .filter((problem) => isMeaningfulWrongAnswerProblem(problem));
+  const persistedSignatures = new Set(
+    persistedProblems.map((problem) => makeWrongAnswerProblemSignature(problem))
+  );
+  const dedupedLocalNewProblems = localNewProblems.filter((problem) => {
+    const signature = makeWrongAnswerProblemSignature(problem);
+    if (persistedSignatures.has(signature)) return false;
+    persistedSignatures.add(signature);
+    return true;
+  });
+  const mergedProblems = [...persistedProblems, ...dedupedLocalNewProblems];
+  const nextProblems = mergedProblems.length ? mergedProblems : [{ ...DEFAULT_WRONG_ANSWER_ITEM }];
+
+  return normalizeWrongAnswerDraftWithSummary({
+    ...persisted,
+    searched_at: String(local.searched_at || persisted.searched_at || '').trim(),
+    problems: nextProblems,
+    assignment: pickSummaryAssignmentFromProblems(
+      nextProblems,
+      persisted.assignment || local.assignment || null
+    )
+  });
+}
+
 function makeSessionRangeText(startTime, durationMinutes) {
   const start = parseTimeToMinutes(startTime);
   const duration = Math.max(1, Math.min(240, Number(durationMinutes || 20) || 20));
@@ -901,13 +996,18 @@ export default function AssignmentStatus() {
   });
   const [students, setStudents] = useState([]);
   const [quickStudentId, setQuickStudentId] = useState('');
+  const [quickStudentSearch, setQuickStudentSearch] = useState('');
   const [quickWeekRecordId, setQuickWeekRecordId] = useState('');
   const [quickWeekBaseYear, setQuickWeekBaseYear] = useState(new Date().getFullYear());
   const [quickSchedule, setQuickSchedule] = useState({});
   const [quickMentorInfo, setQuickMentorInfo] = useState({ mentors: [] });
+  const [quickWrongAnswerPersistedDraft, setQuickWrongAnswerPersistedDraft] = useState(
+    normalizeWrongAnswerDraftWithSummary({})
+  );
   const [quickWrongAnswerDraft, setQuickWrongAnswerDraft] = useState(
     normalizeWrongAnswerDraftWithSummary({})
   );
+  const [quickWrongAnswerDraftMode, setQuickWrongAnswerDraftMode] = useState('full');
   const [quickWrongAnswerCandidates, setQuickWrongAnswerCandidates] = useState([]);
   const [quickWrongAnswerSearched, setQuickWrongAnswerSearched] = useState(false);
   const [quickWrongAnswerTargetProblemIndex, setQuickWrongAnswerTargetProblemIndex] = useState(0);
@@ -915,6 +1015,7 @@ export default function AssignmentStatus() {
   const [quickWrongAnswerLoading, setQuickWrongAnswerLoading] = useState(false);
   const [quickWrongAnswerSaving, setQuickWrongAnswerSaving] = useState(false);
   const [quickWrongAnswerError, setQuickWrongAnswerError] = useState('');
+  const [directorSummaryCollapsed, setDirectorSummaryCollapsed] = useState(false);
   const [quickWrongAnswerUploadModal, setQuickWrongAnswerUploadModal] = useState({
     open: false,
     loading: false,
@@ -1257,14 +1358,19 @@ export default function AssignmentStatus() {
       setQuickWeekBaseYear(resolveWeekBaseYear(data?.week));
       setQuickSchedule(safeJson(data?.student?.schedule_json, {}));
       setQuickMentorInfo(normalizeMentorInfo(data?.mentor_info));
+      setQuickWrongAnswerPersistedDraft(draft);
       setQuickWrongAnswerDraft(draft);
+      setQuickWrongAnswerDraftMode('full');
       setQuickWrongAnswerCandidates([]);
       setQuickWrongAnswerSearched(false);
       setQuickWrongAnswerTargetProblemIndex(safeIdx);
       setQuickCollapsedWrongAnswerProblems({});
     } catch (e) {
       setQuickWrongAnswerError(e?.message || '오답 배분 기록을 불러오지 못했습니다.');
-      setQuickWrongAnswerDraft(normalizeWrongAnswerDraftWithSummary({}));
+      const emptyDraft = normalizeWrongAnswerDraftWithSummary({});
+      setQuickWrongAnswerPersistedDraft(emptyDraft);
+      setQuickWrongAnswerDraft(emptyDraft);
+      setQuickWrongAnswerDraftMode('full');
       setQuickWeekRecordId('');
       setQuickSchedule({});
       setQuickMentorInfo({ mentors: [] });
@@ -1386,11 +1492,16 @@ export default function AssignmentStatus() {
     setQuickWrongAnswerSaving(true);
     setQuickWrongAnswerError('');
     try {
-      const payload = normalizeWrongAnswerDraftWithSummary(quickWrongAnswerDraft);
+      const payload = composeQuickWrongAnswerPayload(
+        quickWrongAnswerDraft,
+        quickWrongAnswerPersistedDraft,
+        quickWrongAnswerDraftMode
+      );
       await api(`/api/mentoring/week-record/${encodeURIComponent(quickWeekRecordId)}`, {
         method: 'PUT',
         body: { e_wrong_answer_distribution: payload }
       });
+      setQuickWrongAnswerPersistedDraft(payload);
       await loadStatus(weekId);
       window.alert('오답 배분이 저장되었습니다.');
     } catch (e) {
@@ -1402,15 +1513,33 @@ export default function AssignmentStatus() {
 
   async function submitQuickWrongAnswerProblem(index) {
     if (!quickWeekRecordId || !canUseQuickWrongAnswer) return;
+    if (quickWrongAnswerDraftMode === 'append') {
+      const localProblems = (Array.isArray(quickWrongAnswerDraft?.problems) ? quickWrongAnswerDraft.problems : [])
+        .map((problem) => normalizeWrongAnswerItem(problem))
+        .filter((problem) => isMeaningfulWrongAnswerProblem(problem));
+      if (!localProblems.length) {
+        setQuickWrongAnswerError('제출할 오답 기록을 먼저 입력해 주세요.');
+        return;
+      }
+    }
     setQuickWrongAnswerSaving(true);
     setQuickWrongAnswerError('');
     try {
-      const payload = normalizeWrongAnswerDraftWithSummary(quickWrongAnswerDraft);
+      const payload = composeQuickWrongAnswerPayload(
+        quickWrongAnswerDraft,
+        quickWrongAnswerPersistedDraft,
+        quickWrongAnswerDraftMode
+      );
       await api(`/api/mentoring/week-record/${encodeURIComponent(quickWeekRecordId)}`, {
         method: 'PUT',
         body: { e_wrong_answer_distribution: payload }
       });
-      collapseQuickWrongAnswerProblem(index);
+      setQuickWrongAnswerPersistedDraft(payload);
+      setQuickWrongAnswerDraft(normalizeWrongAnswerDraftWithSummary({}));
+      setQuickWrongAnswerDraftMode('append');
+      setQuickWrongAnswerTargetProblemIndex(0);
+      setQuickCollapsedWrongAnswerProblems({});
+      setQuickWrongAnswerCandidates([]);
       setQuickWrongAnswerSearched(false);
       await loadStatus(weekId);
       window.alert(`오답 기록 ${Number(index) + 1}이(가) 제출되었습니다.`);
@@ -1495,6 +1624,21 @@ export default function AssignmentStatus() {
     () => (students || []).find((student) => String(student?.id || '') === String(quickStudentId)) || null,
     [students, quickStudentId]
   );
+  const filteredQuickStudents = useMemo(() => {
+    const list = Array.isArray(students) ? students : [];
+    const query = String(quickStudentSearch || '').trim().toLowerCase();
+    if (!query) return list;
+
+    const filtered = list.filter((student) => {
+      const name = String(student?.name || '').toLowerCase();
+      const externalId = String(student?.external_id || '').toLowerCase();
+      return name.includes(query) || externalId.includes(query);
+    });
+    if (filtered.length) return filtered;
+
+    const selected = list.find((student) => String(student?.id || '') === String(quickStudentId));
+    return selected ? [selected] : [];
+  }, [students, quickStudentSearch, quickStudentId]);
   const summaryDayColumns = useMemo(() => DAY_ORDER.filter((day) => day !== '-'), []);
   const mentorDaySummaryRows = useMemo(() => {
     const byMentor = new Map();
@@ -1663,15 +1807,15 @@ export default function AssignmentStatus() {
                 value={quickStudentId}
                 onChange={(e) => setQuickStudentId(String(e.target.value || ''))}
               >
-                {students.length ? (
-                  students.map((student) => (
+                {filteredQuickStudents.length ? (
+                  filteredQuickStudents.map((student) => (
                     <option key={`quick-student-${student.id}`} value={student.id}>
                       {student.external_id ? `${student.external_id} · ` : ''}
                       {student.name || `학생 ${student.id}`}
                     </option>
                   ))
                 ) : (
-                  <option value="">학생 없음</option>
+                  <option value="">{students.length ? '검색 결과 없음' : '학생 없음'}</option>
                 )}
               </select>
               <button
@@ -1698,6 +1842,12 @@ export default function AssignmentStatus() {
               >
                 {quickWrongAnswerSaving ? '저장 중...' : '저장'}
               </button>
+              <input
+                className="input h-9 w-48"
+                value={quickStudentSearch}
+                onChange={(e) => setQuickStudentSearch(String(e.target.value || ''))}
+                placeholder="학생 이름 검색"
+              />
             </div>
           </div>
 
@@ -2153,46 +2303,59 @@ export default function AssignmentStatus() {
         {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
         {isDirector && mentorDaySummaryRows.length ? (
           <div className="mt-4 rounded-xl border border-slate-200 bg-white/80 p-3">
-            <div className="text-sm font-semibold text-slate-800">멘토별 요일 배정 질문 수</div>
-            <div className="mt-2 overflow-x-auto">
-              <table className="w-full min-w-[680px] text-sm">
-                <thead className="bg-slate-50 text-slate-600">
-                  <tr>
-                    <th className="px-2 py-2 text-left border-b border-slate-200">멘토</th>
-                    {summaryDayColumns.map((day) => (
-                      <th key={`summary-day-head-${day}`} className="px-2 py-2 text-center border-b border-slate-200">
-                        {day}
-                      </th>
-                    ))}
-                    <th className="px-2 py-2 text-center border-b border-slate-200">미지정</th>
-                    <th className="px-2 py-2 text-center border-b border-slate-200">합계</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mentorDaySummaryRows.map((row) => (
-                    <tr key={`summary-row-${row.mentor_name}`} className="border-t border-slate-100">
-                      <td className="px-2 py-2">
-                        <div className="font-medium text-slate-900">{row.mentor_name}</div>
-                        <div className="text-[11px] text-slate-500">{ROLE_LABEL[row.mentor_role] || row.mentor_role}</div>
-                      </td>
-                      {summaryDayColumns.map((day) => (
-                        <td key={`summary-count-${row.mentor_name}-${day}`} className="px-2 py-2 text-center text-slate-800">
-                          {Number(row?.counts?.[day] || 0)}
-                        </td>
-                      ))}
-                      <td className="px-2 py-2 text-center text-slate-700">
-                        {Number(row?.counts?.['-'] || 0)}
-                      </td>
-                      <td className="px-2 py-2 text-center">
-                        <span className="inline-flex min-w-8 items-center justify-center rounded-full border border-brand-200 bg-brand-50 px-2 py-0.5 font-semibold text-brand-800">
-                          {Number(row?.total || 0)}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-semibold text-slate-800">멘토별 요일 배정 질문 수</div>
+              <button
+                className="btn-ghost h-8 px-2 text-xs"
+                type="button"
+                onClick={() => setDirectorSummaryCollapsed((prev) => !prev)}
+              >
+                {directorSummaryCollapsed ? '펼치기' : '최소화'}
+              </button>
             </div>
+            {!directorSummaryCollapsed ? (
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full min-w-[680px] text-sm">
+                  <thead className="bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="px-2 py-2 text-left border-b border-slate-200">멘토</th>
+                      {summaryDayColumns.map((day) => (
+                        <th key={`summary-day-head-${day}`} className="px-2 py-2 text-center border-b border-slate-200">
+                          {day}
+                        </th>
+                      ))}
+                      <th className="px-2 py-2 text-center border-b border-slate-200">미지정</th>
+                      <th className="px-2 py-2 text-center border-b border-slate-200">합계</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mentorDaySummaryRows.map((row) => (
+                      <tr key={`summary-row-${row.mentor_name}`} className="border-t border-slate-100">
+                        <td className="px-2 py-2">
+                          <div className="font-medium text-slate-900">{row.mentor_name}</div>
+                          <div className="text-[11px] text-slate-500">{ROLE_LABEL[row.mentor_role] || row.mentor_role}</div>
+                        </td>
+                        {summaryDayColumns.map((day) => (
+                          <td key={`summary-count-${row.mentor_name}-${day}`} className="px-2 py-2 text-center text-slate-800">
+                            {Number(row?.counts?.[day] || 0)}
+                          </td>
+                        ))}
+                        <td className="px-2 py-2 text-center text-slate-700">
+                          {Number(row?.counts?.['-'] || 0)}
+                        </td>
+                        <td className="px-2 py-2 text-center">
+                          <span className="inline-flex min-w-8 items-center justify-center rounded-full border border-brand-200 bg-brand-50 px-2 py-0.5 font-semibold text-brand-800">
+                            {Number(row?.total || 0)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="mt-2 text-xs text-slate-500">요약 표가 최소화되었습니다.</div>
+            )}
           </div>
         ) : null}
         {canIssueBriefing ? (

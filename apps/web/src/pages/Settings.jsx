@@ -523,6 +523,8 @@ function WeeksTab() {
   const [weeks, setWeeks] = useState([]);
   const [error, setError] = useState('');
   const [form, setForm] = useState({ label: '', start_date: '', end_date: '' });
+  const [savingWeekId, setSavingWeekId] = useState('');
+  const [deletingWeekId, setDeletingWeekId] = useState('');
 
   async function load() {
     setError('');
@@ -546,14 +548,47 @@ function WeeksTab() {
     }
   }
 
-  async function update(w, patch) {
+  function patchWeekDraft(weekId, patch) {
+    setWeeks((prev) =>
+      (Array.isArray(prev) ? prev : []).map((week) =>
+        String(week?.id) === String(weekId)
+          ? { ...week, ...patch }
+          : week
+      )
+    );
+  }
+
+  async function saveWeek(w) {
+    const rowId = String(w?.id || '');
+    if (!rowId) return;
+    setSavingWeekId(rowId);
+    setError('');
     try {
-      const next = { ...w, ...patch };
+      const next = { ...w };
       if (Object.prototype.hasOwnProperty.call(next, 'label')) next.label = toRoundLabel(next.label);
-      await api(`/api/weeks/${w.id}`, { method: 'PUT', body: next });
+      await api(`/api/weeks/${rowId}`, { method: 'PUT', body: next });
       await load();
     } catch (e) {
       setError(e.message);
+    } finally {
+      setSavingWeekId('');
+    }
+  }
+
+  async function deleteWeek(w) {
+    const rowId = String(w?.id || '');
+    if (!rowId) return;
+    const ok = window.confirm(`회차 ${w?.label || rowId}을(를) 삭제할까요?\n해당 회차에 연결된 기록은 함께 삭제될 수 있습니다.`);
+    if (!ok) return;
+    setDeletingWeekId(rowId);
+    setError('');
+    try {
+      await api(`/api/weeks/${rowId}`, { method: 'DELETE' });
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDeletingWeekId('');
     }
   }
 
@@ -586,15 +621,36 @@ function WeeksTab() {
               <th>label</th>
               <th>start</th>
               <th>end</th>
+              <th className="text-right">작업</th>
             </tr>
           </thead>
           <tbody>
             {weeks.map(w => (
               <tr key={w.id} className="border-t border-slate-200">
                 <td className="py-2">{w.id}</td>
-                <td><input className="input" value={w.label} onChange={(e)=>update(w, { label: toRoundLabel(e.target.value) })} /></td>
-                <td><input className="input" value={w.start_date || ''} onChange={(e)=>update(w, { start_date: e.target.value })} /></td>
-                <td><input className="input" value={w.end_date || ''} onChange={(e)=>update(w, { end_date: e.target.value })} /></td>
+                <td><input className="input" value={w.label} onChange={(e)=>patchWeekDraft(w.id, { label: toRoundLabel(e.target.value) })} /></td>
+                <td><input className="input" value={w.start_date || ''} onChange={(e)=>patchWeekDraft(w.id, { start_date: e.target.value })} /></td>
+                <td><input className="input" value={w.end_date || ''} onChange={(e)=>patchWeekDraft(w.id, { end_date: e.target.value })} /></td>
+                <td className="py-2">
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      className="btn-ghost h-8 px-3"
+                      type="button"
+                      onClick={() => saveWeek(w)}
+                      disabled={savingWeekId === String(w.id) || deletingWeekId === String(w.id)}
+                    >
+                      {savingWeekId === String(w.id) ? '수정 중...' : '수정'}
+                    </button>
+                    <button
+                      className="btn-ghost h-8 px-3 text-red-600 hover:text-red-700"
+                      type="button"
+                      onClick={() => deleteWeek(w)}
+                      disabled={savingWeekId === String(w.id) || deletingWeekId === String(w.id)}
+                    >
+                      {deletingWeekId === String(w.id) ? '삭제 중...' : '삭제'}
+                    </button>
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
