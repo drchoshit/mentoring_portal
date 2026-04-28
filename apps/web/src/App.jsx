@@ -1,5 +1,5 @@
 import React from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './auth/AuthProvider.jsx';
 import Guard from './components/Guard.jsx';
 import AppShell from './components/AppShell.jsx';
@@ -15,6 +15,17 @@ import Parent from './pages/Parent.jsx';
 
 function Shell({ children }) {
   return <AppShell>{children}</AppShell>;
+}
+
+function HomeEntry({ user }) {
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search || '');
+  const openPage = String(searchParams.get('openPage') || '').trim();
+  const canOpenAssignmentStatus = ['director', 'lead', 'mentor', 'admin'].includes(String(user?.role || '').trim());
+
+  if (user?.role === 'parent') return <Navigate to="/parent" replace />;
+  if (openPage === 'assignment-status' && canOpenAssignmentStatus) return <AssignmentStatus />;
+  return <Feeds />;
 }
 
 export default function App() {
@@ -44,7 +55,7 @@ export default function App() {
         path="/"
         element={
           <Guard>
-            <Shell>{user?.role === 'parent' ? <Navigate to="/parent" replace /> : <Feeds />}</Shell>
+            <Shell><HomeEntry user={user} /></Shell>
           </Guard>
         }
       />

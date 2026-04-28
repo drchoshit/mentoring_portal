@@ -1993,7 +1993,8 @@ export default function AssignmentStatus() {
     const currentWeekId = String(weekId || '').trim();
     if (!name || !currentWeekId || typeof window === 'undefined') return;
 
-    const url = new URL(`${window.location.origin}${window.location.pathname}`);
+    const url = new URL(`${window.location.origin}/`);
+    url.searchParams.set('openPage', 'assignment-status');
     url.searchParams.set('week', currentWeekId);
     url.searchParams.set('mentor', name);
     url.searchParams.set('mentorView', '1');
