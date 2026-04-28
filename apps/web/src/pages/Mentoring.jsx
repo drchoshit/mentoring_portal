@@ -3109,6 +3109,34 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
     ? `https://api.qrserver.com/v1/create-qr-code/?size=420x420&data=${encodeURIComponent(uploadUrl)}`
     : '';
   const [refreshing, setRefreshing] = useState(false);
+  const [pcUploading, setPcUploading] = useState(false);
+  const fileInputRef = useRef(null);
+
+  function extractUploadToken(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    try {
+      const parsed = new URL(raw);
+      return String(parsed.searchParams.get('token') || '').trim();
+    } catch {
+      const match = raw.match(/[?&]token=([^&]+)/);
+      return match?.[1] ? decodeURIComponent(match[1]) : '';
+    }
+  }
+
+  function resolveUploadSubmitUrl(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return `${String(API_BASE || '').trim().replace(/\/+$/, '')}/api/problem-upload/mobile/submit`;
+    try {
+      const parsed = new URL(raw);
+      parsed.pathname = parsed.pathname.replace(/\/mobile\/?$/, '/mobile/submit');
+      parsed.search = '';
+      return parsed.toString();
+    } catch {
+      const base = String(API_BASE || '').trim().replace(/\/+$/, '');
+      return base ? `${base}/api/problem-upload/mobile/submit` : '/api/problem-upload/mobile/submit';
+    }
+  }
 
   async function copyUploadUrl() {
     if (!uploadUrl) return;
@@ -3129,6 +3157,44 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
       await onRefresh();
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function uploadPcImages(event) {
+    const files = Array.from(event?.target?.files || []);
+    if (!files.length || pcUploading) return;
+
+    const token = extractUploadToken(uploadUrl);
+    if (!token) {
+      window.alert('업로드 토큰을 찾지 못했습니다. 링크를 다시 생성해 주세요.');
+      if (event?.target) event.target.value = '';
+      return;
+    }
+
+    const submitUrl = resolveUploadSubmitUrl(uploadUrl);
+    const formData = new FormData();
+    formData.append('token', token);
+    for (const file of files) {
+      formData.append('images', file, String(file?.name || 'upload.jpg'));
+    }
+
+    setPcUploading(true);
+    try {
+      const res = await fetch(submitUrl, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+      await refreshUploadedImages();
+      window.alert(`PC 이미지 업로드 완료: ${Number(data?.uploaded_count || files.length)}장`);
+    } catch (e) {
+      window.alert(e?.message || 'PC 이미지 업로드에 실패했습니다.');
+    } finally {
+      setPcUploading(false);
+      if (event?.target) event.target.value = '';
     }
   }
 
@@ -3177,6 +3243,22 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
                 >
                   {refreshing ? '반영 중...' : '업로드 반영 새로고침'}
                 </button>
+                <button
+                  className="btn-ghost"
+                  type="button"
+                  disabled={loading || refreshing || pcUploading}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {pcUploading ? 'PC 업로드 중...' : 'PC에서 이미지 갖고 오기'}
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => void uploadPcImages(event)}
+                />
               </div>
             </div>
           ) : (

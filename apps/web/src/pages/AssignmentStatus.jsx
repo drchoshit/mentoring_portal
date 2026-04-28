@@ -1,10 +1,11 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { API_BASE, api } from '../api.js';
 
 const DAY_ORDER = ['월', '화', '수', '목', '금', '토', '일', '-'];
 const DAY_OPTIONS = ['월', '화', '수', '목', '금', '토', '일'];
 const JS_DAY_TO_KO = ['일', '월', '화', '수', '목', '금', '토'];
+const KST_TIME_ZONE = 'Asia/Seoul';
 
 const ROLE_LABEL = {
   director: '원장',
@@ -73,7 +74,19 @@ function fmtWeekLabel(week) {
 
 function fmtDateTime(value) {
   if (!value) return '-';
-  return String(value).replace('T', ' ').slice(0, 16);
+  const raw = String(value || '').trim();
+  if (!raw) return '-';
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw.replace('T', ' ').slice(0, 16);
+  return date.toLocaleString('ko-KR', {
+    timeZone: KST_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
 }
 
 function daySortValue(day) {
@@ -203,41 +216,84 @@ function resolveProblemImageUrl(url) {
   return `${base}/${raw}`;
 }
 
-function groupAssignments(items) {
-  const mentorMap = new Map();
-  for (const row of Array.isArray(items) ? items : []) {
-    const mentorName = String(row?.mentor_name || '').trim() || '미배정';
-    const mentorRole = String(row?.mentor_role || '').trim() || 'mentor';
+function normalizeMentorNameKey(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
 
-    if (!mentorMap.has(mentorName)) {
-      mentorMap.set(mentorName, {
-        mentor_name: mentorName,
-        mentor_role: mentorRole,
-        items: []
-      });
+function resolveScheduleWeekBaseYear(week) {
+  const start = parseDateOnly(week?.start_date);
+  if (start) return start.getFullYear();
+  const end = parseDateOnly(week?.end_date);
+  if (end) return end.getFullYear();
+  return new Date().getFullYear();
+}
+
+function parseKstScheduledDate(item, week = null) {
+  const month = Number(item?.session_month || 0);
+  const day = Number(item?.session_day || 0);
+  if (!Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+
+  const weekYear = resolveScheduleWeekBaseYear(week || null);
+  const candidateYears = [weekYear, weekYear - 1, weekYear + 1, new Date().getFullYear()]
+    .filter((year, idx, arr) => Number.isInteger(year) && arr.indexOf(year) === idx);
+
+  const startMinutes = parseTimeToMinutes(item?.session_start_time);
+  const hour = startMinutes == null ? 23 : Math.floor(startMinutes / 60);
+  const minute = startMinutes == null ? 59 : (startMinutes % 60);
+
+  for (const year of candidateYears) {
+    const probe = new Date(year, month - 1, day);
+    if (
+      Number.isNaN(probe.getTime()) ||
+      probe.getFullYear() !== year ||
+      probe.getMonth() !== month - 1 ||
+      probe.getDate() !== day
+    ) {
+      continue;
     }
-    mentorMap.get(mentorName).items.push(row);
+
+    const kstDate = new Date(Date.UTC(year, month - 1, day, hour - 9, minute, 0));
+    if (!week) return kstDate;
+
+    const weekStart = parseDateOnly(week?.start_date);
+    const weekEnd = parseDateOnly(week?.end_date);
+    if (!weekStart || !weekEnd) return kstDate;
+
+    const weekStartOnly = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate());
+    const weekEndOnly = new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate());
+    const candidateOnly = new Date(year, month - 1, day);
+    if (candidateOnly >= weekStartOnly && candidateOnly <= weekEndOnly) return kstDate;
   }
 
-  const grouped = Array.from(mentorMap.values()).map((mentor) => {
-    const sortedItems = [...mentor.items].sort((a, b) => {
-      const scheduleDiff = scheduleSortValue(a) - scheduleSortValue(b);
-      if (scheduleDiff !== 0) return scheduleDiff;
+  const fallbackYear = candidateYears[0];
+  if (!fallbackYear) return null;
+  const fallback = new Date(fallbackYear, month - 1, day);
+  if (
+    Number.isNaN(fallback.getTime()) ||
+    fallback.getFullYear() !== fallbackYear ||
+    fallback.getMonth() !== month - 1 ||
+    fallback.getDate() !== day
+  ) {
+    return null;
+  }
+  return new Date(Date.UTC(fallbackYear, month - 1, day, hour - 9, minute, 0));
+}
 
-      const studentCmp = String(a.student_name || '').localeCompare(String(b.student_name || ''));
-      if (studentCmp !== 0) return studentCmp;
+function isAssignmentOverdue(item, week = null) {
+  const status = normalizeCompletionStatus(item?.completion_status);
+  if (status === 'done') return false;
+  const scheduledAt = parseKstScheduledDate(item, week);
+  if (!scheduledAt) return false;
+  return Date.now() > scheduledAt.getTime();
+}
 
-      return String(a.external_id || '').localeCompare(String(b.external_id || ''));
-    });
-
-    return {
-      ...mentor,
-      items: sortedItems
-    };
-  });
-
-  grouped.sort((a, b) => String(a.mentor_name || '').localeCompare(String(b.mentor_name || '')));
-  return grouped;
+function assignmentRecentSortValue(item, week = null) {
+  const assignedAt = new Date(String(item?.assigned_at || '').trim());
+  if (!Number.isNaN(assignedAt.getTime())) return assignedAt.getTime();
+  const scheduledAt = parseKstScheduledDate(item, week);
+  if (scheduledAt && !Number.isNaN(scheduledAt.getTime())) return scheduledAt.getTime();
+  return 0;
 }
 
 function assignmentRowKey(item) {
@@ -881,6 +937,34 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
     ? `https://api.qrserver.com/v1/create-qr-code/?size=420x420&data=${encodeURIComponent(uploadUrl)}`
     : '';
   const [refreshing, setRefreshing] = useState(false);
+  const [pcUploading, setPcUploading] = useState(false);
+  const fileInputRef = useRef(null);
+
+  function extractUploadToken(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    try {
+      const parsed = new URL(raw);
+      return String(parsed.searchParams.get('token') || '').trim();
+    } catch {
+      const match = raw.match(/[?&]token=([^&]+)/);
+      return match?.[1] ? decodeURIComponent(match[1]) : '';
+    }
+  }
+
+  function resolveUploadSubmitUrl(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return `${String(API_BASE || '').trim().replace(/\/+$/, '')}/api/problem-upload/mobile/submit`;
+    try {
+      const parsed = new URL(raw);
+      parsed.pathname = parsed.pathname.replace(/\/mobile\/?$/, '/mobile/submit');
+      parsed.search = '';
+      return parsed.toString();
+    } catch {
+      const base = String(API_BASE || '').trim().replace(/\/+$/, '');
+      return base ? `${base}/api/problem-upload/mobile/submit` : '/api/problem-upload/mobile/submit';
+    }
+  }
 
   async function copyUploadUrl() {
     if (!uploadUrl) return;
@@ -901,6 +985,44 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
       await onRefresh();
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function uploadPcImages(event) {
+    const files = Array.from(event?.target?.files || []);
+    if (!files.length || pcUploading) return;
+
+    const token = extractUploadToken(uploadUrl);
+    if (!token) {
+      window.alert('업로드 토큰을 찾지 못했습니다. 링크를 다시 생성해 주세요.');
+      if (event?.target) event.target.value = '';
+      return;
+    }
+
+    const submitUrl = resolveUploadSubmitUrl(uploadUrl);
+    const formData = new FormData();
+    formData.append('token', token);
+    for (const file of files) {
+      formData.append('images', file, String(file?.name || 'upload.jpg'));
+    }
+
+    setPcUploading(true);
+    try {
+      const res = await fetch(submitUrl, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+      await refreshUploadedImages();
+      window.alert(`PC 이미지 업로드 완료: ${Number(data?.uploaded_count || files.length)}장`);
+    } catch (e) {
+      window.alert(e?.message || 'PC 이미지 업로드에 실패했습니다.');
+    } finally {
+      setPcUploading(false);
+      if (event?.target) event.target.value = '';
     }
   }
 
@@ -949,6 +1071,22 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
                 >
                   {refreshing ? '반영 중...' : '업로드 반영 새로고침'}
                 </button>
+                <button
+                  className="btn-ghost"
+                  type="button"
+                  disabled={loading || refreshing || pcUploading}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {pcUploading ? 'PC 업로드 중...' : 'PC에서 이미지 갖고 오기'}
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => void uploadPcImages(event)}
+                />
               </div>
             </div>
           ) : (
@@ -1077,12 +1215,15 @@ export default function AssignmentStatus() {
     try {
       const w = await api('/api/weeks');
       const weekList = Array.isArray(w?.weeks) ? w.weeks : [];
-      setWeeks(weekList);
+      const orderedWeeks = [...weekList].sort(
+        (a, b) => Number(a?.id || 0) - Number(b?.id || 0)
+      );
+      setWeeks(orderedWeeks);
 
-      const hasWeek = weekId && weekList.some((x) => String(x.id) === String(weekId));
+      const hasWeek = weekId && orderedWeeks.some((x) => String(x.id) === String(weekId));
       const effectiveWeekId = hasWeek
         ? String(weekId)
-        : (weekList[weekList.length - 1]?.id ? String(weekList[weekList.length - 1].id) : '');
+        : (orderedWeeks[orderedWeeks.length - 1]?.id ? String(orderedWeeks[orderedWeeks.length - 1].id) : '');
 
       if (!hasWeek && effectiveWeekId) {
         setWeekId(effectiveWeekId);
@@ -1204,7 +1345,14 @@ export default function AssignmentStatus() {
 
   function addQuickWrongAnswerProblem() {
     setQuickWrongAnswerDraft((prev) => {
-      const base = normalizeWrongAnswerDraftWithSummary(prev);
+      const hasExplicitEmptyProblems =
+        prev &&
+        typeof prev === 'object' &&
+        Array.isArray(prev.problems) &&
+        prev.problems.length === 0;
+      const base = hasExplicitEmptyProblems
+        ? { problems: [], assignment: null, searched_at: String(prev?.searched_at || '').trim() }
+        : normalizeWrongAnswerDraftWithSummary(prev);
       return {
         ...base,
         problems: [...(base.problems || []), { ...DEFAULT_WRONG_ANSWER_ITEM, assignment: null }]
@@ -1337,7 +1485,11 @@ export default function AssignmentStatus() {
     });
   }
 
-  async function loadQuickWrongAnswerRecord(targetStudentId = quickStudentId, targetWeekId = weekId) {
+  async function loadQuickWrongAnswerRecord(
+    targetStudentId = quickStudentId,
+    targetWeekId = weekId,
+    { preserveLocalInputs = false } = {}
+  ) {
     const studentIdNumber = Number(targetStudentId || 0);
     const weekIdValue = String(targetWeekId || '').trim();
     if (!studentIdNumber || !weekIdValue) return;
@@ -1359,12 +1511,23 @@ export default function AssignmentStatus() {
       setQuickSchedule(safeJson(data?.student?.schedule_json, {}));
       setQuickMentorInfo(normalizeMentorInfo(data?.mentor_info));
       setQuickWrongAnswerPersistedDraft(draft);
-      setQuickWrongAnswerDraft(draft);
-      setQuickWrongAnswerDraftMode('full');
-      setQuickWrongAnswerCandidates([]);
-      setQuickWrongAnswerSearched(false);
-      setQuickWrongAnswerTargetProblemIndex(safeIdx);
-      setQuickCollapsedWrongAnswerProblems({});
+      if (preserveLocalInputs) {
+        const merged = mergeWrongAnswerDraftKeepingLocalInputs(quickWrongAnswerDraft, draft);
+        const mergedProblems = Array.isArray(merged?.problems) ? merged.problems : [];
+        const mergedSafeIdx = Math.max(
+          0,
+          Math.min(Number(quickWrongAnswerTargetProblemIndex || 0), Math.max(0, mergedProblems.length - 1))
+        );
+        setQuickWrongAnswerDraft(merged);
+        setQuickWrongAnswerTargetProblemIndex(mergedSafeIdx);
+      } else {
+        setQuickWrongAnswerDraft(draft);
+        setQuickWrongAnswerDraftMode('full');
+        setQuickWrongAnswerCandidates([]);
+        setQuickWrongAnswerSearched(false);
+        setQuickWrongAnswerTargetProblemIndex(safeIdx);
+        setQuickCollapsedWrongAnswerProblems({});
+      }
     } catch (e) {
       setQuickWrongAnswerError(e?.message || '오답 배분 기록을 불러오지 못했습니다.');
       const emptyDraft = normalizeWrongAnswerDraftWithSummary({});
@@ -1385,7 +1548,7 @@ export default function AssignmentStatus() {
 
   async function refreshQuickWrongAnswerUploadedImages() {
     if (!quickStudentId || !weekId) return;
-    await loadQuickWrongAnswerRecord(quickStudentId, weekId);
+    await loadQuickWrongAnswerRecord(quickStudentId, weekId, { preserveLocalInputs: true });
   }
 
   async function openQuickWrongAnswerImageUpload(problemIndex) {
@@ -1535,7 +1698,7 @@ export default function AssignmentStatus() {
         body: { e_wrong_answer_distribution: payload }
       });
       setQuickWrongAnswerPersistedDraft(payload);
-      setQuickWrongAnswerDraft(normalizeWrongAnswerDraftWithSummary({}));
+      setQuickWrongAnswerDraft({ problems: [], assignment: null, searched_at: '' });
       setQuickWrongAnswerDraftMode('append');
       setQuickWrongAnswerTargetProblemIndex(0);
       setQuickCollapsedWrongAnswerProblems({});
@@ -1609,17 +1772,58 @@ export default function AssignmentStatus() {
     await updateProblemState(item, { action: 'delete' });
   }
 
-  const grouped = useMemo(() => groupAssignments(rows), [rows]);
+  const mentorWindowMode = String(sp.get('mentorView') || '').trim() === '1';
+  const mentorFilterName = String(sp.get('mentor') || '').trim();
+  const selectedWeek = useMemo(
+    () => (weeks || []).find((w) => String(w.id) === String(weekId)) || null,
+    [weeks, weekId]
+  );
+  const weeksDesc = useMemo(
+    () => [...(weeks || [])].sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0)),
+    [weeks]
+  );
+  const sortedRows = useMemo(() => {
+    const list = [...(Array.isArray(rows) ? rows : [])];
+    list.sort((a, b) => {
+      const recentDiff = assignmentRecentSortValue(b, selectedWeek) - assignmentRecentSortValue(a, selectedWeek);
+      if (recentDiff !== 0) return recentDiff;
+
+      const scheduleDiff = scheduleSortValue(b) - scheduleSortValue(a);
+      if (scheduleDiff !== 0) return scheduleDiff;
+
+      const studentCmp = String(a.student_name || '').localeCompare(String(b.student_name || ''));
+      if (studentCmp !== 0) return studentCmp;
+      return String(a.external_id || '').localeCompare(String(b.external_id || ''));
+    });
+    return list;
+  }, [rows, selectedWeek]);
+  const visibleRows = useMemo(() => {
+    if (!mentorFilterName) return sortedRows;
+    const targetKey = normalizeMentorNameKey(mentorFilterName);
+    return sortedRows.filter((row) => normalizeMentorNameKey(row?.mentor_name) === targetKey);
+  }, [sortedRows, mentorFilterName]);
   const mentorOptions = useMemo(() => {
-    return grouped.map((group) => ({
-      mentor_name: String(group?.mentor_name || '').trim(),
-      mentor_role: String(group?.mentor_role || '').trim() || 'mentor'
-    })).filter((row) => row.mentor_name);
-  }, [grouped]);
-  const weekLabel = useMemo(() => {
-    const found = (weeks || []).find((w) => String(w.id) === String(weekId));
-    return found ? fmtWeekLabel(found) : '';
-  }, [weeks, weekId]);
+    const byMentor = new Map();
+    for (const row of sortedRows) {
+      const mentorName = String(row?.mentor_name || '').trim();
+      if (!mentorName || byMentor.has(mentorName)) continue;
+      byMentor.set(mentorName, {
+        mentor_name: mentorName,
+        mentor_role: String(row?.mentor_role || '').trim() || 'mentor'
+      });
+    }
+    return Array.from(byMentor.values());
+  }, [sortedRows]);
+  const grouped = useMemo(
+    () =>
+      visibleRows.map((row) => ({
+        mentor_name: String(row?.mentor_name || '').trim() || '미배정',
+        mentor_role: String(row?.mentor_role || '').trim() || 'mentor',
+        items: [row]
+      })),
+    [visibleRows]
+  );
+  const weekLabel = selectedWeek ? fmtWeekLabel(selectedWeek) : '';
   const selectedQuickStudent = useMemo(
     () => (students || []).find((student) => String(student?.id || '') === String(quickStudentId)) || null,
     [students, quickStudentId]
@@ -1784,9 +1988,21 @@ export default function AssignmentStatus() {
     }
   }
 
+  function openMentorQuestionWindow(mentorName) {
+    const name = String(mentorName || '').trim();
+    const currentWeekId = String(weekId || '').trim();
+    if (!name || !currentWeekId || typeof window === 'undefined') return;
+
+    const url = new URL(`${window.location.origin}${window.location.pathname}`);
+    url.searchParams.set('week', currentWeekId);
+    url.searchParams.set('mentor', name);
+    url.searchParams.set('mentorView', '1');
+    window.open(url.toString(), '_blank', 'noopener,noreferrer');
+  }
+
   return (
     <div className="space-y-6">
-      {canUseQuickWrongAnswer ? (
+      {!mentorWindowMode && canUseQuickWrongAnswer ? (
         <div className="card p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
@@ -2254,9 +2470,11 @@ export default function AssignmentStatus() {
               >
                 + 오답 기록 추가
               </button>
-              <div className="text-xs text-slate-600">
-                업로드된 멘토 정보 기준 · 현재 멘토 수 {quickMentorInfo?.mentors?.length || 0}명
-              </div>
+              {(Array.isArray(quickWrongAnswerDraft?.problems) ? quickWrongAnswerDraft.problems : []).length ? (
+                <div className="text-xs text-slate-600">
+                  업로드된 멘토 정보 기준 · 현재 멘토 수 {quickMentorInfo?.mentors?.length || 0}명
+                </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -2267,8 +2485,13 @@ export default function AssignmentStatus() {
           <div>
             <div className="text-lg font-semibold text-brand-800">질답 배정현황</div>
             <div className="text-sm text-slate-600">
-              멘토별 배정 목록을 예정 시간순으로 확인합니다.
+              질문 단위 목록을 최신 등록순으로 확인합니다.
             </div>
+            {mentorWindowMode && mentorFilterName ? (
+              <div className="mt-1 text-xs text-brand-700">
+                멘토 모아보기: <span className="font-semibold">{mentorFilterName}</span>
+              </div>
+            ) : null}
             {viewer?.display_name ? (
               <div className="mt-1 text-xs text-slate-500">
                 현재 사용자: {viewer.display_name} ({ROLE_LABEL[viewer.role] || viewer.role})
@@ -2286,7 +2509,7 @@ export default function AssignmentStatus() {
                 void loadStatus(next);
               }}
             >
-              {(weeks || []).map((w) => (
+              {weeksDesc.map((w) => (
                 <option key={w.id} value={w.id}>
                   {fmtWeekLabel(w)}
                 </option>
@@ -2300,8 +2523,33 @@ export default function AssignmentStatus() {
         <div className="mt-2 text-xs text-slate-500">
           {weekLabel ? `기준 회차: ${weekLabel}` : '회차를 선택해 주세요.'}
         </div>
+        {mentorWindowMode ? (
+          <div className="mt-1 text-xs text-slate-500">
+            새 창 모아보기 모드입니다. 이 창에서는 선택된 멘토 질문만 표시됩니다.
+          </div>
+        ) : null}
         {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
-        {isDirector && mentorDaySummaryRows.length ? (
+        {!mentorWindowMode && mentorOptions.length ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+            <div className="text-sm font-semibold text-slate-800">멘토 별 질문 모아보기</div>
+            <div className="mt-1 text-xs text-slate-600">
+              멘토 이름을 누르면 해당 멘토에게 배정된 질문만 새 창에서 최신순으로 확인할 수 있습니다.
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {mentorOptions.map((opt) => (
+                <button
+                  key={`mentor-window-${opt.mentor_name}`}
+                  type="button"
+                  className="btn-ghost h-8 px-2.5 text-xs"
+                  onClick={() => openMentorQuestionWindow(opt.mentor_name)}
+                >
+                  {opt.mentor_name} ({ROLE_LABEL[opt.mentor_role] || opt.mentor_role})
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {!mentorWindowMode && isDirector && mentorDaySummaryRows.length ? (
           <div className="mt-4 rounded-xl border border-slate-200 bg-white/80 p-3">
             <div className="flex items-center justify-between gap-2">
               <div className="text-sm font-semibold text-slate-800">멘토별 요일 배정 질문 수</div>
@@ -2358,7 +2606,7 @@ export default function AssignmentStatus() {
             )}
           </div>
         ) : null}
-        {canIssueBriefing ? (
+        {!mentorWindowMode && canIssueBriefing ? (
           <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
             <div className="text-sm font-semibold text-slate-800">멘토 사전 전송 링크 (48시간)</div>
             <div className="mt-1 text-xs text-slate-600">
@@ -2470,8 +2718,8 @@ export default function AssignmentStatus() {
       {busy ? (
         <div className="card p-5 text-sm text-slate-600">불러오는 중...</div>
       ) : grouped.length ? (
-        grouped.map((mentorGroup) => (
-          <div key={mentorGroup.mentor_name} className="card p-5">
+        grouped.map((mentorGroup, groupIndex) => (
+          <div key={`${mentorGroup.mentor_name}-${groupIndex}`} className="card p-5">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <div className="text-base font-semibold text-slate-900">{mentorGroup.mentor_name}</div>
@@ -2501,6 +2749,7 @@ export default function AssignmentStatus() {
                 const isStateSaving = stateSavingKey === rowKey;
                 const status = normalizeCompletionStatus(item?.completion_status);
                 const completionFeedback = String(item?.completion_feedback || '').trim();
+                const isOverdue = isAssignmentOverdue(item, selectedWeek);
                 const problemOrder = Math.max(
                   1,
                   Number(item.problem_order || (Number(item.problem_index || 0) + 1) || 1)
@@ -2522,6 +2771,11 @@ export default function AssignmentStatus() {
                         <span className={['inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]', completionStatusTone(status)].join(' ')}>
                           {completionStatusLabel(status)}
                         </span>
+                        {isOverdue ? (
+                          <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">
+                            배정일 지남
+                          </span>
+                        ) : null}
                         <div className="text-[11px] text-slate-500">배정일시: {fmtDateTime(item.assigned_at)}</div>
                         {canUpdateState ? (
                           <>
@@ -2826,3 +3080,4 @@ export default function AssignmentStatus() {
     </div>
   );
 }
+

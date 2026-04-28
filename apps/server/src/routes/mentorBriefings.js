@@ -428,6 +428,46 @@ function assignmentSortValue(item) {
   return 9000000 + dayOrderValue(item?.day_label) * 1000 + startValue;
 }
 
+function assignmentRecentSortValue(item) {
+  const assignedAtIso = toIso(item?.assigned_at);
+  if (assignedAtIso) {
+    const ts = new Date(assignedAtIso).getTime();
+    if (!Number.isNaN(ts)) return ts;
+  }
+
+  const month = Number(item?.session_month || 0);
+  const day = Number(item?.session_day || 0);
+  if (
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return 0;
+  }
+
+  const startMinutes = parseTimePart(item?.session_start_time);
+  const hour = startMinutes == null ? 0 : Math.floor(startMinutes / 60);
+  const minute = startMinutes == null ? 0 : startMinutes % 60;
+  const year = new Date().getFullYear();
+  const kstDate = new Date(Date.UTC(year, month - 1, day, hour - 9, minute, 0));
+  const ts = kstDate.getTime();
+  return Number.isNaN(ts) ? 0 : ts;
+}
+
+function formatElapsedKorean(ms) {
+  const safeMs = Math.max(0, Number(ms || 0) || 0);
+  const totalMinutes = Math.floor(safeMs / 60000);
+  if (totalMinutes < 1) return '방금 전';
+  if (totalMinutes < 60) return `${totalMinutes}분 전`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  if (totalHours < 24) return `${totalHours}시간 전`;
+  const totalDays = Math.floor(totalHours / 24);
+  return `${totalDays}일 전`;
+}
+
 function collectMentorBriefingItems(db, { weekId, mentorKey, baseUrl }) {
   const weeks = db
     .prepare('SELECT id, label, start_date, end_date FROM weeks ORDER BY id')
@@ -524,7 +564,9 @@ function collectMentorBriefingItems(db, { weekId, mentorKey, baseUrl }) {
   }
 
   items.sort((a, b) => {
-    const scheduleDiff = assignmentSortValue(a) - assignmentSortValue(b);
+    const recentDiff = assignmentRecentSortValue(b) - assignmentRecentSortValue(a);
+    if (recentDiff !== 0) return recentDiff;
+    const scheduleDiff = assignmentSortValue(b) - assignmentSortValue(a);
     if (scheduleDiff !== 0) return scheduleDiff;
     const studentCmp = String(a.student_name || '').localeCompare(String(b.student_name || ''));
     if (studentCmp !== 0) return studentCmp;
@@ -627,9 +669,11 @@ function renderMentorBriefingPage({
       .list{margin-top:16px;display:flex;flex-direction:column;gap:12px}
       .item{border:1px solid var(--line);border-radius:16px;background:#f7faff;padding:14px}
       .item-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
+      .badges{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
       .item-title{font-size:20px;font-weight:800;line-height:1.25}
       .item-sub{margin-top:6px;font-size:14px;color:var(--muted)}
       .badge{display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:999px;border:1px solid #c6d8ff;background:#edf4ff;font-size:12px;font-weight:700;color:#1f4f93}
+      .badge.new{border-color:#f8cf6b;background:#fff3cd;color:#7a4e00}
       .problem{margin-top:12px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
       .problem-head{font-size:12px;color:#5b7398}
       .problem-line{margin-top:6px;font-size:18px;line-height:1.45;font-weight:700;word-break:keep-all}
@@ -692,7 +736,19 @@ function renderMentorBriefingPage({
 
       function fmtDateTime(value) {
         if (!value) return '-';
-        return String(value).replace('T', ' ').slice(0, 16);
+        const raw = String(value || '').trim();
+        if (!raw) return '-';
+        const date = new Date(raw);
+        if (Number.isNaN(date.getTime())) return raw.replace('T', ' ').slice(0, 16);
+        return date.toLocaleString('ko-KR', {
+          timeZone: 'Asia/Seoul',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
       }
 
       function statusLabel(value) {
@@ -747,6 +803,8 @@ function renderMentorBriefingPage({
             item?.session_range_text && item.session_range_text !== '-' ? escapeText(item.session_range_text) : '시간 미정'
           ].filter(Boolean).join(' · ');
           const status = statusLabel(item?.completion_status);
+          const newSince = String(item?.new_since || '').trim();
+          const isNew = Boolean(item?.is_new);
           const noteText = String(item?.problem?.note || '').trim();
           const incompleteReason = String(item?.incomplete_reason || '').trim();
           const imageHtml = (Array.isArray(item?.problem?.images) ? item.problem.images : []).map((img, idx) => {
@@ -762,7 +820,10 @@ function renderMentorBriefingPage({
                 '<div class="item-title">' + title + '</div>' +
                 '<div class="item-sub">예정: ' + schedule + ' · 배정일시: ' + escapeText(fmtDateTime(item?.assigned_at)) + '</div>' +
               '</div>' +
-              '<span class="badge">' + escapeText(status) + '</span>' +
+              '<div class="badges">' +
+                (isNew ? '<span class="badge new">NEW' + (newSince ? ' · ' + escapeText(newSince) : '') + '</span>' : '') +
+                '<span class="badge">' + escapeText(status) + '</span>' +
+              '</div>' +
             '</div>' +
             '<section class="problem">' +
               '<div class="problem-head">해결 예정 문제</div>' +
@@ -791,6 +852,7 @@ function renderMentorBriefingPage({
             : (pinCode ? { token_id: tokenId, pin_code: pinCode } : { token_id: tokenId });
           const res = await fetch(openPath, {
             method: 'POST',
+            cache: 'no-store',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });
@@ -1055,10 +1117,25 @@ export default function mentorBriefingsRoutes(db) {
     if (!week?.id) return res.status(404).json({ error: '회차 정보를 찾을 수 없습니다.' });
 
     const baseUrl = requestPublicBaseUrl(req);
-    const items = collectMentorBriefingItems(db, {
+    const issuedAtIso = toIso(row.issued_at);
+    const issuedAtTs = issuedAtIso ? new Date(issuedAtIso).getTime() : 0;
+    const nowTs = Date.now();
+    const itemsRaw = collectMentorBriefingItems(db, {
       weekId: Number(row.week_id || 0),
       mentorKey: String(row.mentor_key || ''),
       baseUrl
+    });
+    const items = itemsRaw.map((item) => {
+      const assignedAtIso = toIso(item?.assigned_at);
+      const assignedAtTs = assignedAtIso ? new Date(assignedAtIso).getTime() : 0;
+      const isNew = Boolean(issuedAtTs && assignedAtTs && assignedAtTs > issuedAtTs);
+      const elapsedMs = isNew && assignedAtTs ? Math.max(0, nowTs - assignedAtTs) : 0;
+      return {
+        ...item,
+        is_new: isNew,
+        new_since: isNew ? formatElapsedKorean(elapsedMs) : '',
+        assigned_at_iso: assignedAtIso
+      };
     });
 
     return res.json({
@@ -1071,7 +1148,7 @@ export default function mentorBriefingsRoutes(db) {
         start_date: String(week.start_date || '').trim(),
         end_date: String(week.end_date || '').trim()
       },
-      issued_at: toIso(row.issued_at),
+      issued_at: issuedAtIso,
       expires_at: expiresAt,
       item_count: items.length,
       items

@@ -1239,8 +1239,12 @@ export default function mentoringRoutes(db) {
     }
 
     assignments.sort((a, b) => {
-      const mentorCmp = String(a.mentor_name || '').localeCompare(String(b.mentor_name || ''));
-      if (mentorCmp !== 0) return mentorCmp;
+      const aAssigned = new Date(String(a.assigned_at || '').trim()).getTime();
+      const bAssigned = new Date(String(b.assigned_at || '').trim()).getTime();
+      const aAssignedValid = !Number.isNaN(aAssigned) && aAssigned > 0;
+      const bAssignedValid = !Number.isNaN(bAssigned) && bAssigned > 0;
+      if (aAssignedValid && bAssignedValid && aAssigned !== bAssigned) return bAssigned - aAssigned;
+      if (aAssignedValid !== bAssignedValid) return aAssignedValid ? -1 : 1;
 
       const aMonth = Number(a.session_month || 0);
       const bMonth = Number(b.session_month || 0);
@@ -1250,21 +1254,24 @@ export default function mentoringRoutes(db) {
       const bHasDate = Number.isInteger(bMonth) && Number.isInteger(bDayNum) && bMonth >= 1 && bMonth <= 12 && bDayNum >= 1 && bDayNum <= 31;
 
       if (aHasDate && bHasDate) {
-        if (aMonth !== bMonth) return aMonth - bMonth;
-        if (aDayNum !== bDayNum) return aDayNum - bDayNum;
+        if (aMonth !== bMonth) return bMonth - aMonth;
+        if (aDayNum !== bDayNum) return bDayNum - aDayNum;
       } else if (aHasDate !== bHasDate) {
         return aHasDate ? -1 : 1;
       } else {
         const aDayOrder = dayOrderValue(a.day_label);
         const bDayOrder = dayOrderValue(b.day_label);
-        if (aDayOrder !== bDayOrder) return aDayOrder - bDayOrder;
+        if (aDayOrder !== bDayOrder) return bDayOrder - aDayOrder;
       }
 
       const aStart = parseTimePart(a.session_start_time);
       const bStart = parseTimePart(b.session_start_time);
       const aStartValue = aStart == null ? 9999 : aStart;
       const bStartValue = bStart == null ? 9999 : bStart;
-      if (aStartValue !== bStartValue) return aStartValue - bStartValue;
+      if (aStartValue !== bStartValue) return bStartValue - aStartValue;
+
+      const mentorCmp = String(a.mentor_name || '').localeCompare(String(b.mentor_name || ''));
+      if (mentorCmp !== 0) return mentorCmp;
 
       const studentCmp = String(a.student_name || '').localeCompare(String(b.student_name || ''));
       if (studentCmp !== 0) return studentCmp;
