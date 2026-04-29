@@ -3170,10 +3170,7 @@ export default function AssignmentStatus() {
         </div>
 
         <aside className="hidden xl:block">
-          <div
-            className="fixed top-24 z-30 w-[272px] rounded-2xl border border-[#d7ccb7] bg-gradient-to-b from-[#fffdfa] via-[#fbf7ef] to-[#f7f1e5] p-3.5 text-slate-700 shadow-[0_18px_44px_-30px_rgba(74,53,22,0.45)] backdrop-blur-sm"
-            style={{ right: 'max(1rem, calc((100vw - 80rem) / 2 + 1rem))' }}
-          >
+          <div className="sticky top-24 z-20 w-full rounded-2xl border border-[#d7ccb7] bg-gradient-to-b from-[#fffdfa] via-[#fbf7ef] to-[#f7f1e5] p-3.5 text-slate-700 shadow-[0_18px_44px_-30px_rgba(74,53,22,0.45)] backdrop-blur-sm">
             <div className="text-sm font-semibold tracking-tight text-brand-900">멘토 리모컨</div>
             <div className="mt-1 text-[11px] leading-4 text-slate-600">
               버튼을 누르면 같은 페이지에서 해당 멘토 섹션으로 이동합니다.
