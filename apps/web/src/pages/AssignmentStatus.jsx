@@ -1909,8 +1909,8 @@ export default function AssignmentStatus() {
 
   function renderDesktopMentorRemotePanel() {
     return (
-      <aside className="hidden xl:block">
-        <div className="sticky top-24 z-20 w-full rounded-2xl border border-[#d7ccb7] bg-gradient-to-b from-[#fffdfa] via-[#fbf7ef] to-[#f7f1e5] p-3.5 text-slate-700 shadow-[0_18px_44px_-30px_rgba(74,53,22,0.45)] backdrop-blur-sm">
+      <div className="hidden xl:flex xl:justify-end">
+        <div className="sticky top-24 z-30 w-[280px] rounded-2xl border border-[#d7ccb7] bg-gradient-to-b from-[#fffdfa] via-[#fbf7ef] to-[#f7f1e5] p-3.5 text-slate-700 shadow-[0_18px_44px_-30px_rgba(74,53,22,0.45)] backdrop-blur-sm">
           <div className="text-sm font-semibold tracking-tight text-brand-900">멘토 리모컨</div>
           <div className="mt-1 text-[11px] leading-4 text-slate-600">
             버튼을 누르면 같은 페이지에서 해당 멘토 섹션으로 이동합니다.
@@ -1965,7 +1965,7 @@ export default function AssignmentStatus() {
             )}
           </div>
         </div>
-      </aside>
+      </div>
     );
   }
 
@@ -2135,9 +2135,9 @@ export default function AssignmentStatus() {
 
   return (
     <div className="space-y-6">
+      {renderDesktopMentorRemotePanel()}
       {canUseQuickWrongAnswer ? (
-        <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_280px] xl:items-start xl:gap-4">
-          <div className="card p-5">
+        <div className="card p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
               <div className="text-sm font-semibold text-brand-900">오답 배분하기</div>
@@ -2611,12 +2611,10 @@ export default function AssignmentStatus() {
               ) : null}
             </div>
           )}
-          </div>
-          {renderDesktopMentorRemotePanel()}
         </div>
       ) : null}
 
-      <div className={canUseQuickWrongAnswer ? 'space-y-6' : 'xl:grid xl:grid-cols-[minmax(0,1fr)_280px] xl:items-start xl:gap-4'}>
+      <div className="space-y-6">
         <div className="min-w-0 space-y-6">
           <div className="card p-5">
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
@@ -3234,7 +3232,6 @@ export default function AssignmentStatus() {
           )}
         </div>
 
-        {!canUseQuickWrongAnswer ? renderDesktopMentorRemotePanel() : null}
       </div>
       {quickWrongAnswerUploadModal.open ? (
         <WrongAnswerImageUploadModal
