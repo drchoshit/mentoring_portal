@@ -17,9 +17,39 @@ function Shell({ children }) {
   return <AppShell>{children}</AppShell>;
 }
 
+function resolveHomeEntrySearchParams(location) {
+  const params = new URLSearchParams(location.search || '');
+  if (params.get('openPage')) return params;
+
+  const hashRaw = String(location.hash || '').trim();
+  if (hashRaw) {
+    const queryIndex = hashRaw.indexOf('?');
+    if (queryIndex >= 0 && queryIndex < hashRaw.length - 1) {
+      const hashParams = new URLSearchParams(hashRaw.slice(queryIndex + 1));
+      for (const [key, value] of hashParams.entries()) {
+        if (!params.has(key)) params.set(key, value);
+      }
+    }
+
+    const hashPath = hashRaw.replace(/^#\/?/, '').toLowerCase();
+    if (!params.get('openPage') && hashPath.startsWith('assignment-status')) {
+      params.set('openPage', 'assignment-status');
+    }
+  }
+
+  if (
+    !params.get('openPage') &&
+    String(params.get('mentorView') || '').trim() === '1'
+  ) {
+    params.set('openPage', 'assignment-status');
+  }
+
+  return params;
+}
+
 function HomeEntry({ user }) {
   const location = useLocation();
-  const searchParams = new URLSearchParams(location.search || '');
+  const searchParams = resolveHomeEntrySearchParams(location);
   const openPage = String(searchParams.get('openPage') || '').trim();
   const canOpenAssignmentStatus = ['director', 'lead', 'mentor', 'admin'].includes(String(user?.role || '').trim());
 

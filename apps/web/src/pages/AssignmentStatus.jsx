@@ -321,6 +321,15 @@ function completionStatusLabel(status) {
 
 const CALENDAR_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const CALENDAR_DAY_LABELS = { Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금', Sat: '토', Sun: '일' };
+const EN_WEEKDAY_TO_CALENDAR_DAY = {
+  Mon: 'Mon',
+  Tue: 'Tue',
+  Wed: 'Wed',
+  Thu: 'Thu',
+  Fri: 'Fri',
+  Sat: 'Sat',
+  Sun: 'Sun'
+};
 const KO_TO_EN_DAY = {
   월: 'Mon',
   화: 'Tue',
@@ -337,6 +346,14 @@ const KO_TO_EN_DAY = {
   토요일: 'Sat',
   일요일: 'Sun'
 };
+
+function getKstCalendarDay() {
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: KST_TIME_ZONE,
+    weekday: 'short'
+  }).format(new Date());
+  return EN_WEEKDAY_TO_CALENDAR_DAY[weekday] || '';
+}
 const WRONG_ANSWER_TONES = [
   {
     card: 'border-emerald-300/90 bg-emerald-50/35',
@@ -1103,6 +1120,7 @@ export default function AssignmentStatus() {
   const [weeks, setWeeks] = useState([]);
   const [weekId, setWeekId] = useState(sp.get('week') || '');
   const [rows, setRows] = useState([]);
+  const [statusMentorInfo, setStatusMentorInfo] = useState({ mentors: [] });
   const [viewer, setViewer] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1161,6 +1179,7 @@ export default function AssignmentStatus() {
     uploadUrl: '',
     problemIndex: -1
   });
+  const mentorSectionRefs = useRef(new Map());
   const isDirector = viewer?.role === 'director';
   const canEditAssignment = ['director', 'lead'].includes(String(viewer?.role || '').trim());
   const canUpdateState = Boolean(viewer?.role && viewer.role !== 'parent');
@@ -1194,6 +1213,7 @@ export default function AssignmentStatus() {
     try {
       const data = await api(`/api/mentoring/assignment-status?weekId=${encodeURIComponent(targetWeekId)}`);
       setRows(Array.isArray(data?.assignments) ? data.assignments : []);
+      setStatusMentorInfo(normalizeMentorInfo(data?.mentor_info));
       setViewer(data?.viewer || null);
       setEditingKey('');
       setSavingKey('');
@@ -1205,6 +1225,7 @@ export default function AssignmentStatus() {
     } catch (e) {
       setError(e?.message || '질답 배정현황을 불러오지 못했습니다.');
       setRows([]);
+      setStatusMentorInfo({ mentors: [] });
     } finally {
       setBusy(false);
     }
@@ -1772,8 +1793,6 @@ export default function AssignmentStatus() {
     await updateProblemState(item, { action: 'delete' });
   }
 
-  const mentorWindowMode = String(sp.get('mentorView') || '').trim() === '1';
-  const mentorFilterName = String(sp.get('mentor') || '').trim();
   const selectedWeek = useMemo(
     () => (weeks || []).find((w) => String(w.id) === String(weekId)) || null,
     [weeks, weekId]
@@ -1785,10 +1804,10 @@ export default function AssignmentStatus() {
   const sortedRows = useMemo(() => {
     const list = [...(Array.isArray(rows) ? rows : [])];
     list.sort((a, b) => {
-      const recentDiff = assignmentRecentSortValue(b, selectedWeek) - assignmentRecentSortValue(a, selectedWeek);
+      const recentDiff = assignmentRecentSortValue(a, selectedWeek) - assignmentRecentSortValue(b, selectedWeek);
       if (recentDiff !== 0) return recentDiff;
 
-      const scheduleDiff = scheduleSortValue(b) - scheduleSortValue(a);
+      const scheduleDiff = scheduleSortValue(a) - scheduleSortValue(b);
       if (scheduleDiff !== 0) return scheduleDiff;
 
       const studentCmp = String(a.student_name || '').localeCompare(String(b.student_name || ''));
@@ -1797,33 +1816,97 @@ export default function AssignmentStatus() {
     });
     return list;
   }, [rows, selectedWeek]);
-  const visibleRows = useMemo(() => {
-    if (!mentorFilterName) return sortedRows;
-    const targetKey = normalizeMentorNameKey(mentorFilterName);
-    return sortedRows.filter((row) => normalizeMentorNameKey(row?.mentor_name) === targetKey);
-  }, [sortedRows, mentorFilterName]);
   const mentorOptions = useMemo(() => {
     const byMentor = new Map();
     for (const row of sortedRows) {
       const mentorName = String(row?.mentor_name || '').trim();
-      if (!mentorName || byMentor.has(mentorName)) continue;
-      byMentor.set(mentorName, {
+      if (!mentorName) continue;
+      const mentorKey = normalizeMentorNameKey(mentorName);
+      if (byMentor.has(mentorKey)) continue;
+      byMentor.set(mentorKey, {
         mentor_name: mentorName,
         mentor_role: String(row?.mentor_role || '').trim() || 'mentor'
       });
     }
     return Array.from(byMentor.values());
   }, [sortedRows]);
-  const grouped = useMemo(
-    () =>
-      visibleRows.map((row) => ({
-        mentor_name: String(row?.mentor_name || '').trim() || '미배정',
-        mentor_role: String(row?.mentor_role || '').trim() || 'mentor',
-        items: [row]
-      })),
-    [visibleRows]
+  const grouped = useMemo(() => {
+    const byMentor = new Map();
+    for (const row of sortedRows) {
+      const mentorName = String(row?.mentor_name || '').trim() || '미배정';
+      const mentorRole = String(row?.mentor_role || '').trim() || 'mentor';
+      const mentorKey = normalizeMentorNameKey(mentorName);
+      if (!byMentor.has(mentorKey)) {
+        byMentor.set(mentorKey, {
+          mentor_name: mentorName,
+          mentor_role: mentorRole,
+          items: []
+        });
+      }
+      byMentor.get(mentorKey).items.push(row);
+    }
+    return Array.from(byMentor.values());
+  }, [sortedRows]);
+  const mentorOptionKeySet = useMemo(
+    () => new Set(mentorOptions.map((opt) => normalizeMentorNameKey(opt.mentor_name))),
+    [mentorOptions]
+  );
+  const todayCalendarDay = useMemo(() => getKstCalendarDay(), []);
+  const todayCalendarDayLabel = CALENDAR_DAY_LABELS[todayCalendarDay] || '-';
+  const todayClinicMentorOptions = useMemo(() => {
+    const mentors = Array.isArray(statusMentorInfo?.mentors) ? statusMentorInfo.mentors : [];
+    return mentors
+      .filter((mentor) => String(mentor?.role || '').trim() === 'mentor')
+      .filter((mentor) => {
+        const slots = Array.isArray(mentor?.schedule?.[todayCalendarDay]) ? mentor.schedule[todayCalendarDay] : [];
+        return slots.some((slot) => classifySchedule(slot) !== 'absence');
+      })
+      .map((mentor) => ({
+        mentor_name: String(mentor?.name || mentor?.mentor_id || '').trim(),
+        mentor_role: 'mentor',
+        has_assignment: mentorOptionKeySet.has(
+          normalizeMentorNameKey(String(mentor?.name || mentor?.mentor_id || '').trim())
+        )
+      }))
+      .filter((mentor) => mentor.mentor_name);
+  }, [statusMentorInfo, todayCalendarDay, mentorOptionKeySet]);
+  const todayClinicMentorWithAssignments = useMemo(
+    () => todayClinicMentorOptions.filter((mentor) => mentor.has_assignment),
+    [todayClinicMentorOptions]
   );
   const weekLabel = selectedWeek ? fmtWeekLabel(selectedWeek) : '';
+
+  function setMentorSectionRef(mentorName, node) {
+    const key = normalizeMentorNameKey(mentorName);
+    if (!key) return;
+    if (node) {
+      mentorSectionRefs.current.set(key, node);
+    } else {
+      mentorSectionRefs.current.delete(key);
+    }
+  }
+
+  function scrollToMentorSection(mentorName) {
+    const key = normalizeMentorNameKey(mentorName);
+    if (!key) return;
+    const node = mentorSectionRefs.current.get(key);
+    if (!node) {
+      setError(`"${mentorName}" 멘토 섹션을 찾지 못했습니다.`);
+      return;
+    }
+    setError('');
+    node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function scrollToTodayClinicMentorSection() {
+    const todayWithAssignments = todayClinicMentorWithAssignments[0];
+    if (!todayWithAssignments) {
+      setError(`오늘(${todayCalendarDayLabel}) 출근 클리닉 멘토의 배정 질문이 없습니다.`);
+      return;
+    }
+    scrollToMentorSection(todayWithAssignments.mentor_name);
+  }
+
   const selectedQuickStudent = useMemo(
     () => (students || []).find((student) => String(student?.id || '') === String(quickStudentId)) || null,
     [students, quickStudentId]
@@ -1988,22 +2071,9 @@ export default function AssignmentStatus() {
     }
   }
 
-  function openMentorQuestionWindow(mentorName) {
-    const name = String(mentorName || '').trim();
-    const currentWeekId = String(weekId || '').trim();
-    if (!name || !currentWeekId || typeof window === 'undefined') return;
-
-    const url = new URL(`${window.location.origin}/`);
-    url.searchParams.set('openPage', 'assignment-status');
-    url.searchParams.set('week', currentWeekId);
-    url.searchParams.set('mentor', name);
-    url.searchParams.set('mentorView', '1');
-    window.open(url.toString(), '_blank', 'noopener,noreferrer');
-  }
-
   return (
     <div className="space-y-6">
-      {!mentorWindowMode && canUseQuickWrongAnswer ? (
+      {canUseQuickWrongAnswer ? (
         <div className="card p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
@@ -2481,133 +2551,158 @@ export default function AssignmentStatus() {
         </div>
       ) : null}
 
-      <div className="card p-5">
-        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
-          <div>
-            <div className="text-lg font-semibold text-brand-800">질답 배정현황</div>
-            <div className="text-sm text-slate-600">
-              질문 단위 목록을 최신 등록순으로 확인합니다.
-            </div>
-            {mentorWindowMode && mentorFilterName ? (
-              <div className="mt-1 text-xs text-brand-700">
-                멘토 모아보기: <span className="font-semibold">{mentorFilterName}</span>
+      <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_280px] xl:items-start xl:gap-4">
+        <div className="min-w-0 space-y-6">
+          <div className="card p-5">
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-brand-800">질답 배정현황</div>
+                <div className="text-sm text-slate-600">
+                  멘토 별로 묶은 질문 목록을 등록순(오래된 순)으로 확인합니다.
+                </div>
+                {viewer?.display_name ? (
+                  <div className="mt-1 text-xs text-slate-500">
+                    현재 사용자: {viewer.display_name} ({ROLE_LABEL[viewer.role] || viewer.role})
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-            {viewer?.display_name ? (
-              <div className="mt-1 text-xs text-slate-500">
-                현재 사용자: {viewer.display_name} ({ROLE_LABEL[viewer.role] || viewer.role})
-              </div>
-            ) : null}
-          </div>
-          <div className="flex flex-wrap gap-2 items-center">
-            <select
-              className="input w-44"
-              value={weekId}
-              onChange={(e) => {
-                const next = String(e.target.value || '');
-                setWeekId(next);
-                setQueryParams({ week: next });
-                void loadStatus(next);
-              }}
-            >
-              {weeksDesc.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {fmtWeekLabel(w)}
-                </option>
-              ))}
-            </select>
-            <button className="btn-ghost" type="button" onClick={() => loadStatus(weekId)} disabled={busy || !weekId}>
-              새로고침
-            </button>
-          </div>
-        </div>
-        <div className="mt-2 text-xs text-slate-500">
-          {weekLabel ? `기준 회차: ${weekLabel}` : '회차를 선택해 주세요.'}
-        </div>
-        {mentorWindowMode ? (
-          <div className="mt-1 text-xs text-slate-500">
-            새 창 모아보기 모드입니다. 이 창에서는 선택된 멘토 질문만 표시됩니다.
-          </div>
-        ) : null}
-        {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
-        {!mentorWindowMode && mentorOptions.length ? (
-          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-            <div className="text-sm font-semibold text-slate-800">멘토 별 질문 모아보기</div>
-            <div className="mt-1 text-xs text-slate-600">
-              멘토 이름을 누르면 해당 멘토에게 배정된 질문만 새 창에서 최신순으로 확인할 수 있습니다.
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {mentorOptions.map((opt) => (
-                <button
-                  key={`mentor-window-${opt.mentor_name}`}
-                  type="button"
-                  className="btn-ghost h-8 px-2.5 text-xs"
-                  onClick={() => openMentorQuestionWindow(opt.mentor_name)}
+              <div className="flex flex-wrap gap-2 items-center">
+                <select
+                  className="input w-44"
+                  value={weekId}
+                  onChange={(e) => {
+                    const next = String(e.target.value || '');
+                    setWeekId(next);
+                    setQueryParams({ week: next });
+                    void loadStatus(next);
+                  }}
                 >
-                  {opt.mentor_name} ({ROLE_LABEL[opt.mentor_role] || opt.mentor_role})
+                  {weeksDesc.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {fmtWeekLabel(w)}
+                    </option>
+                  ))}
+                </select>
+                <button className="btn-ghost" type="button" onClick={() => loadStatus(weekId)} disabled={busy || !weekId}>
+                  새로고침
                 </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {!mentorWindowMode && isDirector && mentorDaySummaryRows.length ? (
-          <div className="mt-4 rounded-xl border border-slate-200 bg-white/80 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold text-slate-800">멘토별 요일 배정 질문 수</div>
-              <button
-                className="btn-ghost h-8 px-2 text-xs"
-                type="button"
-                onClick={() => setDirectorSummaryCollapsed((prev) => !prev)}
-              >
-                {directorSummaryCollapsed ? '펼치기' : '최소화'}
-              </button>
-            </div>
-            {!directorSummaryCollapsed ? (
-              <div className="mt-2 overflow-x-auto">
-                <table className="w-full min-w-[680px] text-sm">
-                  <thead className="bg-slate-50 text-slate-600">
-                    <tr>
-                      <th className="px-2 py-2 text-left border-b border-slate-200">멘토</th>
-                      {summaryDayColumns.map((day) => (
-                        <th key={`summary-day-head-${day}`} className="px-2 py-2 text-center border-b border-slate-200">
-                          {day}
-                        </th>
-                      ))}
-                      <th className="px-2 py-2 text-center border-b border-slate-200">미지정</th>
-                      <th className="px-2 py-2 text-center border-b border-slate-200">합계</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mentorDaySummaryRows.map((row) => (
-                      <tr key={`summary-row-${row.mentor_name}`} className="border-t border-slate-100">
-                        <td className="px-2 py-2">
-                          <div className="font-medium text-slate-900">{row.mentor_name}</div>
-                          <div className="text-[11px] text-slate-500">{ROLE_LABEL[row.mentor_role] || row.mentor_role}</div>
-                        </td>
-                        {summaryDayColumns.map((day) => (
-                          <td key={`summary-count-${row.mentor_name}-${day}`} className="px-2 py-2 text-center text-slate-800">
-                            {Number(row?.counts?.[day] || 0)}
-                          </td>
-                        ))}
-                        <td className="px-2 py-2 text-center text-slate-700">
-                          {Number(row?.counts?.['-'] || 0)}
-                        </td>
-                        <td className="px-2 py-2 text-center">
-                          <span className="inline-flex min-w-8 items-center justify-center rounded-full border border-brand-200 bg-brand-50 px-2 py-0.5 font-semibold text-brand-800">
-                            {Number(row?.total || 0)}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
-            ) : (
-              <div className="mt-2 text-xs text-slate-500">요약 표가 최소화되었습니다.</div>
-            )}
-          </div>
-        ) : null}
-        {!mentorWindowMode && canIssueBriefing ? (
+            </div>
+            <div className="mt-2 text-xs text-slate-500">
+              {weekLabel ? `기준 회차: ${weekLabel}` : '회차를 선택해 주세요.'}
+            </div>
+            {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
+
+            <div className="mt-4 xl:hidden rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <div className="text-sm font-semibold text-slate-800">멘토 리모컨</div>
+              <div className="mt-1 text-xs text-slate-600">
+                멘토를 누르면 해당 멘토 섹션으로 바로 이동합니다.
+              </div>
+              <button
+                type="button"
+                className="btn-primary mt-2 h-8 w-full px-2.5 text-xs"
+                disabled={!todayClinicMentorWithAssignments.length}
+                onClick={scrollToTodayClinicMentorSection}
+              >
+                오늘의 멘토 질답으로 이동하기 ({todayCalendarDayLabel})
+              </button>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {todayClinicMentorOptions.length ? (
+                  todayClinicMentorOptions.map((mentor) => (
+                    <button
+                      key={`today-mobile-${mentor.mentor_name}`}
+                      type="button"
+                      className={[
+                        'btn h-8 px-2.5 text-xs',
+                        mentor.has_assignment
+                          ? 'border border-emerald-200 bg-emerald-50 text-emerald-800'
+                          : 'border border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
+                      ].join(' ')}
+                      disabled={!mentor.has_assignment}
+                      onClick={() => scrollToMentorSection(mentor.mentor_name)}
+                      title={mentor.has_assignment ? '' : '이번 회차 배정 질문 없음'}
+                    >
+                      {mentor.mentor_name}
+                    </button>
+                  ))
+                ) : (
+                  <div className="text-xs text-slate-500">오늘 출근 멘토 정보가 없습니다.</div>
+                )}
+              </div>
+              <div className="mt-2 max-h-44 overflow-auto rounded-lg border border-slate-200 bg-white p-2">
+                <div className="flex flex-wrap gap-2">
+                  {mentorOptions.map((opt) => (
+                    <button
+                      key={`mentor-jump-mobile-${opt.mentor_name}`}
+                      type="button"
+                      className="btn-ghost h-7 px-2 text-[11px]"
+                      onClick={() => scrollToMentorSection(opt.mentor_name)}
+                    >
+                      {opt.mentor_name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {isDirector && mentorDaySummaryRows.length ? (
+              <div className="mt-4 rounded-xl border border-slate-200 bg-white/80 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-slate-800">멘토별 요일 배정 질문 수</div>
+                  <button
+                    className="btn-ghost h-8 px-2 text-xs"
+                    type="button"
+                    onClick={() => setDirectorSummaryCollapsed((prev) => !prev)}
+                  >
+                    {directorSummaryCollapsed ? '펼치기' : '최소화'}
+                  </button>
+                </div>
+                {!directorSummaryCollapsed ? (
+                  <div className="mt-2 overflow-x-auto">
+                    <table className="w-full min-w-[680px] text-sm">
+                      <thead className="bg-slate-50 text-slate-600">
+                        <tr>
+                          <th className="px-2 py-2 text-left border-b border-slate-200">멘토</th>
+                          {summaryDayColumns.map((day) => (
+                            <th key={`summary-day-head-${day}`} className="px-2 py-2 text-center border-b border-slate-200">
+                              {day}
+                            </th>
+                          ))}
+                          <th className="px-2 py-2 text-center border-b border-slate-200">미지정</th>
+                          <th className="px-2 py-2 text-center border-b border-slate-200">합계</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {mentorDaySummaryRows.map((row) => (
+                          <tr key={`summary-row-${row.mentor_name}`} className="border-t border-slate-100">
+                            <td className="px-2 py-2">
+                              <div className="font-medium text-slate-900">{row.mentor_name}</div>
+                              <div className="text-[11px] text-slate-500">{ROLE_LABEL[row.mentor_role] || row.mentor_role}</div>
+                            </td>
+                            {summaryDayColumns.map((day) => (
+                              <td key={`summary-count-${row.mentor_name}-${day}`} className="px-2 py-2 text-center text-slate-800">
+                                {Number(row?.counts?.[day] || 0)}
+                              </td>
+                            ))}
+                            <td className="px-2 py-2 text-center text-slate-700">
+                              {Number(row?.counts?.['-'] || 0)}
+                            </td>
+                            <td className="px-2 py-2 text-center">
+                              <span className="inline-flex min-w-8 items-center justify-center rounded-full border border-brand-200 bg-brand-50 px-2 py-0.5 font-semibold text-brand-800">
+                                {Number(row?.total || 0)}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-slate-500">요약 표가 최소화되었습니다.</div>
+                )}
+              </div>
+            ) : null}
+            {canIssueBriefing ? (
           <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
             <div className="text-sm font-semibold text-slate-800">멘토 사전 전송 링크 (48시간)</div>
             <div className="mt-1 text-xs text-slate-600">
@@ -2713,14 +2808,18 @@ export default function AssignmentStatus() {
               </div>
             ) : null}
           </div>
-        ) : null}
-      </div>
+            ) : null}
+          </div>
 
-      {busy ? (
-        <div className="card p-5 text-sm text-slate-600">불러오는 중...</div>
-      ) : grouped.length ? (
-        grouped.map((mentorGroup, groupIndex) => (
-          <div key={`${mentorGroup.mentor_name}-${groupIndex}`} className="card p-5">
+          {busy ? (
+            <div className="card p-5 text-sm text-slate-600">불러오는 중...</div>
+          ) : grouped.length ? (
+            grouped.map((mentorGroup, groupIndex) => (
+              <div
+                key={`${mentorGroup.mentor_name}-${groupIndex}`}
+                ref={(node) => setMentorSectionRef(mentorGroup.mentor_name, node)}
+                className="card p-5 scroll-mt-24"
+              >
             <div className="flex items-center justify-between gap-2">
               <div>
                 <div className="text-base font-semibold text-slate-900">{mentorGroup.mentor_name}</div>
@@ -3063,11 +3162,71 @@ export default function AssignmentStatus() {
                 );
               })}
             </div>
+              </div>
+            ))
+          ) : (
+            <div className="card p-5 text-sm text-slate-600">해당 회차에 배정된 학생이 없습니다.</div>
+          )}
+        </div>
+
+        <aside className="hidden xl:block">
+          <div className="sticky top-24 rounded-2xl border border-blue-200 bg-blue-600/90 p-3 text-blue-50 shadow-sm">
+            <div className="text-sm font-semibold">멘토 리모컨</div>
+            <div className="mt-1 text-[11px] text-blue-100">
+              버튼을 누르면 같은 페이지에서 해당 멘토 섹션으로 이동합니다.
+            </div>
+            <button
+              type="button"
+              className="mt-3 w-full rounded-lg border border-white/50 bg-white/10 px-2 py-1.5 text-xs font-semibold text-white hover:bg-white/20 disabled:opacity-60"
+              disabled={!todayClinicMentorWithAssignments.length}
+              onClick={scrollToTodayClinicMentorSection}
+            >
+              오늘의 멘토 질답으로 이동하기 ({todayCalendarDayLabel})
+            </button>
+            <div className="mt-2 text-[11px] font-semibold text-blue-100">오늘 출근 클리닉 멘토</div>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {todayClinicMentorOptions.length ? (
+                todayClinicMentorOptions.map((mentor) => (
+                  <button
+                    key={`today-desktop-${mentor.mentor_name}`}
+                    type="button"
+                    className={[
+                      'rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                      mentor.has_assignment
+                        ? 'border border-emerald-200 bg-emerald-50 text-emerald-800 hover:border-emerald-300'
+                        : 'border border-slate-200 bg-slate-100 text-slate-500 cursor-not-allowed'
+                    ].join(' ')}
+                    disabled={!mentor.has_assignment}
+                    onClick={() => scrollToMentorSection(mentor.mentor_name)}
+                    title={mentor.has_assignment ? '' : '이번 회차 배정 질문 없음'}
+                  >
+                    {mentor.mentor_name}
+                  </button>
+                ))
+              ) : (
+                <div className="text-[11px] text-blue-100">출근 정보가 없습니다.</div>
+              )}
+            </div>
+            <div className="mt-3 text-[11px] font-semibold text-blue-100">전체 멘토 이동</div>
+            <div className="mt-1 max-h-[50vh] space-y-1 overflow-auto pr-1">
+              {mentorOptions.length ? (
+                mentorOptions.map((opt) => (
+                  <button
+                    key={`mentor-jump-desktop-${opt.mentor_name}`}
+                    type="button"
+                    className="block w-full rounded-md border border-white/40 bg-white/10 px-2 py-1 text-left text-[11px] text-white hover:bg-white/20"
+                    onClick={() => scrollToMentorSection(opt.mentor_name)}
+                  >
+                    {opt.mentor_name}
+                  </button>
+                ))
+              ) : (
+                <div className="text-[11px] text-blue-100">배정된 멘토가 없습니다.</div>
+              )}
+            </div>
           </div>
-        ))
-      ) : (
-        <div className="card p-5 text-sm text-slate-600">해당 회차에 배정된 학생이 없습니다.</div>
-      )}
+        </aside>
+      </div>
       {quickWrongAnswerUploadModal.open ? (
         <WrongAnswerImageUploadModal
           loading={quickWrongAnswerUploadModal.loading}

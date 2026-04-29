@@ -1278,9 +1278,12 @@ export default function mentoringRoutes(db) {
       return String(a.external_id || '').localeCompare(String(b.external_id || ''));
     });
 
+    const mentorInfo = getMentorInfoSetting(db);
+
     return res.json({
       week,
       assignments,
+      mentor_info: mentorInfo,
       viewer: {
         role: req.user.role,
         display_name: req.user.display_name || req.user.username || ''

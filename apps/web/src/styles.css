@@ -14,13 +14,39 @@
   --primary-hover: #31463a;
 }
 
-html, body {
+html, body, #root {
   height: 100%;
+  width: 100%;
 }
 
 body {
+  margin: 0;
+  min-width: 320px;
+  overflow-x: hidden;
   color: var(--text-main);
   background: linear-gradient(165deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+}
+
+.app-shell-container {
+  width: min(100%, 80rem);
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+@media (min-width: 640px) {
+  .app-shell-container {
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .app-shell-container {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
 }
 
 .card {

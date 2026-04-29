@@ -49,7 +49,7 @@ export default function AppShell({ children }) {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-40 border-b border-gold-400/30 bg-white/70 backdrop-blur">
-        <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
+        <div className="app-shell-container flex items-center justify-between py-3">
           <Link
             to={role === 'parent' ? '/parent' : '/'}
             className="font-semibold tracking-wide text-brand-800"
@@ -68,7 +68,7 @@ export default function AppShell({ children }) {
         </div>
 
         <div className="border-t border-slate-200/60">
-          <div className="mx-auto max-w-7xl px-4 py-2">
+          <div className="app-shell-container py-2">
             <nav className="flex flex-wrap gap-2 overflow-x-auto">
               {menu.map((item) => (
                 <Item key={item.to} to={item.to}>
@@ -80,7 +80,7 @@ export default function AppShell({ children }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-6">
+      <main className="app-shell-container py-6">
         {children}
       </main>
     </div>
