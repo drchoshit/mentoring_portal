@@ -3170,20 +3170,23 @@ export default function AssignmentStatus() {
         </div>
 
         <aside className="hidden xl:block">
-          <div className="sticky top-24 rounded-2xl border border-blue-200 bg-blue-600/90 p-3 text-blue-50 shadow-sm">
-            <div className="text-sm font-semibold">멘토 리모컨</div>
-            <div className="mt-1 text-[11px] text-blue-100">
+          <div
+            className="fixed top-24 z-30 w-[272px] rounded-2xl border border-[#d7ccb7] bg-gradient-to-b from-[#fffdfa] via-[#fbf7ef] to-[#f7f1e5] p-3.5 text-slate-700 shadow-[0_18px_44px_-30px_rgba(74,53,22,0.45)] backdrop-blur-sm"
+            style={{ right: 'max(1rem, calc((100vw - 80rem) / 2 + 1rem))' }}
+          >
+            <div className="text-sm font-semibold tracking-tight text-brand-900">멘토 리모컨</div>
+            <div className="mt-1 text-[11px] leading-4 text-slate-600">
               버튼을 누르면 같은 페이지에서 해당 멘토 섹션으로 이동합니다.
             </div>
             <button
               type="button"
-              className="mt-3 w-full rounded-lg border border-white/50 bg-white/10 px-2 py-1.5 text-xs font-semibold text-white hover:bg-white/20 disabled:opacity-60"
+              className="mt-3 w-full rounded-lg border border-brand-700/30 bg-brand-700 px-2 py-1.5 text-xs font-semibold text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-55"
               disabled={!todayClinicMentorWithAssignments.length}
               onClick={scrollToTodayClinicMentorSection}
             >
               오늘의 멘토 질답으로 이동하기 ({todayCalendarDayLabel})
             </button>
-            <div className="mt-2 text-[11px] font-semibold text-blue-100">오늘 출근 클리닉 멘토</div>
+            <div className="mt-2.5 text-[11px] font-semibold text-slate-700">오늘 출근 클리닉 멘토</div>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {todayClinicMentorOptions.length ? (
                 todayClinicMentorOptions.map((mentor) => (
@@ -3204,24 +3207,24 @@ export default function AssignmentStatus() {
                   </button>
                 ))
               ) : (
-                <div className="text-[11px] text-blue-100">출근 정보가 없습니다.</div>
+                <div className="text-[11px] text-slate-500">출근 정보가 없습니다.</div>
               )}
             </div>
-            <div className="mt-3 text-[11px] font-semibold text-blue-100">전체 멘토 이동</div>
-            <div className="mt-1 max-h-[50vh] space-y-1 overflow-auto pr-1">
+            <div className="mt-3 text-[11px] font-semibold text-slate-700">전체 멘토 이동</div>
+            <div className="mt-1 max-h-[46vh] space-y-1 overflow-auto pr-1">
               {mentorOptions.length ? (
                 mentorOptions.map((opt) => (
                   <button
                     key={`mentor-jump-desktop-${opt.mentor_name}`}
                     type="button"
-                    className="block w-full rounded-md border border-white/40 bg-white/10 px-2 py-1 text-left text-[11px] text-white hover:bg-white/20"
+                    className="block w-full rounded-md border border-[#d8cfbf] bg-white/75 px-2 py-1 text-left text-[11px] text-slate-700 transition hover:border-[#c7b89a] hover:bg-white"
                     onClick={() => scrollToMentorSection(opt.mentor_name)}
                   >
                     {opt.mentor_name}
                   </button>
                 ))
               ) : (
-                <div className="text-[11px] text-blue-100">배정된 멘토가 없습니다.</div>
+                <div className="text-[11px] text-slate-500">배정된 멘토가 없습니다.</div>
               )}
             </div>
           </div>
