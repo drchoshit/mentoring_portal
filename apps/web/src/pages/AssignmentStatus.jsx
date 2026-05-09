@@ -914,6 +914,8 @@ function makeSessionRangeText(startTime, durationMinutes) {
 
 function buildWrongAnswerAssignmentFromCandidate(candidate, previousAssignment = null, patch = {}, assignedBy = '') {
   const previous = normalizeWrongAnswerAssignment(previousAssignment || null) || {};
+  const assignedAt = String(previous.assigned_at || '').trim() || new Date().toISOString();
+  const assignmentAuthor = String(previous.assigned_by || '').trim() || assignedBy;
   return normalizeWrongAnswerAssignment({
     mentor_id: String(candidate?.mentor_id || '').trim(),
     mentor_name: String(candidate?.mentor_name || '').trim(),
@@ -944,8 +946,8 @@ function buildWrongAnswerAssignmentFromCandidate(candidate, previousAssignment =
         Number(patch.session_duration_minutes ?? previous.session_duration_minutes ?? 20) || 20
       )
     ),
-    assigned_at: new Date().toISOString(),
-    assigned_by: assignedBy
+    assigned_at: assignedAt,
+    assigned_by: assignmentAuthor
   });
 }
 
@@ -1910,17 +1912,17 @@ export default function AssignmentStatus() {
   function renderDesktopMentorRemotePanel() {
     return (
       <div className="hidden xl:block">
-        <div className="rounded-2xl border border-[#d7ccb7] bg-gradient-to-r from-[#fffdfa] via-[#fbf7ef] to-[#f7f1e5] p-4 text-slate-700 shadow-[0_18px_44px_-30px_rgba(74,53,22,0.35)]">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-h-[220px] rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 via-blue-50 to-cyan-50 px-6 py-7 text-slate-800 shadow-[0_20px_48px_-28px_rgba(14,116,144,0.32)]">
+          <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="text-sm font-semibold tracking-tight text-brand-900">멘토 리모컨</div>
-              <div className="mt-1 text-xs leading-4 text-slate-600">
-                버튼을 누르면 같은 페이지에서 해당 멘토 섹션으로 이동합니다.
+              <div className="text-xl font-semibold tracking-tight text-sky-950">멘토 리모컨</div>
+              <div className="mt-2 text-sm font-medium text-sky-800">
+                오늘 출근 {todayClinicMentorOptions.length}명 · 배정 질문 있음 {todayClinicMentorWithAssignments.length}명
               </div>
             </div>
             <button
               type="button"
-              className="rounded-lg border border-brand-700/30 bg-brand-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-55"
+              className="min-h-11 rounded-xl border border-sky-700 bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-55"
               disabled={!todayClinicMentorWithAssignments.length}
               onClick={scrollToTodayClinicMentorSection}
             >
@@ -1928,20 +1930,20 @@ export default function AssignmentStatus() {
             </button>
           </div>
 
-          <div className="mt-3 grid gap-3 2xl:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+          <div className="mt-6 grid gap-5 2xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
             <div>
-              <div className="text-xs font-semibold text-slate-700">오늘 출근 클리닉 멘토</div>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
+              <div className="text-sm font-semibold text-sky-950">오늘 출근 클리닉 멘토</div>
+              <div className="mt-3 flex flex-wrap gap-2.5">
                 {todayClinicMentorOptions.length ? (
                   todayClinicMentorOptions.map((mentor) => (
                     <button
                       key={`today-desktop-${mentor.mentor_name}`}
                       type="button"
                       className={[
-                        'rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                        'min-h-10 rounded-full px-4 py-2 text-sm font-semibold shadow-sm transition',
                         mentor.has_assignment
-                          ? 'border border-emerald-200 bg-emerald-50 text-emerald-800 hover:border-emerald-300'
-                          : 'border border-slate-200 bg-slate-100 text-slate-500 cursor-not-allowed'
+                          ? 'border border-emerald-200 bg-white text-emerald-800 hover:border-emerald-300 hover:bg-emerald-50'
+                          : 'border border-sky-100 bg-sky-100/70 text-slate-500 cursor-not-allowed'
                       ].join(' ')}
                       disabled={!mentor.has_assignment}
                       onClick={() => scrollToMentorSection(mentor.mentor_name)}
@@ -1951,27 +1953,27 @@ export default function AssignmentStatus() {
                     </button>
                   ))
                 ) : (
-                  <div className="text-[11px] text-slate-500">출근 정보가 없습니다.</div>
+                  <div className="text-sm text-slate-500">출근 정보가 없습니다.</div>
                 )}
               </div>
             </div>
 
             <div>
-              <div className="text-xs font-semibold text-slate-700">전체 멘토 이동</div>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
+              <div className="text-sm font-semibold text-sky-950">전체 멘토 이동</div>
+              <div className="mt-3 flex flex-wrap gap-2.5">
                 {mentorOptions.length ? (
                   mentorOptions.map((opt) => (
                     <button
                       key={`mentor-jump-desktop-${opt.mentor_name}`}
                       type="button"
-                      className="rounded-md border border-[#d8cfbf] bg-white/80 px-2.5 py-1 text-[11px] text-slate-700 transition hover:border-[#c7b89a] hover:bg-white"
+                      className="min-h-10 rounded-xl border border-sky-200 bg-white/90 px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-sky-300 hover:bg-white"
                       onClick={() => scrollToMentorSection(opt.mentor_name)}
                     >
                       {opt.mentor_name}
                     </button>
                   ))
                 ) : (
-                  <div className="text-[11px] text-slate-500">배정된 멘토가 없습니다.</div>
+                  <div className="text-sm text-slate-500">배정된 멘토가 없습니다.</div>
                 )}
               </div>
             </div>
@@ -2668,30 +2670,30 @@ export default function AssignmentStatus() {
             </div>
             {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
 
-            <div className="mt-4 xl:hidden rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-              <div className="text-sm font-semibold text-slate-800">멘토 리모컨</div>
-              <div className="mt-1 text-xs text-slate-600">
-                멘토를 누르면 해당 멘토 섹션으로 바로 이동합니다.
+            <div className="mt-4 xl:hidden rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 via-blue-50 to-cyan-50 p-5">
+              <div className="text-lg font-semibold text-sky-950">멘토 리모컨</div>
+              <div className="mt-2 text-sm font-medium text-sky-800">
+                오늘 출근 {todayClinicMentorOptions.length}명 · 배정 질문 있음 {todayClinicMentorWithAssignments.length}명
               </div>
               <button
                 type="button"
-                className="btn-primary mt-2 h-8 w-full px-2.5 text-xs"
+                className="mt-4 min-h-11 w-full rounded-xl border border-sky-700 bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-55"
                 disabled={!todayClinicMentorWithAssignments.length}
                 onClick={scrollToTodayClinicMentorSection}
               >
                 오늘의 멘토 질답으로 이동하기 ({todayCalendarDayLabel})
               </button>
-              <div className="mt-2 flex flex-wrap gap-2">
+              <div className="mt-4 flex flex-wrap gap-2.5">
                 {todayClinicMentorOptions.length ? (
                   todayClinicMentorOptions.map((mentor) => (
                     <button
                       key={`today-mobile-${mentor.mentor_name}`}
                       type="button"
                       className={[
-                        'btn h-8 px-2.5 text-xs',
+                        'min-h-10 rounded-full px-4 py-2 text-sm font-semibold shadow-sm transition',
                         mentor.has_assignment
-                          ? 'border border-emerald-200 bg-emerald-50 text-emerald-800'
-                          : 'border border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'
+                          ? 'border border-emerald-200 bg-white text-emerald-800'
+                          : 'border border-sky-100 bg-sky-100/70 text-slate-400 cursor-not-allowed'
                       ].join(' ')}
                       disabled={!mentor.has_assignment}
                       onClick={() => scrollToMentorSection(mentor.mentor_name)}
@@ -2701,16 +2703,16 @@ export default function AssignmentStatus() {
                     </button>
                   ))
                 ) : (
-                  <div className="text-xs text-slate-500">오늘 출근 멘토 정보가 없습니다.</div>
+                  <div className="text-sm text-slate-500">오늘 출근 멘토 정보가 없습니다.</div>
                 )}
               </div>
-              <div className="mt-2 max-h-44 overflow-auto rounded-lg border border-slate-200 bg-white p-2">
-                <div className="flex flex-wrap gap-2">
+              <div className="mt-4 max-h-60 overflow-auto rounded-xl border border-sky-100 bg-white/80 p-3">
+                <div className="flex flex-wrap gap-2.5">
                   {mentorOptions.map((opt) => (
                     <button
                       key={`mentor-jump-mobile-${opt.mentor_name}`}
                       type="button"
-                      className="btn-ghost h-7 px-2 text-[11px]"
+                      className="min-h-10 rounded-xl border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm"
                       onClick={() => scrollToMentorSection(opt.mentor_name)}
                     >
                       {opt.mentor_name}

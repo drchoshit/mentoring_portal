@@ -1441,6 +1441,9 @@ export default function mentoringRoutes(db) {
       Math.min(240, Number(req.body?.session_duration_minutes ?? currentAssignment.session_duration_minutes ?? 20) || 20)
     );
 
+    const assignedAt = String(currentAssignment.assigned_at || '').trim() || new Date().toISOString();
+    const assignedBy = String(currentAssignment.assigned_by || '').trim() || req.user.role;
+
     const nextAssignment = normalizeWrongAnswerAssignment({
       ...currentAssignment,
       mentor_id: String(req.body?.mentor_id ?? currentAssignment.mentor_id ?? mentorName).trim(),
@@ -1451,8 +1454,8 @@ export default function mentoringRoutes(db) {
       session_day: dayRaw,
       session_start_time: startTime,
       session_duration_minutes: duration,
-      assigned_at: new Date().toISOString(),
-      assigned_by: req.user.role
+      assigned_at: assignedAt,
+      assigned_by: assignedBy
     });
     if (!nextAssignment) return res.status(400).json({ error: 'Invalid assignment payload' });
 
