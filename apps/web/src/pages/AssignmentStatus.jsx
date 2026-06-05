@@ -1220,8 +1220,6 @@ export default function AssignmentStatus() {
       setStateSavingKey('');
       setDoneEditKey('');
       setCompletionFeedbackDraft('');
-      setIncompleteEditKey('');
-      setIncompleteReasonDraft('');
     } catch (e) {
       setError(e?.message || '질답 배정현황을 불러오지 못했습니다.');
       setRows([]);
@@ -1266,8 +1264,6 @@ export default function AssignmentStatus() {
   function beginEdit(item) {
     if (!item) return;
     closeDoneEditor();
-    setIncompleteEditKey('');
-    setIncompleteReasonDraft('');
     setEditingKey(assignmentRowKey(item));
     const sessionMonth = String(item.session_month || '').trim();
     const sessionDay = String(item.session_day || '').trim();
