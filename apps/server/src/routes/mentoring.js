@@ -86,6 +86,50 @@ function hasMeaningfulText(value) {
   return String(value).trim().length > 0;
 }
 
+function hasMeaningfulClinicRecords(value) {
+  const parsed = safeJson(value, []);
+  if (!Array.isArray(parsed)) return false;
+  return parsed.some((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    return ['subject', 'material', 'problem_name', 'problem_type', 'note', 'mentor_name', 'solved_date']
+      .some((key) => String(entry[key] || '').trim());
+  });
+}
+
+function hasMeaningfulWrongAnswerDistribution(value) {
+  const parsed = safeJson(value, {});
+  if (!parsed || typeof parsed !== 'object') return false;
+  const problems = Array.isArray(parsed.problems)
+    ? parsed.problems
+    : Array.isArray(parsed.items)
+      ? parsed.items
+      : [parsed];
+  return problems.some((problem) => {
+    if (!problem || typeof problem !== 'object') return false;
+    if (String(problem.deleted_at || '').trim()) return false;
+    return ['subject', 'material', 'problem_name', 'problem_type', 'note']
+      .some((key) => String(problem[key] || '').trim());
+  });
+}
+
+function hasMeaningfulSubjectRecord(row) {
+  if (!row || typeof row !== 'object') return false;
+  return ['a_curriculum', 'a_last_hw', 'a_hw_exec', 'a_progress', 'a_this_hw', 'a_comment']
+    .some((key) => hasMeaningfulText(row[key]));
+}
+
+function hasMeaningfulParentWeekRecord(row) {
+  if (!row || typeof row !== 'object') return false;
+  if (hasMeaningfulText(row.b_daily_tasks)) return true;
+  if (hasMeaningfulText(row.b_daily_tasks_this_week)) return true;
+  if (hasMeaningfulText(row.b_lead_daily_feedback)) return true;
+  if (hasMeaningfulText(row.c_lead_weekly_feedback)) return true;
+  if (hasMeaningfulClinicRecords(row.d_clinic_records)) return true;
+  if (hasMeaningfulWrongAnswerDistribution(row.e_wrong_answer_distribution)) return true;
+  if (hasMeaningfulText(row.scores_json)) return true;
+  return false;
+}
+
 function toPositiveInt(v) {
   const n = Number(v);
   if (!Number.isInteger(n) || n <= 0) return null;
@@ -436,7 +480,9 @@ function normalizeWrongAnswerDistribution(value) {
     ? value.problems
     : Array.isArray(value.items)
       ? value.items
-      : [];
+      : ['subject', 'material', 'problem_name', 'problem_type', 'note'].some((key) => String(value[key] || '').trim())
+        ? [value]
+        : [];
   const topLevelAssignment = normalizeWrongAnswerAssignment(value.assignment);
   const problems = problemsRaw.length
     ? problemsRaw.map((item, idx) => normalizeWrongAnswerItem(item, idx === 0 ? topLevelAssignment : null))
@@ -1671,11 +1717,14 @@ export default function mentoringRoutes(db) {
 
       const findStudent = db.prepare('SELECT id, external_id, name FROM students WHERE id=?');
       const findWeekRecord = db.prepare(
-        'SELECT id, shared_with_parent FROM week_records WHERE student_id=? AND week_id=?'
+        `SELECT id, shared_with_parent, b_daily_tasks, b_daily_tasks_this_week, b_lead_daily_feedback,
+                c_lead_weekly_feedback, d_clinic_records, e_wrong_answer_distribution, scores_json
+         FROM week_records
+         WHERE student_id=? AND week_id=?`
       );
       const findSubjectRecords = db.prepare(
         `
-        SELECT id, a_this_hw, a_curriculum
+        SELECT id, a_curriculum, a_last_hw, a_hw_exec, a_progress, a_this_hw, a_comment
         FROM subject_records
         WHERE student_id=? AND week_id=?
         ORDER BY id
@@ -1711,13 +1760,21 @@ export default function mentoringRoutes(db) {
           const subjectCount = subjectRows.length;
           const homeworkSubjectCount = subjectRows.filter((row) => hasThisWeekHomework(row?.a_this_hw)).length;
           const curriculumSubjectCount = subjectRows.filter((row) => hasMeaningfulText(row?.a_curriculum)).length;
+          const parentSubjectContentCount = subjectRows.filter(hasMeaningfulSubjectRecord).length;
+          const hasParentWeekContent = hasMeaningfulParentWeekRecord(weekRow);
+          const clinicRecordCount = hasMeaningfulClinicRecords(weekRow?.d_clinic_records) ? 1 : 0;
+          const wrongAnswerRecordCount = hasMeaningfulWrongAnswerDistribution(weekRow?.e_wrong_answer_distribution) ? 1 : 0;
+          const hasParentContent = parentSubjectContentCount > 0 || hasParentWeekContent;
 
           const reasonCodes = [];
           const reasonMessages = [];
 
-          if (!subjectCount) {
+          if (hasParentContent) {
+            // Any parent-facing record is publishable even when the core
+            // subject homework/curriculum summary is not fully filled yet.
+          } else if (!subjectCount) {
             reasonCodes.push('no_subject_records');
-            reasonMessages.push('수강 진도(과목 별)에 등록된 과목이 없어 공유를 건너뜁니다.');
+            reasonMessages.push('학부모에게 공유할 기록이 없어 공유를 건너뜁니다.');
           } else {
             if (homeworkSubjectCount === 0) {
               reasonCodes.push('no_this_week_homework');
@@ -1740,7 +1797,11 @@ export default function mentoringRoutes(db) {
               reasons_ko: reasonMessages,
               subject_count: subjectCount,
               homework_subject_count: homeworkSubjectCount,
-              curriculum_subject_count: curriculumSubjectCount
+              curriculum_subject_count: curriculumSubjectCount,
+              parent_subject_content_count: parentSubjectContentCount,
+              has_parent_week_content: hasParentWeekContent,
+              clinic_record_count: clinicRecordCount,
+              wrong_answer_record_count: wrongAnswerRecordCount
             });
             continue;
           }

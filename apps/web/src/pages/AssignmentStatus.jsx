@@ -1131,8 +1131,6 @@ export default function AssignmentStatus() {
   const [stateSavingKey, setStateSavingKey] = useState('');
   const [doneEditKey, setDoneEditKey] = useState('');
   const [completionFeedbackDraft, setCompletionFeedbackDraft] = useState('');
-  const [incompleteEditKey, setIncompleteEditKey] = useState('');
-  const [incompleteReasonDraft, setIncompleteReasonDraft] = useState('');
   const [briefingMentor, setBriefingMentor] = useState('');
   const [briefingPhone, setBriefingPhone] = useState('');
   const [briefingBusy, setBriefingBusy] = useState(false);
@@ -1322,21 +1320,10 @@ export default function AssignmentStatus() {
     }
   }
 
-  function openIncompleteEditor(item) {
-    const rowKey = assignmentRowKey(item);
-    if (!rowKey) return;
-    closeDoneEditor();
-    setEditingKey('');
-    setIncompleteEditKey(rowKey);
-    setIncompleteReasonDraft(String(item?.incomplete_reason || ''));
-  }
-
   function openDoneEditor(item) {
     const rowKey = assignmentRowKey(item);
     if (!rowKey) return;
     setEditingKey('');
-    setIncompleteEditKey('');
-    setIncompleteReasonDraft('');
     setDoneEditKey(rowKey);
     setCompletionFeedbackDraft(String(item?.completion_feedback || ''));
   }
@@ -1344,11 +1331,6 @@ export default function AssignmentStatus() {
   function closeDoneEditor() {
     setDoneEditKey('');
     setCompletionFeedbackDraft('');
-  }
-
-  function closeIncompleteEditor() {
-    setIncompleteEditKey('');
-    setIncompleteReasonDraft('');
   }
 
   function updateQuickWrongAnswerProblem(index, patch) {
@@ -1765,7 +1747,6 @@ export default function AssignmentStatus() {
 
   async function saveProblemDone(item) {
     const feedback = String(completionFeedbackDraft || '');
-    closeIncompleteEditor();
     const ok = await updateProblemState(item, {
       completion_status: 'done',
       incomplete_reason: '',
@@ -1774,24 +1755,10 @@ export default function AssignmentStatus() {
     if (ok) closeDoneEditor();
   }
 
-  async function saveProblemIncomplete(item) {
-    const reason = String(incompleteReasonDraft || '').trim();
-    if (!reason) {
-      setError('미완료 사유를 입력해 주세요.');
-      return;
-    }
-    const ok = await updateProblemState(item, {
-      completion_status: 'incomplete',
-      incomplete_reason: reason
-    });
-    if (ok) closeIncompleteEditor();
-  }
-
   async function deleteProblemItem(item) {
     const ok = window.confirm('이 배정 항목을 삭제할까요? 데이터와 이미지는 즉시 물리 삭제되지 않습니다.');
     if (!ok) return;
     closeDoneEditor();
-    closeIncompleteEditor();
     await updateProblemState(item, { action: 'delete' });
   }
 
@@ -2922,7 +2889,6 @@ export default function AssignmentStatus() {
                 const rowKey = assignmentRowKey(item);
                 const isEditing = canEditAssignment && editingKey === rowKey;
                 const isDoneEditing = doneEditKey === rowKey;
-                const isIncompleteEditing = incompleteEditKey === rowKey;
                 const isStateSaving = stateSavingKey === rowKey;
                 const status = normalizeCompletionStatus(item?.completion_status);
                 const completionFeedback = String(item?.completion_feedback || '').trim();
@@ -2963,14 +2929,6 @@ export default function AssignmentStatus() {
                               onClick={() => void markProblemDone(item)}
                             >
                               완료
-                            </button>
-                            <button
-                              type="button"
-                              className={status === 'incomplete' || isIncompleteEditing ? 'btn border border-amber-700 bg-amber-600 text-white h-8 px-2.5 text-xs hover:bg-amber-700' : 'btn-ghost h-8 px-2.5 text-xs'}
-                              disabled={isStateSaving || savingKey === rowKey}
-                              onClick={() => openIncompleteEditor(item)}
-                            >
-                              미완료
                             </button>
                           </>
                         ) : null}
@@ -3141,36 +3099,6 @@ export default function AssignmentStatus() {
                         <div className="text-[11px] font-semibold text-emerald-800">완료 피드백</div>
                         <div className="mt-1 whitespace-pre-wrap text-xs text-emerald-900">
                           {completionFeedback}
-                        </div>
-                      </div>
-                    ) : isIncompleteEditing ? (
-                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-2">
-                        <div className="text-[11px] text-amber-800">미완료 사유</div>
-                        <textarea
-                          rows={2}
-                          className="textarea mt-1 min-h-[56px]"
-                          value={incompleteReasonDraft}
-                          onChange={(e) => setIncompleteReasonDraft(e.target.value)}
-                          placeholder="예: 학생 결석으로 미진행, 문제 풀이 미제출 등"
-                          disabled={isStateSaving}
-                        />
-                        <div className="mt-2 flex justify-end gap-2">
-                          <button
-                            type="button"
-                            className="btn border border-amber-700 bg-amber-600 text-white h-8 px-2.5 text-xs hover:bg-amber-700"
-                            disabled={isStateSaving}
-                            onClick={() => void saveProblemIncomplete(item)}
-                          >
-                            저장
-                          </button>
-                          <button
-                            type="button"
-                            className="btn-ghost h-8 px-2.5 text-xs"
-                            disabled={isStateSaving}
-                            onClick={closeIncompleteEditor}
-                          >
-                            취소
-                          </button>
                         </div>
                       </div>
                     ) : status === 'incomplete' && String(item?.incomplete_reason || '').trim() ? (

@@ -197,7 +197,9 @@ function parseWrongAnswerItems(value) {
     ? parsed.problems
     : Array.isArray(parsed.items)
       ? parsed.items
-      : [];
+      : ['subject', 'material', 'problem_name', 'problem_type', 'note'].some((key) => String(parsed[key] || '').trim())
+        ? [parsed]
+        : [];
   return problems
     .map((item, idx) => normalizeWrongAnswerItem(item, idx === 0 ? topLevelAssignment : null))
     .filter(Boolean);
@@ -217,8 +219,8 @@ function QnaStatusBadge({ status }) {
   );
 }
 
-function TaskStatusBadge({ done, progress, hideWhenEmpty = false }) {
-  if (hideWhenEmpty && done == null && !progress) return null;
+function TaskStatusBadge({ done, progress }) {
+  if (done == null) return null;
 
   if (done === true) {
     return (
@@ -236,11 +238,7 @@ function TaskStatusBadge({ done, progress, hideWhenEmpty = false }) {
     );
   }
 
-  return (
-    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
-      상태 미선택
-    </span>
-  );
+  return null;
 }
 
 function Badge({ children }) {
@@ -383,7 +381,7 @@ function RecordBox({ title, value, tone = 'border-slate-200 bg-white/60' }) {
   );
 }
 
-function DayNote({ label, value }) {
+function DayNote({ label, value, eyebrow = 'Daily Task' }) {
   const tasks = parseLastHwTasks(value);
 
   return (
@@ -392,14 +390,14 @@ function DayNote({ label, value }) {
         {label}
       </div>
       <div className="min-w-0">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Daily Task</div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{eyebrow}</div>
         {tasks.length ? (
           <div className="mt-2 space-y-2">
             {tasks.map((task, idx) => (
               <div key={`${task.text}-${idx}`} className="rounded-2xl border border-slate-100 bg-slate-50/70 px-3 py-2.5">
                 <div className="flex flex-wrap items-start gap-2">
                   <div className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-6 text-slate-800">{task.text}</div>
-                  <TaskStatusBadge done={task.done} progress={task.progress} hideWhenEmpty />
+                  <TaskStatusBadge done={task.done} progress={task.progress} />
                 </div>
               </div>
             ))}
@@ -412,12 +410,12 @@ function DayNote({ label, value }) {
   );
 }
 
-function DailyTasksWeekPanel({ title, tasksByDay }) {
+function DailyTasksWeekPanel({ title, tasksByDay, eyebrow = 'Daily Task' }) {
   return (
     <div className="rounded-[24px] border border-white/80 bg-white/76 p-4 shadow-sm">
       <div className="text-sm font-semibold text-brand-900">{title}</div>
       <div className="mt-3 grid grid-cols-1 gap-3">
-        {DAYS.map((d) => <DayNote key={`${title}-${d.k}`} label={d.label} value={tasksByDay?.[d.k]} />)}
+        {DAYS.map((d) => <DayNote key={`${title}-${d.k}`} label={d.label} value={tasksByDay?.[d.k]} eyebrow={eyebrow} />)}
       </div>
     </div>
   );
@@ -560,18 +558,26 @@ export default function Parent() {
   const weekRecord = useMemo(() => (record?.week_record || {}), [record]);
   const dailyTasks = useMemo(() => safeJson(weekRecord?.b_daily_tasks, {}), [weekRecord]);
   const dailyTasksThisWeek = useMemo(() => safeJson(weekRecord?.b_daily_tasks_this_week, {}), [weekRecord]);
+  const dailyLeadFeedback = useMemo(() => safeJson(weekRecord?.b_lead_daily_feedback, {}), [weekRecord]);
+  const leadWeeklyFeedback = useMemo(() => String(weekRecord?.c_lead_weekly_feedback || '').trim(), [weekRecord]);
   const clinicEntries = useMemo(() => parseClinicEntries(weekRecord?.d_clinic_records), [weekRecord]);
   const wrongAnswerItems = useMemo(() => parseWrongAnswerItems(weekRecord?.e_wrong_answer_distribution), [weekRecord]);
   const scores = useMemo(() => safeJson(weekRecord?.scores_json, []), [weekRecord]);
+  const hasDailyLeadFeedback = useMemo(
+    () => DAYS.some((day) => parseLastHwTasks(dailyLeadFeedback?.[day.k]).length > 0),
+    [dailyLeadFeedback]
+  );
   const showQnaClinicSection = showClinicSection || wrongAnswerItems.length > 0 || clinicEntries.length > 0;
+  const showWeeklyFeedbackSection = hasDailyLeadFeedback || Boolean(leadWeeklyFeedback);
   const combinedQnaEntries = useMemo(() => {
     const wrongAnswerEntries = wrongAnswerItems.map((item, idx) => {
-      const question = joinNonEmpty([
+      const questionText = joinNonEmpty([
         item.subject,
         item.material,
         item.problem_name,
         item.problem_type
       ]);
+      const question = questionText || item.note;
       if (!question) return null;
 
       return {
@@ -580,18 +586,22 @@ export default function Parent() {
         mentorName: item.assignment?.mentor_name || '',
         dateLabel: formatDateTimeLabel(item.status_updated_at),
         status: item.completion_status,
+        note: questionText ? item.note || '' : '',
+        feedbackLabel: item.completion_status === 'incomplete' ? '미완료 사유' : '마무리/피드백',
+        feedbackText: item.completion_status === 'incomplete' ? item.incomplete_reason : item.completion_feedback,
         sortTime: parseDateTimeValue(item.status_updated_at)?.getTime() || 0,
         originalOrder: idx
       };
     });
 
     const clinicQnaEntries = clinicEntries.map((entry, idx) => {
-      const question = joinNonEmpty([
+      const questionText = joinNonEmpty([
         entry.subject,
         entry.material,
         entry.problem_name,
         entry.problem_type
       ]);
+      const question = questionText || entry.summary;
       if (!question) return null;
 
       return {
@@ -600,6 +610,9 @@ export default function Parent() {
         mentorName: entry.mentor_name || '',
         dateLabel: formatDateTimeLabel(entry.solved_date),
         status: 'done',
+        note: '',
+        feedbackLabel: '마무리/피드백',
+        feedbackText: questionText ? entry.summary : '',
         sortTime: parseDateTimeValue(entry.solved_date)?.getTime() || 0,
         originalOrder: wrongAnswerItems.length + idx
       };
@@ -770,8 +783,10 @@ export default function Parent() {
             <div className="mt-4 space-y-4">
               {subjectRecords.length ? subjectRecords.map((sr, idx) => {
                 const blocks = [
+                  { key: 'a_curriculum', label: '학습 커리큘럼', value: sr.a_curriculum, tone: 'border-sky-200/60 bg-sky-50/70' },
                   { key: 'a_last_hw', label: '지난주 과제', value: renderLastHw(sr.a_last_hw), tone: 'border-blue-200/60 bg-blue-50/70' },
                   { key: 'a_hw_exec', label: '과제 이행도', value: sr.a_hw_exec, tone: 'border-emerald-200/60 bg-emerald-50/70' },
+                  { key: 'a_progress', label: '진행상황 피드백', value: sr.a_progress, tone: 'border-emerald-200/60 bg-emerald-50/70' },
                   { key: 'a_this_hw', label: '이번주 과제', value: renderLastHw(sr.a_this_hw), tone: 'border-amber-200/60 bg-amber-50/70' },
                   { key: 'a_comment', label: '과목 별 코멘트', value: sr.a_comment, tone: 'border-amber-200/60 bg-amber-50/70' }
                 ].filter((b) => b.value);
@@ -798,7 +813,10 @@ export default function Parent() {
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
             <div className="mt-4 grid grid-cols-1 gap-4">
               {useNewDailyTaskLayout ? (
-                <DailyTasksWeekPanel title="일일 학습 과제(이번주)" tasksByDay={dailyTasksThisWeek} />
+                <>
+                  <DailyTasksWeekPanel title="일일 학습 과제(지난주)" tasksByDay={dailyTasks} />
+                  <DailyTasksWeekPanel title="일일 학습 과제(이번주)" tasksByDay={dailyTasksThisWeek} />
+                </>
               ) : (
                 <DailyTasksWeekPanel title="일일 학습 과제" tasksByDay={dailyTasks} />
               )}
@@ -806,6 +824,26 @@ export default function Parent() {
           ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
         </div>
       </BlockedSection>
+
+      {showWeeklyFeedbackSection ? (
+        <BlockedSection blocked={isLockedWeek}>
+          <div className={sectionCardClass(SECTION_TONES.weekly)}>
+            <SectionTitle title="총괄멘토 피드백" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+            <div className="mt-4 grid grid-cols-1 gap-4">
+              {hasDailyLeadFeedback ? (
+                <DailyTasksWeekPanel title="요일 별 총괄멘토 피드백" tasksByDay={dailyLeadFeedback} eyebrow="Feedback" />
+              ) : null}
+              {leadWeeklyFeedback ? (
+                <RecordBox
+                  title="주간 총괄멘토 피드백"
+                  value={leadWeeklyFeedback}
+                  tone="border-emerald-200/60 bg-emerald-50/70"
+                />
+              ) : null}
+            </div>
+          </div>
+        </BlockedSection>
+      ) : null}
 
       {showQnaClinicSection ? (
         <BlockedSection blocked={isLockedWeek}>
@@ -845,6 +883,18 @@ export default function Parent() {
                                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-800">학생 질문</div>
                                 <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">{entry.question}</div>
                               </div>
+                              {entry.note ? (
+                                <div className="rounded-2xl border border-sky-100 bg-sky-50/80 p-3">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-800">전달사항</div>
+                                  <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-sky-900">{entry.note}</div>
+                                </div>
+                              ) : null}
+                              {entry.feedbackText ? (
+                                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800">{entry.feedbackLabel}</div>
+                                  <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-emerald-900">{entry.feedbackText}</div>
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         );
