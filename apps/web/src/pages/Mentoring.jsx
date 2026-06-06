@@ -2782,14 +2782,6 @@ export default function Mentoring() {
               >
                 선택 회차 불러오기
               </button>
-              <button
-                className="btn-primary"
-                type="button"
-                onClick={saveCurriculumSubjects}
-                disabled={busy || parentMode || !subjectRecords.length || !canEdit(perms, user?.role, 'a_curriculum')}
-              >
-                수정 저장
-              </button>
               <input
                 className="input w-64"
                 placeholder="새 과목명"
@@ -2799,6 +2791,14 @@ export default function Mentoring() {
               />
               <button className="btn-primary" onClick={addSubject} disabled={busy || parentMode || !newSubject.trim()}>
                 과목 추가
+              </button>
+              <button
+                className="btn-primary"
+                type="button"
+                onClick={saveCurriculumSubjects}
+                disabled={busy || parentMode || !subjectRecords.length || !canEdit(perms, user?.role, 'a_curriculum')}
+              >
+                수정 저장
               </button>
             </div>
           </div>
