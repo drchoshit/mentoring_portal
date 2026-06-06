@@ -25,6 +25,40 @@ function escapeCsv(v) {
   return s;
 }
 
+function formatKoreanPhone(v) {
+  const raw = String(v ?? '').trim();
+  if (!raw) return '';
+
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return raw;
+
+  if (digits.length === 10 && digits.startsWith('10')) {
+    return `010-${digits.slice(2, 6)}-${digits.slice(6)}`;
+  }
+  if (digits.startsWith('02')) {
+    if (digits.length === 9) return `02-${digits.slice(2, 5)}-${digits.slice(5)}`;
+    if (digits.length === 10) return `02-${digits.slice(2, 6)}-${digits.slice(6)}`;
+  }
+  if (digits.length === 10 && digits.startsWith('01')) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  if (digits.length === 11 && digits.startsWith('01')) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
+  }
+  if (digits.length === 10) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  if (digits.length === 11) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
+  }
+  return raw;
+}
+
+function escapeExcelTextCsv(v) {
+  const text = formatKoreanPhone(v);
+  return text ? escapeCsv(`="${text}"`) : escapeCsv('');
+}
+
 export default function userRoutes(db) {
   const router = express.Router();
 
@@ -351,8 +385,8 @@ export default function userRoutes(db) {
       lines.push([
         escapeCsv(r.name ?? ''),
         escapeCsv(r.username ?? ''),
-        escapeCsv(r.student_phone ?? ''),
-        escapeCsv(r.parent_phone ?? ''),
+        escapeExcelTextCsv(r.student_phone ?? ''),
+        escapeExcelTextCsv(r.parent_phone ?? ''),
         escapeCsv(r.password ?? ''),
         escapeCsv('parent'),
         escapeCsv(Number(r.is_active ?? 1) ? 'on' : 'off')

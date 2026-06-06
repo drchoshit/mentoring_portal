@@ -1910,6 +1910,30 @@ export default function Mentoring() {
     }
   }
 
+  async function saveCurriculumSubjects() {
+    setBusy(true);
+    try {
+      if (!subjectRecords.length) return;
+      if (!canEdit(perms, user?.role, 'a_curriculum')) return;
+      confirmOrThrow('학습 커리큘럼을 저장할까요?');
+
+      for (const r of subjectRecords) {
+        const sid = String(r.id);
+        const draft = subjectDrafts?.[sid] || {};
+        await api(`/api/mentoring/subject-record/${sid}`, {
+          method: 'PUT',
+          body: { a_curriculum: draft?.a_curriculum ?? '' }
+        });
+      }
+
+      await loadAll();
+    } catch (e) {
+      if (e?.message !== '__CANCEL__') setError(e?.message || '학습 커리큘럼 저장에 실패했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveAll() {
     if (!weekRecordId) {
       setError('회차를 먼저 선택해 주세요.');
@@ -2757,6 +2781,14 @@ export default function Mentoring() {
                 disabled={parentMode || busy || !curriculumSourceOptions.length}
               >
                 선택 회차 불러오기
+              </button>
+              <button
+                className="btn-primary"
+                type="button"
+                onClick={saveCurriculumSubjects}
+                disabled={busy || parentMode || !subjectRecords.length || !canEdit(perms, user?.role, 'a_curriculum')}
+              >
+                수정 저장
               </button>
               <input
                 className="input w-64"
