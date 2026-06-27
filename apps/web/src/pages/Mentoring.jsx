@@ -4149,7 +4149,10 @@ function ClinicSectionCard({ value, visible, editable, onSave, onAutoSave, onCha
 
 /* (2) 학생 정보 분리 + 성적/내신 카드 */
 const StudentProfileSection = forwardRef(function StudentProfileSection({ studentId, profileJson, userRole, busy, setBusy, setError }, ref) {
-  const isReadOnly = userRole === 'parent' || userRole === 'mentor';
+  const canEditStudentInfo = ['director', 'admin', 'lead'].includes(String(userRole || '').trim());
+  const canViewScores = String(userRole || '').trim() === 'director';
+  const isStudentInfoReadOnly = !canEditStudentInfo;
+  const isScoresReadOnly = !canViewScores;
 
   const defaultProfile = useMemo(
     () => ({
@@ -4243,7 +4246,7 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
             <div className="text-sm font-semibold text-brand-900">학생 정보</div>
             <div className="text-xs text-slate-700">학생 단위 정보(회차와 무관)</div>
           </div>
-          <button className="btn-primary" disabled={busy || isReadOnly} onClick={saveProfile}>
+          <button className="btn-primary" disabled={busy || isStudentInfoReadOnly} onClick={saveProfile}>
             저장
           </button>
         </div>
@@ -4251,27 +4254,27 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
         <div className="mt-4 grid grid-cols-12 gap-3">
           <div className="col-span-12 md:col-span-4">
             <div className="text-xs text-slate-800">목표 대학</div>
-            <input className="input mt-1" value={profile?.student_info?.goal_univ || ''} onChange={(e) => updateInfo({ goal_univ: e.target.value })} disabled={isReadOnly} />
+            <input className="input mt-1" value={profile?.student_info?.goal_univ || ''} onChange={(e) => updateInfo({ goal_univ: e.target.value })} disabled={isStudentInfoReadOnly} />
           </div>
           <div className="col-span-12 md:col-span-4">
             <div className="text-xs text-slate-800">목표 학과</div>
-            <input className="input mt-1" value={profile?.student_info?.goal_major || ''} onChange={(e) => updateInfo({ goal_major: e.target.value })} disabled={isReadOnly} />
+            <input className="input mt-1" value={profile?.student_info?.goal_major || ''} onChange={(e) => updateInfo({ goal_major: e.target.value })} disabled={isStudentInfoReadOnly} />
           </div>
           <div className="col-span-12 md:col-span-4">
             <div className="text-xs text-slate-800">학교</div>
-            <input className="input mt-1" value={profile?.student_info?.school_name || ''} onChange={(e) => updateInfo({ school_name: e.target.value })} disabled={isReadOnly} />
+            <input className="input mt-1" value={profile?.student_info?.school_name || ''} onChange={(e) => updateInfo({ school_name: e.target.value })} disabled={isStudentInfoReadOnly} />
           </div>
 
           <div className="col-span-12 md:col-span-4">
             <div className="text-xs text-slate-800">클리닉 멘토</div>
-            <input className="input mt-1" value={profile?.student_info?.mentor_name || ''} onChange={(e) => updateInfo({ mentor_name: e.target.value })} disabled={isReadOnly} />
+            <input className="input mt-1" value={profile?.student_info?.mentor_name || ''} onChange={(e) => updateInfo({ mentor_name: e.target.value })} disabled={isStudentInfoReadOnly} />
           </div>
           <div className="col-span-12 md:col-span-4">
             <div className="text-xs text-slate-800">총괄멘토</div>
-            <input className="input mt-1" value={profile?.student_info?.lead_name || ''} onChange={(e) => updateInfo({ lead_name: e.target.value })} disabled={isReadOnly} />
+            <input className="input mt-1" value={profile?.student_info?.lead_name || ''} onChange={(e) => updateInfo({ lead_name: e.target.value })} disabled={isStudentInfoReadOnly} />
           </div>
 
-          {isReadOnly ? <div className="col-span-12 text-xs text-slate-700">읽기 전용</div> : null}
+          {isStudentInfoReadOnly ? <div className="col-span-12 text-xs text-slate-700">읽기 전용</div> : null}
         </div>
       </GoldCard>
 
@@ -4282,16 +4285,23 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
             <div className="text-sm font-semibold text-brand-900">성적/내신</div>
             <div className="text-xs text-slate-700">학생 단위 정보(회차와 무관)</div>
           </div>
-          <button className="btn-primary" disabled={busy || isReadOnly} onClick={saveProfile}>
-            저장
-          </button>
+          {canViewScores ? (
+            <button className="btn-primary" disabled={busy} onClick={saveProfile}>
+              저장
+            </button>
+          ) : (
+            <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+              원장 전용
+            </span>
+          )}
         </div>
 
-        <div className="mt-4 grid grid-cols-12 gap-4">
+        <div className="relative mt-4">
+          <div className={['grid grid-cols-12 gap-4', canViewScores ? '' : 'pointer-events-none select-none blur-[3px]'].join(' ')}>
           <div className="col-span-12 lg:col-span-7 rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <div className="text-sm font-semibold text-slate-900">수능/모의고사</div>
-              <button className="btn-ghost" type="button" onClick={addMockRow} disabled={isReadOnly}>
+              <button className="btn-ghost" type="button" onClick={addMockRow} disabled={isScoresReadOnly}>
                 행 추가
               </button>
             </div>
@@ -4312,22 +4322,22 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
                   {(Array.isArray(profile.mock_scores) ? profile.mock_scores : []).map((r, idx) => (
                     <tr key={idx} className="border-t border-slate-200">
                       <td className="py-2">
-                        <input className="input" value={r.exam || ''} onChange={(e) => updateMockRow(idx, { exam: e.target.value })} disabled={isReadOnly} />
+                        <input className="input" value={r.exam || ''} onChange={(e) => updateMockRow(idx, { exam: e.target.value })} disabled={isScoresReadOnly} />
                       </td>
                       <td>
-                        <input className="input" value={r.kor || ''} onChange={(e) => updateMockRow(idx, { kor: e.target.value })} disabled={isReadOnly} />
+                        <input className="input" value={r.kor || ''} onChange={(e) => updateMockRow(idx, { kor: e.target.value })} disabled={isScoresReadOnly} />
                       </td>
                       <td>
-                        <input className="input" value={r.math || ''} onChange={(e) => updateMockRow(idx, { math: e.target.value })} disabled={isReadOnly} />
+                        <input className="input" value={r.math || ''} onChange={(e) => updateMockRow(idx, { math: e.target.value })} disabled={isScoresReadOnly} />
                       </td>
                       <td>
-                        <input className="input" value={r.eng || ''} onChange={(e) => updateMockRow(idx, { eng: e.target.value })} disabled={isReadOnly} />
+                        <input className="input" value={r.eng || ''} onChange={(e) => updateMockRow(idx, { eng: e.target.value })} disabled={isScoresReadOnly} />
                       </td>
                       <td>
-                        <input className="input" value={r.soc || ''} onChange={(e) => updateMockRow(idx, { soc: e.target.value })} disabled={isReadOnly} />
+                        <input className="input" value={r.soc || ''} onChange={(e) => updateMockRow(idx, { soc: e.target.value })} disabled={isScoresReadOnly} />
                       </td>
                       <td>
-                        <input className="input" value={r.sci || ''} onChange={(e) => updateMockRow(idx, { sci: e.target.value })} disabled={isReadOnly} />
+                        <input className="input" value={r.sci || ''} onChange={(e) => updateMockRow(idx, { sci: e.target.value })} disabled={isScoresReadOnly} />
                       </td>
                     </tr>
                   ))}
@@ -4335,7 +4345,7 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
               </table>
             </div>
 
-            {isReadOnly ? <div className="mt-2 text-xs text-slate-700">읽기 전용</div> : null}
+            {isScoresReadOnly ? <div className="mt-2 text-xs text-slate-700">원장 전용</div> : null}
           </div>
 
           <div className="col-span-12 lg:col-span-5 rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm">
@@ -4354,10 +4364,10 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
                     <tr key={y} className="border-t border-slate-200">
                       <td className="py-2">{y}학년</td>
                       <td>
-                        <input className="input" value={profile?.school_grades?.[y]?.['1'] || ''} onChange={(e) => updateSchoolGrade(y, '1', e.target.value)} disabled={isReadOnly} />
+                        <input className="input" value={profile?.school_grades?.[y]?.['1'] || ''} onChange={(e) => updateSchoolGrade(y, '1', e.target.value)} disabled={isScoresReadOnly} />
                       </td>
                       <td>
-                        <input className="input" value={profile?.school_grades?.[y]?.['2'] || ''} onChange={(e) => updateSchoolGrade(y, '2', e.target.value)} disabled={isReadOnly} />
+                        <input className="input" value={profile?.school_grades?.[y]?.['2'] || ''} onChange={(e) => updateSchoolGrade(y, '2', e.target.value)} disabled={isScoresReadOnly} />
                       </td>
                     </tr>
                   ))}
@@ -4372,8 +4382,17 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
                 </tbody>
               </table>
             </div>
-            {isReadOnly ? <div className="mt-2 text-xs text-slate-700">읽기 전용</div> : null}
+            {isScoresReadOnly ? <div className="mt-2 text-xs text-slate-700">원장 전용</div> : null}
           </div>
+          </div>
+          {!canViewScores ? (
+            <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/55 backdrop-blur-[1px]">
+              <div className="rounded-2xl border border-slate-200 bg-white/95 px-5 py-3 text-center shadow-sm">
+                <div className="text-sm font-semibold text-slate-900">원장 전용 성적 영역</div>
+                <div className="mt-1 text-xs text-slate-600">원장만 성적/내신을 볼 수 있습니다.</div>
+              </div>
+            </div>
+          ) : null}
         </div>
       </GoldCard>
     </div>

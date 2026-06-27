@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS feeds (
   target_field TEXT,
   title TEXT,
   body TEXT NOT NULL,
+  director_checked_at TEXT,
+  director_checked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   deleted_at TEXT
 );
@@ -60,6 +62,26 @@ CREATE TABLE IF NOT EXISTS feed_comments (
   body TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  from_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT,
+  image_name TEXT,
+  image_mime TEXT,
+  image_base64 TEXT,
+  tag_student_id INTEGER REFERENCES students(id) ON DELETE SET NULL,
+  read_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_feeds_director_checked_at ON feeds(director_checked_at);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_pair
+  ON chat_messages(from_user_id, to_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_to_read
+  ON chat_messages(to_user_id, read_at, created_at);
 
 CREATE TABLE IF NOT EXISTS field_permissions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

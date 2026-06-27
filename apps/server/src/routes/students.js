@@ -5,6 +5,7 @@ import path from 'node:path';
 import { requireRole } from '../lib/auth.js';
 import { writeAudit } from '../lib/audit.js';
 import { dbFilePath } from '../lib/db.js';
+import { mergeProfileForRole, sanitizeStudentForRole } from '../lib/studentProfile.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -96,11 +97,11 @@ export default function studentRoutes(db) {
       if (!ext) return res.json({ students: [] });
 
       const row = db.prepare('SELECT * FROM students WHERE external_id=?').get(ext);
-      return res.json({ students: row ? [row] : [] });
+      return res.json({ students: row ? [sanitizeStudentForRole(row, req.user.role)] : [] });
     }
 
     const rows = db.prepare('SELECT * FROM students ORDER BY id').all();
-    return res.json({ students: rows });
+    return res.json({ students: rows.map((row) => sanitizeStudentForRole(row, req.user.role)) });
   });
 
   router.post('/', requireRole('director', 'admin'), (req, res) => {
@@ -315,7 +316,7 @@ export default function studentRoutes(db) {
     if (req.user.role === 'parent') return res.status(403).json({ error: 'Forbidden' });
 
     const id = Number(req.params.id);
-    const existing = db.prepare('SELECT id FROM students WHERE id=?').get(id);
+    const existing = db.prepare('SELECT id, profile_json FROM students WHERE id=?').get(id);
     if (!existing) return res.status(404).json({ error: 'Not found' });
 
     const { profile_json, profile } = req.body || {};
@@ -340,11 +341,13 @@ export default function studentRoutes(db) {
       normalized = null;
     }
 
+    const mergedProfileJson = mergeProfileForRole(existing.profile_json, normalized, req.user.role);
+
     db.prepare(`
       UPDATE students
       SET profile_json=?, updated_at=datetime('now')
       WHERE id=?
-    `).run(normalized, id);
+    `).run(mergedProfileJson, id);
 
     writeAudit(db, { user_id: req.user.id, action: 'update', entity: 'student_profile', entity_id: id });
     return res.json({ ok: true });

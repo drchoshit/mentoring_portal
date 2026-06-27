@@ -1013,11 +1013,14 @@ function ensureMessagingTables() {
       target_field TEXT,
       title TEXT,
       body TEXT NOT NULL,
+      director_checked_at TEXT,
+      director_checked_by INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       deleted_at TEXT,
       FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE SET NULL
+      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE SET NULL,
+      FOREIGN KEY(director_checked_by) REFERENCES users(id) ON DELETE SET NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_feeds_student_id ON feeds(student_id);
@@ -1035,7 +1038,56 @@ function ensureMessagingTables() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_feed_comments_feed_id ON feed_comments(feed_id);
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_user_id INTEGER NOT NULL,
+      to_user_id INTEGER NOT NULL,
+      body TEXT,
+      image_name TEXT,
+      image_mime TEXT,
+      image_base64 TEXT,
+      tag_student_id INTEGER,
+      read_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      deleted_at TEXT,
+      FOREIGN KEY(from_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(to_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(tag_student_id) REFERENCES students(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_pair
+      ON chat_messages(from_user_id, to_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_to_read
+      ON chat_messages(to_user_id, read_at, created_at);
   `);
+
+  const feedCols = columnMap('feeds');
+  const needsDirectorCheckedBackfill = !feedCols.has('director_checked_at');
+  if (needsDirectorCheckedBackfill) {
+    db.exec(`ALTER TABLE feeds ADD COLUMN director_checked_at TEXT;`);
+  }
+  if (!feedCols.has('director_checked_by')) {
+    db.exec(`ALTER TABLE feeds ADD COLUMN director_checked_by INTEGER;`);
+  }
+
+  if (needsDirectorCheckedBackfill) {
+    db.exec(`
+      UPDATE feeds
+      SET director_checked_at = COALESCE(NULLIF(created_at, ''), datetime('now'))
+      WHERE director_checked_at IS NULL OR director_checked_at = '';
+    `);
+  }
+
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_feeds_director_checked_at ON feeds(director_checked_at);`);
+
+  const chatCols = columnMap('chat_messages');
+  if (!chatCols.has('image_name')) db.exec(`ALTER TABLE chat_messages ADD COLUMN image_name TEXT;`);
+  if (!chatCols.has('image_mime')) db.exec(`ALTER TABLE chat_messages ADD COLUMN image_mime TEXT;`);
+  if (!chatCols.has('image_base64')) db.exec(`ALTER TABLE chat_messages ADD COLUMN image_base64 TEXT;`);
+  if (!chatCols.has('tag_student_id')) db.exec(`ALTER TABLE chat_messages ADD COLUMN tag_student_id INTEGER;`);
+  if (!chatCols.has('read_at')) db.exec(`ALTER TABLE chat_messages ADD COLUMN read_at TEXT;`);
+  if (!chatCols.has('deleted_at')) db.exec(`ALTER TABLE chat_messages ADD COLUMN deleted_at TEXT;`);
 }
 
 function ensurePermissionAndConfigTables() {
@@ -1098,7 +1150,7 @@ function ensurePermissionAndConfigTables() {
     { key: 'c_director_commentary', label: '원장 코멘터리', view: ['director', 'lead', 'admin'], edit: ['director'], parent: 0 },
     { key: 'd_clinic_records', label: '클리닉 섹션', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
     { key: 'e_wrong_answer_distribution', label: '오답 배분하기', view: ['director', 'lead', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
-    { key: 'scores_json', label: '점수/성적', view: ['director', 'lead', 'mentor', 'admin'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 0 }
+    { key: 'scores_json', label: '점수/성적', view: ['director'], edit: ['director'], parent: 0 }
   ];
 
   const upsert = db.prepare(`
@@ -1152,6 +1204,26 @@ function ensurePermissionAndConfigTables() {
       'e_wrong_answer_distribution'
     ),
     'field_permissions sync e_wrong_answer_distribution'
+  );
+
+  runBestEffort(
+    () => db.prepare(`
+      UPDATE field_permissions
+      SET
+        label = ?,
+        roles_view_json = ?,
+        roles_edit_json = ?,
+        parent_visible = ?,
+        updated_at = datetime('now')
+      WHERE field_key = ?
+    `).run(
+      '점수/성적',
+      JSON.stringify(['director']),
+      JSON.stringify(['director']),
+      0,
+      'scores_json'
+    ),
+    'field_permissions sync scores_json'
   );
 }
 

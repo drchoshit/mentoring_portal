@@ -1,5 +1,6 @@
 ﻿import express from 'express';
 import { canViewField, safeJson } from '../lib/permissions.js';
+import { sanitizeStudentForRole } from '../lib/studentProfile.js';
 
 function isEnabledPrint(db, key) {
   const r = db.prepare('SELECT enabled FROM print_config WHERE field_key=?').get(key);
@@ -205,7 +206,10 @@ export default function printRoutes(db) {
     if (!student_id || !week_id) return res.status(400).send('Missing studentId/weekId');
     if (req.user.role === 'parent') return res.status(403).send('Forbidden');
 
-    const student = db.prepare('SELECT * FROM students WHERE id=?').get(student_id);
+    const student = sanitizeStudentForRole(
+      db.prepare('SELECT * FROM students WHERE id=?').get(student_id),
+      req.user.role
+    );
     const week = db.prepare('SELECT * FROM weeks WHERE id=?').get(week_id);
     if (!student || !week) return res.status(404).send('Not found');
     const weekRound = getWeekRound(week);

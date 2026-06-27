@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider.jsx';
+import FloatingChat from './FloatingChat.jsx';
 
 const ROLE_LABEL = {
   director: '원장',
@@ -83,6 +84,7 @@ export default function AppShell({ children }) {
       <main className="app-shell-container py-6">
         {children}
       </main>
+      {role !== 'parent' ? <FloatingChat /> : null}
     </div>
   );
 }

@@ -92,13 +92,31 @@ export default function feedRoutes(db) {
       SELECT f.*,
              u1.display_name as from_name, u1.role as from_role,
              u2.display_name as to_name, u2.role as to_role,
-             s.name as student_name
+             s.name as student_name,
+             COALESCE(cc.comment_count, 0) as comment_count,
+             cc.last_comment_at,
+             COALESCE(cc.last_comment_at, f.created_at) as activity_at,
+             luc.display_name as last_comment_from_name,
+             luc.role as last_comment_from_role
       FROM feeds f
       JOIN users u1 ON u1.id=f.from_user_id
       JOIN users u2 ON u2.id=f.to_user_id
       LEFT JOIN students s ON s.id=f.student_id
+      LEFT JOIN (
+        SELECT feed_id, COUNT(*) as comment_count, MAX(created_at) as last_comment_at
+        FROM feed_comments
+        GROUP BY feed_id
+      ) cc ON cc.feed_id=f.id
+      LEFT JOIN feed_comments lc ON lc.id = (
+        SELECT id
+        FROM feed_comments
+        WHERE feed_id=f.id
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      )
+      LEFT JOIN users luc ON luc.id=lc.from_user_id
       WHERE ${where.join(' AND ')}
-      ORDER BY f.created_at DESC, f.id DESC
+      ORDER BY activity_at DESC, f.id DESC
       LIMIT ?
     `;
 
@@ -170,8 +188,12 @@ export default function feedRoutes(db) {
     }
 
     const insertFeed = db.prepare(
-      'INSERT INTO feeds (from_user_id, to_user_id, student_id, target_field, title, body) VALUES (?,?,?,?,?,?)'
+      `INSERT INTO feeds
+        (from_user_id, to_user_id, student_id, target_field, title, body, director_checked_at, director_checked_by)
+       VALUES (?,?,?,?,?,?,?,?)`
     );
+    const directorCheckedAt = req.user.role === 'director' ? new Date().toISOString() : null;
+    const directorCheckedBy = req.user.role === 'director' ? req.user.id : null;
 
     const createdIds = [];
     const tx = db.transaction(() => {
@@ -183,7 +205,9 @@ export default function feedRoutes(db) {
             sid == null ? null : Number(sid),
             target_field,
             title,
-            bodyText
+            bodyText,
+            directorCheckedAt,
+            directorCheckedBy
           );
           createdIds.push(Number(info.lastInsertRowid));
         }
@@ -210,6 +234,31 @@ export default function feedRoutes(db) {
     });
   });
 
+  router.put('/:id/director-check', (req, res) => {
+    if (req.user.role !== 'director') return res.status(403).json({ error: 'Forbidden' });
+
+    const feedId = Number(req.params.id);
+    const feed = db.prepare('SELECT id FROM feeds WHERE id=? AND deleted_at IS NULL').get(feedId);
+    if (!feed) return res.status(404).json({ error: 'Not found' });
+
+    const checked = req.body?.checked !== false;
+    if (checked) {
+      db.prepare('UPDATE feeds SET director_checked_at=datetime("now"), director_checked_by=? WHERE id=?')
+        .run(req.user.id, feedId);
+    } else {
+      db.prepare('UPDATE feeds SET director_checked_at=NULL, director_checked_by=NULL WHERE id=?')
+        .run(feedId);
+    }
+
+    writeAudit(db, {
+      user_id: req.user.id,
+      action: checked ? 'director_check' : 'director_uncheck',
+      entity: 'feed',
+      entity_id: feedId
+    });
+    res.json({ ok: true, checked });
+  });
+
   router.post('/:id/comments', (req, res) => {
     const feedId = Number(req.params.id);
     const { body } = req.body || {};
@@ -225,6 +274,10 @@ export default function feedRoutes(db) {
 
     const info = db.prepare('INSERT INTO feed_comments (feed_id, from_user_id, body) VALUES (?,?,?)')
       .run(feedId, req.user.id, String(body));
+
+    if (req.user.role !== 'director') {
+      db.prepare('UPDATE feeds SET director_checked_at=NULL, director_checked_by=NULL WHERE id=?').run(feedId);
+    }
 
     writeAudit(db, { user_id: req.user.id, action: 'comment', entity: 'feed', entity_id: feedId });
     res.json({ id: info.lastInsertRowid });

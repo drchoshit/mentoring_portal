@@ -146,9 +146,26 @@ export default function Feeds() {
     }
   }
 
+  async function markDirectorCheck(feedId, checked = true) {
+    try {
+      await api(`/api/feeds/${feedId}/director-check`, {
+        method: 'PUT',
+        body: { checked }
+      });
+      await load();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   const recipientCount = form.to_user_ids.length;
   const studentCount = form.student_ids.length;
   const estimatedCreateCount = recipientCount * Math.max(studentCount, 1);
+  const isDirector = user?.role === 'director';
+  const needsDirectorCheckFeeds = useMemo(
+    () => (isDirector ? feeds.filter((f) => !f.director_checked_at) : []),
+    [feeds, isDirector]
+  );
 
   return (
     <div className="space-y-6">
@@ -372,6 +389,58 @@ export default function Feeds() {
         </div>
       ) : null}
 
+      {isDirector ? (
+        <div className="card p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-brand-800">확인이 필요한 피드</div>
+              <div className="text-xs text-slate-600">
+                확인하지 않은 피드를 최근 댓글/작성 순으로 보여줍니다.
+              </div>
+            </div>
+            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+              {needsDirectorCheckFeeds.length}건
+            </span>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {needsDirectorCheckFeeds.map((f) => (
+              <div
+                key={`need-${f.id}`}
+                className="flex flex-col gap-2 rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2 md:flex-row md:items-center md:justify-between"
+              >
+                <button
+                  type="button"
+                  className="min-w-0 text-left"
+                  onClick={() => document.getElementById(`feed-${f.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                >
+                  <div className="truncate text-sm font-semibold text-slate-900">
+                    {f.title || f.body || '제목 없음'}
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-600">
+                    {f.from_name} → {f.to_name}
+                    {f.student_name ? ` · ${f.student_name}` : ''}
+                    {f.last_comment_at ? ` · 최근 댓글 ${fmt(f.last_comment_at)}` : ` · 작성 ${fmt(f.created_at)}`}
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary shrink-0 px-3 py-1.5 text-xs"
+                  onClick={() => markDirectorCheck(f.id, true)}
+                >
+                  확인
+                </button>
+              </div>
+            ))}
+            {!needsDirectorCheckFeeds.length ? (
+              <div className="rounded-xl border border-slate-200 bg-white/70 px-3 py-3 text-sm text-slate-600">
+                확인이 필요한 피드가 없습니다.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <div className="space-y-3">
         {feeds.map((f) => (
           <FeedCard
@@ -380,6 +449,7 @@ export default function Feeds() {
             fieldLabelMap={fieldLabelMap}
             onComment={addComment}
             onDelete={deleteFeed}
+            onDirectorCheck={markDirectorCheck}
             currentUser={user}
           />
         ))}
@@ -389,12 +459,15 @@ export default function Feeds() {
   );
 }
 
-function FeedCard({ feed, onComment, onDelete, currentUser, fieldLabelMap }) {
+function FeedCard({ feed, onComment, onDelete, onDirectorCheck, currentUser, fieldLabelMap }) {
   const [comment, setComment] = useState('');
   const canDelete = ['director', 'admin'].includes(currentUser?.role);
+  const isDirector = currentUser?.role === 'director';
+  const hasRecentComment = Boolean(feed.last_comment_at);
+  const needsDirectorCheck = isDirector && !feed.director_checked_at;
 
   return (
-    <div className="card p-5">
+    <div id={`feed-${feed.id}`} className={['card p-5', needsDirectorCheck ? 'border-amber-300 bg-amber-50/40' : ''].join(' ')}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -414,16 +487,50 @@ function FeedCard({ feed, onComment, onDelete, currentUser, fieldLabelMap }) {
                 {(fieldLabelMap && fieldLabelMap.get(feed.target_field)) || feed.target_field}
               </span>
             ) : null}
+            {hasRecentComment ? (
+              <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-800">
+                댓글 갱신
+              </span>
+            ) : null}
+            {isDirector ? (
+              <span className={[
+                'inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                needsDirectorCheck
+                  ? 'border-amber-300 bg-amber-100 text-amber-900'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+              ].join(' ')}>
+                {needsDirectorCheck ? '확인 필요' : '확인됨'}
+              </span>
+            ) : null}
           </div>
           {feed.title ? <div className="mt-1 text-sm font-semibold text-brand-800">{feed.title}</div> : null}
           <pre className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{feed.body}</pre>
-          <div className="mt-2 text-xs text-slate-500">{fmt(feed.created_at)}</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span>작성 {fmt(feed.created_at)}</span>
+            {hasRecentComment ? (
+              <span>
+                최근 댓글 {fmt(feed.last_comment_at)}
+                {feed.last_comment_from_name ? ` · ${feed.last_comment_from_name}` : ''}
+              </span>
+            ) : null}
+          </div>
         </div>
-        {canDelete ? (
-          <button className="btn-ghost" onClick={() => onDelete(feed.id)}>
-            삭제
-          </button>
-        ) : null}
+        <div className="flex shrink-0 flex-col gap-2">
+          {isDirector ? (
+            <button
+              className={needsDirectorCheck ? 'btn-primary' : 'btn-ghost'}
+              type="button"
+              onClick={() => onDirectorCheck(feed.id, needsDirectorCheck)}
+            >
+              {needsDirectorCheck ? '확인' : '확인 해제'}
+            </button>
+          ) : null}
+          {canDelete ? (
+            <button className="btn-ghost" onClick={() => onDelete(feed.id)}>
+              삭제
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="mt-4 border-t border-slate-200 pt-3">
