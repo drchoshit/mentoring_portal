@@ -243,7 +243,7 @@ export default function feedRoutes(db) {
 
     const checked = req.body?.checked !== false;
     if (checked) {
-      db.prepare('UPDATE feeds SET director_checked_at=datetime("now"), director_checked_by=? WHERE id=?')
+      db.prepare("UPDATE feeds SET director_checked_at=datetime('now'), director_checked_by=? WHERE id=?")
         .run(req.user.id, feedId);
     } else {
       db.prepare('UPDATE feeds SET director_checked_at=NULL, director_checked_by=NULL WHERE id=?')
