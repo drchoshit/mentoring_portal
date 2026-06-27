@@ -4149,8 +4149,10 @@ function ClinicSectionCard({ value, visible, editable, onSave, onAutoSave, onCha
 
 /* (2) 학생 정보 분리 + 성적/내신 카드 */
 const StudentProfileSection = forwardRef(function StudentProfileSection({ studentId, profileJson, userRole, busy, setBusy, setError }, ref) {
-  const canEditStudentInfo = ['director', 'admin', 'lead'].includes(String(userRole || '').trim());
-  const canViewScores = String(userRole || '').trim() === 'director';
+  const viewerRole = String(userRole || '').trim();
+  const canEditStudentInfo = ['director', 'admin', 'lead'].includes(viewerRole);
+  const canViewScores = viewerRole === 'director';
+  const hideScoreSection = ['lead', 'mentor'].includes(viewerRole);
   const isStudentInfoReadOnly = !canEditStudentInfo;
   const isScoresReadOnly = !canViewScores;
 
@@ -4278,7 +4280,7 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
         </div>
       </GoldCard>
 
-      {/* 성적/내신 */}
+      {!hideScoreSection ? (
       <GoldCard className="p-5">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -4395,6 +4397,7 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
           ) : null}
         </div>
       </GoldCard>
+      ) : null}
     </div>
   );
 });
