@@ -504,7 +504,13 @@ export default function importRoutes(db) {
     let created = 0;
     let updated = 0;
     let deleted = 0;
+    let preservedMissing = 0;
     const incomingIds = new Set();
+    const deleteMissing = ['1', 'true', 'yes', 'on'].includes(
+      String(req.query.deleteMissing ?? req.query.delete_missing ?? req.body?.deleteMissing ?? req.body?.delete_missing ?? '')
+        .trim()
+        .toLowerCase()
+    );
 
     const tx = db.transaction(() => {
       for (const s of students) {
@@ -528,7 +534,7 @@ export default function importRoutes(db) {
 
     tx();
 
-    if (incomingIds.size) {
+    if (incomingIds.size && deleteMissing) {
       const rows = db.prepare('SELECT id, external_id FROM students WHERE external_id IS NOT NULL AND external_id != ?').all('');
       for (const r of rows) {
         const ext = String(r.external_id || '').trim();
@@ -536,16 +542,22 @@ export default function importRoutes(db) {
         deleteStudentCascade(db, r.id);
         deleted += 1;
       }
+    } else if (incomingIds.size) {
+      const rows = db.prepare('SELECT external_id FROM students WHERE external_id IS NOT NULL AND external_id != ?').all('');
+      preservedMissing = rows.filter((r) => {
+        const ext = String(r.external_id || '').trim();
+        return ext && !incomingIds.has(ext);
+      }).length;
     }
 
     writeAudit(db, {
       user_id: req.user.id,
       action: 'import',
       entity: 'students',
-      details: { created, updated, deleted }
+      details: { created, updated, deleted, preservedMissing, deleteMissing }
     });
 
-    return res.json({ created, updated, deleted });
+    return res.json({ created, updated, deleted, preservedMissing, deleteMissing });
   });
 
   // 기존: 벌점 import

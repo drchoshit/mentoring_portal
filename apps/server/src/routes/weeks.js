@@ -20,50 +20,18 @@ function cleanupOldAssignmentHistory(db, keepRecentWeeks = ASSIGNMENT_KEEP_RECEN
     return {
       keep_week_ids: [],
       cleared_week_records: 0,
-      deleted_wrong_answer_images: 0
+      deleted_wrong_answer_images: 0,
+      preserved: true
     };
   }
 
-  const placeholders = keepIds.map(() => '?').join(',');
-  const deleteSql = `week_id NOT IN (${placeholders})`;
-  const hasWeekRecords = Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='week_records'").get()
-  );
-  const hasWrongAnswerImages = Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wrong_answer_images'").get()
-  );
-
-  const clearWeekRecords = hasWeekRecords
-    ? db.prepare(`
-      UPDATE week_records
-      SET
-        e_wrong_answer_distribution = '{}',
-        updated_at = datetime('now')
-      WHERE ${deleteSql}
-        AND e_wrong_answer_distribution IS NOT NULL
-        AND TRIM(e_wrong_answer_distribution) != ''
-        AND TRIM(e_wrong_answer_distribution) != '{}'
-    `)
-    : null;
-
-  const deleteWrongAnswerImages = hasWrongAnswerImages
-    ? db.prepare(`
-      DELETE FROM wrong_answer_images
-      WHERE ${deleteSql}
-    `)
-    : null;
-
-  const tx = db.transaction(() => {
-    const cleared = clearWeekRecords ? clearWeekRecords.run(...keepIds) : { changes: 0 };
-    const deletedImages = deleteWrongAnswerImages ? deleteWrongAnswerImages.run(...keepIds) : { changes: 0 };
-    return {
-      keep_week_ids: keepIds,
-      cleared_week_records: Number(cleared?.changes || 0),
-      deleted_wrong_answer_images: Number(deletedImages?.changes || 0)
-    };
-  });
-
-  return tx();
+  return {
+    keep_week_ids: keepIds,
+    cleared_week_records: 0,
+    deleted_wrong_answer_images: 0,
+    preserved: true,
+    note: '멘토링 기록 보존 정책에 따라 회차 추가 시 과거 오답 배분 기록과 이미지를 삭제하지 않습니다.'
+  };
 }
 
 export default function weekRoutes(db) {

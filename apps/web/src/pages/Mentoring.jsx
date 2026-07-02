@@ -1257,7 +1257,7 @@ export default function Mentoring() {
     setBusy(true);
     try {
       const label = subjectName ? `"${subjectName}"` : '해당 과목';
-      confirmOrThrow(`과목 ${label} 삭제할까요?\n현재 선택한 회차 이후의 기록만 삭제됩니다.`);
+      confirmOrThrow(`과목 ${label}을(를) 현재 회차 이후에서 숨길까요?\n이미 입력된 기록은 삭제하지 않고 보존됩니다.`);
       await api(`/api/mentoring/subjects/${studentId}/${subjectId}?weekId=${encodeURIComponent(weekId)}`, { method: 'DELETE' });
       await loadAll();
     } catch (e) {
@@ -1856,6 +1856,35 @@ export default function Mentoring() {
   // 과목 기록
   const subjectRecords = rec?.subject_records || [];
 
+  function hasOwnField(obj, key) {
+    return Object.prototype.hasOwnProperty.call(obj || {}, key);
+  }
+
+  function subjectTextValue(value) {
+    return value == null ? '' : String(value);
+  }
+
+  function buildSubjectRecordPatch(subjectRecordId, draftOverride = null, onlyKeys = SUBJECT_FIELD_KEYS) {
+    const sid = String(subjectRecordId);
+    if (!sid) return {};
+
+    const record = subjectRecords.find((r) => String(r.id) === sid);
+    if (!record) return {};
+
+    const draft = draftOverride || subjectDrafts?.[sid] || {};
+    const editableKeys = (onlyKeys || SUBJECT_FIELD_KEYS).filter((k) => canEdit(perms, user?.role, k));
+    const body = {};
+
+    for (const k of editableKeys) {
+      if (!hasOwnField(draft, k)) continue;
+      const nextValue = subjectTextValue(draft[k]);
+      const prevValue = subjectTextValue(record?.[k]);
+      if (nextValue !== prevValue) body[k] = nextValue;
+    }
+
+    return body;
+  }
+
   function updateSubjectDraft(subjectRecordId, patch) {
     const sid = String(subjectRecordId);
     setSubjectDrafts((prev) => {
@@ -1867,15 +1896,13 @@ export default function Mentoring() {
     });
   }
 
-  async function autoSaveOneSubject(subjectRecordId) {
+  async function autoSaveOneSubject(subjectRecordId, draftOverride = null, onlyKeys = SUBJECT_FIELD_KEYS) {
     const sid = String(subjectRecordId);
     if (!sid) return;
-    const draft = subjectDrafts?.[sid];
-    if (!draft) return;
+    const body = buildSubjectRecordPatch(sid, draftOverride, onlyKeys);
+    if (!Object.keys(body).length) return;
 
     try {
-      const body = {};
-      for (const k of SUBJECT_FIELD_KEYS) body[k] = draft?.[k] ?? '';
       await api(`/api/mentoring/subject-record/${sid}`, { method: 'PUT', body });
     } catch (e) {
       // 저장 실패 시 draft 유지
@@ -1891,9 +1918,8 @@ export default function Mentoring() {
 
     for (const r of subjectRecords) {
       const sid = String(r.id);
-      const draft = subjectDrafts?.[sid] || {};
-      const body = {};
-      for (const k of editableKeys) body[k] = draft?.[k] ?? '';
+      const body = buildSubjectRecordPatch(sid, subjectDrafts?.[sid] || {}, editableKeys);
+      if (!Object.keys(body).length) continue;
       await api(`/api/mentoring/subject-record/${sid}`, { method: 'PUT', body });
     }
   }
@@ -1919,11 +1945,9 @@ export default function Mentoring() {
 
       for (const r of subjectRecords) {
         const sid = String(r.id);
-        const draft = subjectDrafts?.[sid] || {};
-        await api(`/api/mentoring/subject-record/${sid}`, {
-          method: 'PUT',
-          body: { a_curriculum: draft?.a_curriculum ?? '' }
-        });
+        const body = buildSubjectRecordPatch(sid, subjectDrafts?.[sid] || {}, ['a_curriculum']);
+        if (!Object.keys(body).length) continue;
+        await api(`/api/mentoring/subject-record/${sid}`, { method: 'PUT', body });
       }
 
       await loadAll();
@@ -2847,7 +2871,7 @@ export default function Mentoring() {
                 parentMode={parentMode}
                 draft={subjectDrafts?.[String(r.id)] || {}}
                 onChangeDraft={(patch) => updateSubjectDraft(r.id, patch)}
-                onAutoSave={() => autoSaveOneSubject(r.id)}
+                onAutoSave={(draftSnapshot) => autoSaveOneSubject(r.id, draftSnapshot)}
                 onDelete={() => deleteSubject(r.subject_id || r.id, r.subject_name)}
               />
             ))}
@@ -3651,8 +3675,13 @@ function CurriculumStrip({ subjects, perms, role, parentMode, busy, drafts, onCh
                   className="textarea mt-3 min-h-[220px] flex-1 whitespace-pre-wrap break-words"
                   value={val}
                   onChange={(e) => onChangeDraft?.(r.id, { [fieldKey]: e.target.value })}
-                  onBlur={() => {
-                    if (editable) onAutoSave?.(r.id);
+                  onBlur={(e) => {
+                    if (editable) {
+                      onAutoSave?.(r.id, {
+                        ...(drafts?.[sid] || {}),
+                        [fieldKey]: e.currentTarget.value
+                      });
+                    }
                   }}
                   disabled={!editable || busy}
                 />
@@ -3720,7 +3749,7 @@ function SubjectWideEditor({ record, perms, role, busy, parentMode, draft, onCha
 
   function handleAutoSave() {
     dirtyRef.current = false;
-    onAutoSave?.();
+    onAutoSave?.(localDraft);
   }
 
   function FieldHeader({ field }) {

@@ -318,12 +318,17 @@ function applyCurriculumSourceToWeek(db, student_id, week_id, source_week_id, up
     INSERT INTO subject_records (student_id, week_id, subject_id, a_curriculum, updated_at, updated_by)
     SELECT student_id, ?, subject_id, a_curriculum, datetime('now'), ?
     FROM subject_records
-    WHERE student_id = ? AND week_id = ?
+    WHERE student_id = ?
+      AND week_id = ?
+      AND a_curriculum IS NOT NULL
+      AND TRIM(a_curriculum) != ''
     ON CONFLICT(student_id, week_id, subject_id)
     DO UPDATE SET
       a_curriculum = excluded.a_curriculum,
       updated_at = datetime('now'),
       updated_by = excluded.updated_by
+    WHERE subject_records.a_curriculum IS NULL
+      OR TRIM(subject_records.a_curriculum) = ''
     `
   ).run(week_id, updated_by ?? null, student_id, sourceWeekId);
 
@@ -808,17 +813,18 @@ export default function mentoringRoutes(db) {
       ? Math.min(Number(row.deleted_from_week_id), week_id)
       : week_id;
 
-    const clearRecordsFromWeek = db.prepare(
-      'DELETE FROM subject_records WHERE student_id=? AND subject_id=? AND week_id>=?'
+    const countPreservedRecordsFromWeek = db.prepare(
+      'SELECT COUNT(*) AS cnt FROM subject_records WHERE student_id=? AND subject_id=? AND week_id>=?'
     );
     const markSubjectDeletedFromWeek = db.prepare(
       "UPDATE mentoring_subjects SET deleted_from_week_id=?, updated_at=datetime('now') WHERE id=? AND student_id=?"
     );
 
-    let removedRecordCount = 0;
+    let preservedRecordCount = 0;
     const tx = db.transaction(() => {
-      const clearInfo = clearRecordsFromWeek.run(student_id, subject_id, nextDeletedFromWeekId);
-      removedRecordCount = Number(clearInfo?.changes || 0);
+      preservedRecordCount = Number(
+        countPreservedRecordsFromWeek.get(student_id, subject_id, nextDeletedFromWeekId)?.cnt || 0
+      );
       markSubjectDeletedFromWeek.run(nextDeletedFromWeekId, subject_id, student_id);
     });
     tx();
@@ -832,14 +838,16 @@ export default function mentoringRoutes(db) {
         student_id,
         name: row.name,
         deleted_from_week_id: nextDeletedFromWeekId,
-        removed_record_count: removedRecordCount
+        removed_record_count: 0,
+        preserved_record_count: preservedRecordCount
       }
     });
     return res.json({
       ok: true,
       subject_id,
       deleted_from_week_id: nextDeletedFromWeekId,
-      removed_record_count: removedRecordCount
+      removed_record_count: 0,
+      preserved_record_count: preservedRecordCount
     });
   });
 
@@ -882,13 +890,25 @@ export default function mentoringRoutes(db) {
     hydrateCurriculumFromSourceIfEmpty(db, student_id, week_id, curriculumSourceWeekId);
     hydrateLastHomeworkFromPreviousWeekIfEmpty(db, student_id, week_id, previousWeekId);
 
-    const subject_records_raw = db.prepare(
-      `SELECT r.*, s.name as subject_name
+    const subject_records_all = db.prepare(
+      `SELECT r.*, s.name as subject_name, s.deleted_from_week_id as subject_deleted_from_week_id
        FROM subject_records r
        JOIN mentoring_subjects s ON s.id=r.subject_id
-       WHERE r.student_id=? AND r.week_id=? AND (s.deleted_from_week_id IS NULL OR s.deleted_from_week_id > ?)
+       WHERE r.student_id=? AND r.week_id=?
        ORDER BY s.id`
-    ).all(student_id, week_id, week_id);
+    ).all(student_id, week_id);
+    const subject_records_raw = subject_records_all
+      .filter((r) => {
+        const deletedFromWeekId = toPositiveInt(r?.subject_deleted_from_week_id);
+        if (!deletedFromWeekId || deletedFromWeekId > week_id) return true;
+        return hasMeaningfulSubjectRecord(r);
+      })
+      .map((r) => ({
+        ...r,
+        subject_archived: toPositiveInt(r?.subject_deleted_from_week_id)
+          ? Number(r.subject_deleted_from_week_id) <= week_id
+          : false
+      }));
 
     const weekRecord = db.prepare('SELECT * FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
     const mentorInfo = getMentorInfoSetting(db);
