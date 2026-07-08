@@ -2153,18 +2153,17 @@ export default function Mentoring() {
                 const isCollapsed = Boolean(collapsedWrongAnswerProblems?.[idx]);
                 const showMentorPickerForProblem = wrongAnswerSearched && isTargetProblem;
                 return (
-                <div
-                  key={idx}
-                  className={[
-                    'rounded-2xl border p-3',
-                    tone.card,
+                  <div
+                    key={idx}
+                    className={[
+                    'rounded-[18px] border border-emerald-300/80 bg-emerald-50/20 p-3 md:p-4',
                     isTargetProblem ? `ring-1 ${tone.ring}` : ''
                   ].join(' ')}
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="text-sm font-semibold text-slate-900">오답 기록 {idx + 1}</div>
                     {canEditA('e_wrong_answer_distribution') && !parentMode ? (
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
                         <button
                           className={[
                             tone.assignButton,
@@ -2297,7 +2296,7 @@ export default function Mentoring() {
                   <div className="mt-3">
                     <div className="text-xs text-slate-800">전달사항</div>
                     <textarea
-                      className="textarea mt-1 min-h-[92px]"
+                      className="textarea mt-1 min-h-[46px]"
                       value={item.note || ''}
                       onChange={(e) => updateWrongAnswerProblem(idx, { note: e.target.value })}
                       disabled={!canEditA('e_wrong_answer_distribution') || parentMode}
@@ -3970,10 +3969,11 @@ function ClinicSectionCard({ value, visible, editable, onSave, onAutoSave, onCha
 const StudentProfileSection = forwardRef(function StudentProfileSection({ studentId, profileJson, userRole, busy, setBusy, setError }, ref) {
   const viewerRole = String(userRole || '').trim();
   const canEditStudentInfo = ['director', 'admin', 'lead'].includes(viewerRole);
-  const canViewScores = viewerRole === 'director';
-  const hideScoreSection = ['lead', 'mentor'].includes(viewerRole);
+  const canViewScores = ['director', 'lead', 'admin'].includes(viewerRole);
+  const canEditScores = viewerRole === 'director';
+  const hideScoreSection = !canViewScores;
   const isStudentInfoReadOnly = !canEditStudentInfo;
-  const isScoresReadOnly = !canViewScores;
+  const isScoresReadOnly = !canEditScores;
 
   const defaultProfile = useMemo(
     () => ({
@@ -4106,13 +4106,13 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
             <div className="text-sm font-semibold text-brand-900">성적/내신</div>
             <div className="text-xs text-slate-700">학생 단위 정보(회차와 무관)</div>
           </div>
-          {canViewScores ? (
+          {canEditScores ? (
             <button className="btn-primary" disabled={busy} onClick={saveProfile}>
               저장
             </button>
           ) : (
             <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
-              원장 전용
+              읽기 전용
             </span>
           )}
         </div>
@@ -4166,7 +4166,7 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
               </table>
             </div>
 
-            {isScoresReadOnly ? <div className="mt-2 text-xs text-slate-700">원장 전용</div> : null}
+            {isScoresReadOnly ? <div className="mt-2 text-xs text-slate-700">읽기 전용</div> : null}
           </div>
 
           <div className="col-span-12 lg:col-span-5 rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm">
@@ -4203,14 +4203,14 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
                 </tbody>
               </table>
             </div>
-            {isScoresReadOnly ? <div className="mt-2 text-xs text-slate-700">원장 전용</div> : null}
+            {isScoresReadOnly ? <div className="mt-2 text-xs text-slate-700">읽기 전용</div> : null}
           </div>
           </div>
           {!canViewScores ? (
             <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/55 backdrop-blur-[1px]">
               <div className="rounded-2xl border border-slate-200 bg-white/95 px-5 py-3 text-center shadow-sm">
-                <div className="text-sm font-semibold text-slate-900">원장 전용 성적 영역</div>
-                <div className="mt-1 text-xs text-slate-600">원장만 성적/내신을 볼 수 있습니다.</div>
+                <div className="text-sm font-semibold text-slate-900">제한된 성적 영역</div>
+                <div className="mt-1 text-xs text-slate-600">성적/내신 열람 권한이 없습니다.</div>
               </div>
             </div>
           ) : null}

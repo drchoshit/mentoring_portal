@@ -1150,7 +1150,7 @@ function ensurePermissionAndConfigTables() {
     { key: 'c_director_commentary', label: '원장 코멘터리', view: ['director', 'lead', 'admin'], edit: ['director'], parent: 0 },
     { key: 'd_clinic_records', label: '클리닉 섹션', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
     { key: 'e_wrong_answer_distribution', label: '오답 배분하기', view: ['director', 'lead', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
-    { key: 'scores_json', label: '점수/성적', view: ['director'], edit: ['director'], parent: 0 }
+    { key: 'scores_json', label: '점수/성적', view: ['director', 'lead', 'admin'], edit: ['director'], parent: 0 }
   ];
 
   const upsert = db.prepare(`
@@ -1218,7 +1218,7 @@ function ensurePermissionAndConfigTables() {
       WHERE field_key = ?
     `).run(
       '점수/성적',
-      JSON.stringify(['director']),
+      JSON.stringify(['director', 'lead', 'admin']),
       JSON.stringify(['director']),
       0,
       'scores_json'

@@ -2199,11 +2199,6 @@ export default function AssignmentStatus() {
                   problemAssignment?.session_day,
                   quickWeekBaseYear
                 );
-                const problemSessionStartTime = String(problemAssignment?.session_start_time || '').trim();
-                const problemSessionRangeText = makeSessionRangeText(
-                  problemSessionStartTime,
-                  problemAssignment?.session_duration_minutes
-                );
                 const tone = wrongAnswerToneByIndex(idx);
                 const isTargetProblem = Number(quickWrongAnswerTargetProblemIndex || 0) === idx;
                 const isCollapsed = Boolean(quickCollapsedWrongAnswerProblems?.[idx]);
@@ -2212,14 +2207,13 @@ export default function AssignmentStatus() {
                   <div
                     key={`quick-problem-${idx}`}
                     className={[
-                      'rounded-2xl border p-3',
-                      tone.card,
+                      'rounded-[18px] border border-emerald-300/80 bg-emerald-50/20 p-3 md:p-4',
                       isTargetProblem ? `ring-1 ${tone.ring}` : ''
                     ].join(' ')}
                   >
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="text-sm font-semibold text-slate-900">오답 기록 {idx + 1}</div>
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
                         <button
                           className={[
                             tone.assignButton,
@@ -2265,13 +2259,14 @@ export default function AssignmentStatus() {
 
                     {isCollapsed ? (
                       <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-700">
-                        {String(item.subject || '').trim() || '-'} · {String(item.problem_name || '').trim() || '문제명 미입력'} · {String(item.problem_type || '').trim() || '-'}
+                        {String(item.subject || '').trim() || '-'} · {String(item.material || '').trim() || '교재명 미입력'} · {String(item.problem_name || '').trim() || '문제번호 미입력'} · 배정날짜 {problemAssignment?.session_month || '-'}월 {problemAssignment?.session_day || '-'}일 · 멘토 {problemAssignment?.mentor_name || '미배정'}
                       </div>
                     ) : null}
 
                     {!isCollapsed ? (
-                      <div className="mt-3 grid grid-cols-12 gap-3">
-                        <div className="col-span-12 md:col-span-3">
+                      <>
+                      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-5">
+                        <div>
                           <div className="text-xs text-slate-800">과목</div>
                           <input
                             className="input mt-1"
@@ -2280,7 +2275,7 @@ export default function AssignmentStatus() {
                             disabled={quickWrongAnswerSaving}
                           />
                         </div>
-                        <div className="col-span-12 md:col-span-3">
+                        <div>
                           <div className="text-xs text-slate-800">교재명</div>
                           <input
                             className="input mt-1"
@@ -2289,8 +2284,8 @@ export default function AssignmentStatus() {
                             disabled={quickWrongAnswerSaving}
                           />
                         </div>
-                        <div className="col-span-12 md:col-span-3">
-                          <div className="text-xs text-slate-800">문제명</div>
+                        <div>
+                          <div className="text-xs text-slate-800">문제번호</div>
                           <input
                             className="input mt-1"
                             value={item.problem_name || ''}
@@ -2298,185 +2293,61 @@ export default function AssignmentStatus() {
                             disabled={quickWrongAnswerSaving}
                           />
                         </div>
-                        <div className="col-span-12 md:col-span-3">
-                          <div className="text-xs text-slate-800">유형</div>
+                        <div>
+                          <div className="text-xs text-slate-800">배정날짜</div>
                           <input
                             className="input mt-1"
-                            value={item.problem_type || ''}
-                            onChange={(e) => updateQuickWrongAnswerProblem(idx, { problem_type: e.target.value })}
+                            type="date"
+                            value={problemDateInputValue}
+                            onChange={(e) => {
+                              const nextDate = String(e.target.value || '').trim();
+                              if (!nextDate) {
+                                updateQuickWrongAnswerAssignment(idx, {
+                                  session_month: '',
+                                  session_day: '',
+                                  session_day_label: ''
+                                });
+                                return;
+                              }
+                              const parsed = parseDateInputValue(nextDate);
+                              if (!parsed) return;
+                              updateQuickWrongAnswerAssignment(idx, {
+                                session_month: String(parsed.month),
+                                session_day: String(parsed.day),
+                                session_day_label: parsed.dayLabel || ''
+                              });
+                            }}
                             disabled={quickWrongAnswerSaving}
                           />
                         </div>
-                        <div className="col-span-12 md:col-span-6">
-                          <div className="text-xs text-slate-800">전달사항</div>
-                          <textarea
-                            className="textarea mt-1 min-h-[68px]"
-                            value={item.note || ''}
-                            onChange={(e) => updateQuickWrongAnswerProblem(idx, { note: e.target.value })}
+                        <div>
+                          <div className="text-xs text-slate-800">멘토</div>
+                          <input
+                            className="input mt-1"
+                            value={problemAssignment?.mentor_name || ''}
+                            onChange={(e) => {
+                              const mentorName = String(e.target.value || '').trim();
+                              updateQuickWrongAnswerAssignment(idx, {
+                                mentor_id: mentorName,
+                                mentor_name: mentorName,
+                                mentor_role: problemAssignment?.mentor_role || 'mentor'
+                              });
+                            }}
                             disabled={quickWrongAnswerSaving}
                           />
                         </div>
-                        <div className="col-span-12 md:col-span-6">
-                          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-                            <div className="text-xs font-semibold text-slate-800">배정 정보</div>
-                            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-                              <div>
-                                <div className="text-[11px] text-slate-600">멘토 이름</div>
-                                <input
-                                  className="input mt-1 h-9"
-                                  value={problemAssignment?.mentor_name || ''}
-                                  onChange={(e) =>
-                                    updateQuickWrongAnswerAssignment(idx, {
-                                      mentor_name: String(e.target.value || '').trim(),
-                                      mentor_id: String(e.target.value || '').trim()
-                                    })
-                                  }
-                                  disabled={quickWrongAnswerSaving}
-                                />
-                              </div>
-                              <div>
-                                <div className="text-[11px] text-slate-600">멘토 역할</div>
-                                <select
-                                  className="input mt-1 h-9"
-                                  value={problemAssignment?.mentor_role || 'mentor'}
-                                  onChange={(e) =>
-                                    updateQuickWrongAnswerAssignment(idx, {
-                                      mentor_role: String(e.target.value || '').trim() || 'mentor'
-                                    })
-                                  }
-                                  disabled={quickWrongAnswerSaving}
-                                >
-                                  <option value="mentor">클리닉 멘토</option>
-                                  <option value="lead">총괄멘토</option>
-                                  <option value="director">원장</option>
-                                  <option value="admin">관리자</option>
-                                </select>
-                              </div>
-                            </div>
-                            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-4">
-                              <div>
-                                <div className="text-[11px] text-slate-600">배정 날짜</div>
-                                <input
-                                  className="input mt-1 h-9"
-                                  type="date"
-                                  value={problemDateInputValue}
-                                  onChange={(e) => {
-                                    const nextDate = String(e.target.value || '').trim();
-                                    if (!nextDate) {
-                                      updateQuickWrongAnswerAssignment(idx, {
-                                        session_month: '',
-                                        session_day: '',
-                                        session_day_label: ''
-                                      });
-                                      return;
-                                    }
-                                    const parsed = parseDateInputValue(nextDate);
-                                    if (!parsed) return;
-                                    updateQuickWrongAnswerAssignment(idx, {
-                                      session_month: String(parsed.month),
-                                      session_day: String(parsed.day),
-                                      session_day_label: parsed.dayLabel || ''
-                                    });
-                                  }}
-                                  disabled={quickWrongAnswerSaving}
-                                />
-                              </div>
-                              <div>
-                                <div className="text-[11px] text-slate-600">시작 시각(선택)</div>
-                                <div className="mt-1 space-y-1.5">
-                                  <input
-                                    className="input h-9 w-full"
-                                    type="time"
-                                    value={problemAssignment?.session_start_time || ''}
-                                    onChange={(e) =>
-                                      updateQuickWrongAnswerAssignment(idx, {
-                                        session_start_time: String(e.target.value || '').trim()
-                                      })
-                                    }
-                                    disabled={quickWrongAnswerSaving}
-                                  />
-                                  <div className="flex justify-end">
-                                    <button
-                                      className="btn-ghost h-8 px-2 text-[11px]"
-                                      type="button"
-                                      onClick={() =>
-                                        updateQuickWrongAnswerAssignment(idx, {
-                                          session_start_time: ''
-                                        })
-                                      }
-                                      disabled={quickWrongAnswerSaving}
-                                    >
-                                      미선택
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-[11px] text-slate-600">요일(수동)</div>
-                                <div className="mt-1 space-y-1.5">
-                                  <select
-                                    className="input h-9 w-full"
-                                    value={problemAssignment?.session_day_label || ''}
-                                    onChange={(e) =>
-                                      updateQuickWrongAnswerAssignment(idx, {
-                                        session_day_label: String(e.target.value || '').trim()
-                                      })
-                                    }
-                                    disabled={quickWrongAnswerSaving}
-                                  >
-                                    <option value="">선택</option>
-                                    {DAY_OPTIONS.map((day) => (
-                                      <option key={`quick-day-${idx}-${day}`} value={day}>{day}</option>
-                                    ))}
-                                  </select>
-                                  <div className="flex justify-end">
-                                    <button
-                                      className="btn-ghost h-8 px-2 text-[11px]"
-                                      type="button"
-                                      onClick={() =>
-                                        updateQuickWrongAnswerAssignment(idx, {
-                                          session_day_label: ''
-                                        })
-                                      }
-                                      disabled={quickWrongAnswerSaving}
-                                    >
-                                      미선택
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-[11px] text-slate-600">진행 시간(분)</div>
-                                <input
-                                  className="input mt-1 h-9"
-                                  type="number"
-                                  min={1}
-                                  max={240}
-                                  step={1}
-                                  value={problemAssignment?.session_duration_minutes || 20}
-                                  onChange={(e) =>
-                                    updateQuickWrongAnswerAssignment(idx, {
-                                      session_duration_minutes: Math.max(
-                                        1,
-                                        Math.min(240, Number(e.target.value || 20) || 20)
-                                      )
-                                    })
-                                  }
-                                  disabled={quickWrongAnswerSaving}
-                                />
-                              </div>
-                            </div>
-                            <div className="mt-1 text-[11px] text-slate-600">
-                              자동 반영: {problemAssignment?.session_day_label || '-'}요일 · {problemAssignment?.session_month || '-'}월 {problemAssignment?.session_day || '-'}일 · {problemSessionStartTime || '--:--'}
-                            </div>
-                            <div className={`mt-1 text-[11px] ${problemSessionRangeText ? 'text-slate-600' : 'text-slate-500'}`}>
-                              등록된 시작 시각: {problemSessionStartTime || '--:--'}
-                              {problemSessionRangeText ? ` · 범위: ${problemSessionRangeText}` : ''}
-                            </div>
-                          </div>
-                        </div>
+                      </div>
+                      <div className="mt-3">
+                        <div className="text-xs text-slate-800">전달사항</div>
+                        <textarea
+                          className="textarea mt-1 min-h-[46px]"
+                          value={item.note || ''}
+                          onChange={(e) => updateQuickWrongAnswerProblem(idx, { note: e.target.value })}
+                          disabled={quickWrongAnswerSaving}
+                        />
+                      </div>
                         {showMentorPickerForProblem ? (
-                          <div className="col-span-12 rounded-xl border border-slate-200 bg-white/70 p-3">
+                          <div className="mt-3 rounded-xl border border-slate-200 bg-white/70 p-3">
                             <div className="flex items-center justify-between gap-2">
                               <div className="text-xs font-semibold text-slate-800">멘토 후보</div>
                               {quickWrongAnswerCandidates.length ? (
@@ -2533,7 +2404,7 @@ export default function AssignmentStatus() {
                           </div>
                         ) : null}
                         {Array.isArray(item.images) && item.images.length ? (
-                          <div className="col-span-12">
+                          <div className="mt-3">
                             <div className="text-xs text-slate-700">업로드된 문제 이미지 ({item.images.length}장)</div>
                             <div className="mt-2 flex flex-wrap gap-2">
                               {item.images.map((img, imageIdx) => {
@@ -2567,7 +2438,7 @@ export default function AssignmentStatus() {
                             </div>
                           </div>
                         ) : null}
-                      </div>
+                      </>
                     ) : null}
                   </div>
                 );

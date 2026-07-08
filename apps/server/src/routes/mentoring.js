@@ -2,7 +2,7 @@
 import { canEditField, filterObjectByView } from '../lib/permissions.js';
 import { writeAudit } from '../lib/audit.js';
 import { signWrongAnswerUploadToken } from '../lib/problemUploadToken.js';
-import { sanitizeStudentForRole } from '../lib/studentProfile.js';
+import { canEditScoreProfile, canViewScoreProfile, sanitizeStudentForRole } from '../lib/studentProfile.js';
 
 function ensureWeekRecord(db, student_id, week_id) {
   const existing = db.prepare('SELECT id FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
@@ -930,7 +930,7 @@ export default function mentoringRoutes(db) {
       ? filterObjectByView(db, req.user.role, weekRecord, { parentMode })
       : weekRecord;
 
-    if (week_record && req.user.role !== 'director') {
+    if (week_record && !canViewScoreProfile(req.user.role)) {
       week_record = {
         ...week_record,
         scores_json: null
@@ -1086,7 +1086,7 @@ export default function mentoringRoutes(db) {
     const mentorEditableKeys = new Set(clinicEnabled ? ['d_clinic_records'] : []);
     const allowed = keys.filter((k) => {
       if (k === 'shared_with_parent') return true;
-      if (k === 'scores_json' && req.user.role !== 'director') return false;
+      if (k === 'scores_json' && !canEditScoreProfile(req.user.role)) return false;
       if (req.user.role === 'mentor') return mentorEditableKeys.has(k) && canEditField(db, req.user.role, k);
       return canEditField(db, req.user.role, k);
     });

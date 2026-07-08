@@ -6,6 +6,16 @@ const SCORE_KEYS = new Set([
   'score_rows',
   'school_scores'
 ]);
+const SCORE_VIEW_ROLES = new Set(['director', 'lead', 'admin']);
+const SCORE_EDIT_ROLES = new Set(['director']);
+
+export function canViewScoreProfile(role) {
+  return SCORE_VIEW_ROLES.has(String(role || '').trim());
+}
+
+export function canEditScoreProfile(role) {
+  return SCORE_EDIT_ROLES.has(String(role || '').trim());
+}
 
 export function parseProfileJson(profileJson, fallback = {}) {
   try {
@@ -25,7 +35,7 @@ function cleanProfileForNonDirector(profile) {
 
 export function sanitizeProfileJsonForRole(profileJson, role) {
   if (!profileJson) return profileJson;
-  if (String(role || '') === 'director') return profileJson;
+  if (canViewScoreProfile(role)) return profileJson;
   const parsed = parseProfileJson(profileJson, {});
   return JSON.stringify(cleanProfileForNonDirector(parsed));
 }
@@ -41,7 +51,7 @@ export function sanitizeStudentForRole(student, role) {
 
 export function mergeProfileForRole(existingProfileJson, incomingProfileJson, role) {
   const incoming = parseProfileJson(incomingProfileJson, {});
-  if (String(role || '') === 'director') return JSON.stringify(incoming);
+  if (canEditScoreProfile(role)) return JSON.stringify(incoming);
 
   const existing = parseProfileJson(existingProfileJson, {});
   const incomingInfo = incoming?.student_info && typeof incoming.student_info === 'object' && !Array.isArray(incoming.student_info)
