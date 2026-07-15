@@ -978,6 +978,7 @@ function ensureMentoringTables() {
       a_progress TEXT,
       a_this_hw TEXT,
       a_comment TEXT,
+      curriculum_updated_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_by INTEGER,
@@ -995,6 +996,11 @@ function ensureMentoringTables() {
   const subjectCols = new Set(db.prepare(`PRAGMA table_info(mentoring_subjects)`).all().map((r) => r.name));
   if (!subjectCols.has('deleted_from_week_id')) {
     db.exec(`ALTER TABLE mentoring_subjects ADD COLUMN deleted_from_week_id INTEGER;`);
+  }
+
+  const subjectRecordCols = new Set(db.prepare(`PRAGMA table_info(subject_records)`).all().map((r) => r.name));
+  if (!subjectRecordCols.has('curriculum_updated_at')) {
+    db.exec(`ALTER TABLE subject_records ADD COLUMN curriculum_updated_at TEXT;`);
   }
 
   db.exec(`

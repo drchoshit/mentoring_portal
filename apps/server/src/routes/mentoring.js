@@ -315,8 +315,8 @@ function applyCurriculumSourceToWeek(db, student_id, week_id, source_week_id, up
 
   const info = db.prepare(
     `
-    INSERT INTO subject_records (student_id, week_id, subject_id, a_curriculum, updated_at, updated_by)
-    SELECT student_id, ?, subject_id, a_curriculum, datetime('now'), ?
+    INSERT INTO subject_records (student_id, week_id, subject_id, a_curriculum, curriculum_updated_at, updated_at, updated_by)
+    SELECT student_id, ?, subject_id, a_curriculum, datetime('now'), datetime('now'), ?
     FROM subject_records
     WHERE student_id = ?
       AND week_id = ?
@@ -325,6 +325,7 @@ function applyCurriculumSourceToWeek(db, student_id, week_id, source_week_id, up
     ON CONFLICT(student_id, week_id, subject_id)
     DO UPDATE SET
       a_curriculum = excluded.a_curriculum,
+      curriculum_updated_at = datetime('now'),
       updated_at = datetime('now'),
       updated_by = excluded.updated_by
     WHERE subject_records.a_curriculum IS NULL
@@ -912,6 +913,15 @@ export default function mentoringRoutes(db) {
 
     const weekRecord = db.prepare('SELECT * FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
     const mentorInfo = getMentorInfoSetting(db);
+    const curriculumUpdate = db.prepare(
+      `SELECT MAX(curriculum_updated_at) AS updated_at
+       FROM subject_records
+       WHERE student_id=? AND curriculum_updated_at IS NOT NULL`
+    ).get(student_id);
+    const curriculumUpdatedAt = curriculumUpdate?.updated_at || null;
+    const curriculumUpdatedRecently = curriculumUpdatedAt
+      ? Boolean(db.prepare("SELECT datetime(?) >= datetime('now', '-14 days') AS recent").get(curriculumUpdatedAt)?.recent)
+      : false;
 
     const parentMode = req.user.role === 'parent';
 
@@ -957,6 +967,8 @@ export default function mentoringRoutes(db) {
       subject_records,
       week_record,
       mentor_info: mentorInfo,
+      curriculum_updated_at: curriculumUpdatedAt,
+      curriculum_updated_recently: curriculumUpdatedRecently,
       use_new_daily_task_layout: useNewDailyTaskLayout,
       curriculum_source_week_id: curriculumSourceWeekId || null,
       curriculum_source_preference_week_id: preferenceWeekId || null
@@ -1051,7 +1063,9 @@ export default function mentoringRoutes(db) {
     const allowed = keys.filter((k) => canEditField(db, req.user.role, k));
     if (!allowed.length) return res.status(403).json({ error: 'No editable fields' });
 
-    const setSql = allowed.map((k) => `${k}=?`).join(', ');
+    const setParts = allowed.map((k) => `${k}=?`);
+    if (allowed.includes('a_curriculum')) setParts.push("curriculum_updated_at=datetime('now')");
+    const setSql = setParts.join(', ');
     const values = allowed.map((k) => updates[k] == null ? null : String(updates[k]));
     db.prepare(`UPDATE subject_records SET ${setSql}, updated_at=datetime('now'), updated_by=? WHERE id=?`)
       .run(...values, req.user.id, id);

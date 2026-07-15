@@ -30,6 +30,28 @@ const ROLE_ORDER = {
   parent: 4
 };
 
+function parseServerTimestamp(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? raw : `${raw.replace(' ', 'T')}Z`;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatKoreanTimestamp(value) {
+  const parsed = parseServerTimestamp(value);
+  if (!parsed) return '';
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(parsed);
+}
+
 function wrongAnswerRoleLabel(role) {
   if (role === 'mentor') return '클리닉 멘토';
   return ROLE_KO[role] || role || '멘토';
@@ -972,6 +994,7 @@ export default function Mentoring() {
   const [showWrongAnswerSection, setShowWrongAnswerSection] = useState(false);
   const [showLegacyRecordsModal, setShowLegacyRecordsModal] = useState(false);
   const [showEntryNotice, setShowEntryNotice] = useState(true);
+  const [showCurriculumUpdateNotice, setShowCurriculumUpdateNotice] = useState(false);
   const [wrongAnswerUploadModal, setWrongAnswerUploadModal] = useState({
     open: false,
     loading: false,
@@ -985,6 +1008,7 @@ export default function Mentoring() {
   const [subjectDrafts, setSubjectDrafts] = useState({});
   const draftScopeRef = useRef('');
   const profileRef = useRef(null);
+  const curriculumNoticeStudentRef = useRef('');
 
   const parentMode = user?.role === 'parent';
   const mentorMode = user?.role === 'mentor';
@@ -1055,7 +1079,16 @@ export default function Mentoring() {
 
   useEffect(() => {
     setShowEntryNotice(true);
+    setShowCurriculumUpdateNotice(false);
+    curriculumNoticeStudentRef.current = '';
   }, [studentId]);
+
+  useEffect(() => {
+    if (!rec?.student?.id || String(rec.student.id) !== String(studentId)) return;
+    if (curriculumNoticeStudentRef.current === String(studentId)) return;
+    curriculumNoticeStudentRef.current = String(studentId);
+    setShowCurriculumUpdateNotice(Boolean(rec?.curriculum_updated_recently));
+  }, [rec?.student?.id, rec?.curriculum_updated_at, rec?.curriculum_updated_recently, studentId]);
 
   // subjectDrafts 초기??병합: 회차 ?�는 ?�생??바뀌면 reset, 같�? 범위�??�규 과목�?추�?
   useEffect(() => {
@@ -2564,14 +2597,31 @@ export default function Mentoring() {
         {!mentorMode ? (
           <>
         {/* 학습 커리큘럼 */}
-        <GoldCard className="p-5">
+        <GoldCard
+          className={[
+            'p-5 transition-shadow',
+            rec?.curriculum_updated_recently ? 'ring-4 ring-amber-300/70 shadow-lg shadow-amber-100' : ''
+          ].join(' ')}
+        >
           <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-brand-900">학습 커리큘럼</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-sm font-semibold text-brand-900">학습 커리큘럼</div>
+                {rec?.curriculum_updated_recently ? (
+                  <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 text-[11px] font-bold text-amber-900">
+                    최근 업데이트
+                  </span>
+                ) : null}
+              </div>
               <div className="text-xs text-slate-700">
                 기본: 이전 회차 자동 불러오기
                 {curriculumSourceWeek ? ` · 현재 적용 기준: ${toRoundLabel(curriculumSourceWeek.label)}` : ''}
               </div>
+              {rec?.curriculum_updated_at ? (
+                <div className={['mt-1 text-xs font-medium', rec?.curriculum_updated_recently ? 'text-amber-800' : 'text-slate-600'].join(' ')}>
+                  최근 업데이트: {formatKoreanTimestamp(rec.curriculum_updated_at)}
+                </div>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2 justify-end">
               <select
@@ -2908,6 +2958,27 @@ export default function Mentoring() {
         ) : null}
 
       </div>
+
+      {showCurriculumUpdateNotice ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4">
+          <div className="card w-full max-w-lg border-2 border-amber-300 bg-white p-6 shadow-2xl">
+            <div className="inline-flex rounded-full border border-amber-300 bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">
+              최근 2주 이내 업데이트
+            </div>
+            <div className="mt-4 text-lg font-bold text-brand-900">학습 커리큘럼이 업데이트 되었습니다</div>
+            {rec?.curriculum_updated_at ? (
+              <div className="mt-2 text-sm text-slate-700">
+                최근 업데이트: {formatKoreanTimestamp(rec.curriculum_updated_at)}
+              </div>
+            ) : null}
+            <div className="mt-5 flex justify-end">
+              <button className="btn-primary px-4" type="button" onClick={() => setShowCurriculumUpdateNotice(false)}>
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {showEntryNotice ? (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4">
@@ -3970,7 +4041,7 @@ const StudentProfileSection = forwardRef(function StudentProfileSection({ studen
   const viewerRole = String(userRole || '').trim();
   const canEditStudentInfo = ['director', 'admin', 'lead'].includes(viewerRole);
   const canViewScores = ['director', 'lead', 'admin'].includes(viewerRole);
-  const canEditScores = viewerRole === 'director';
+  const canEditScores = ['director', 'lead', 'admin'].includes(viewerRole);
   const hideScoreSection = !canViewScores;
   const isStudentInfoReadOnly = !canEditStudentInfo;
   const isScoresReadOnly = !canEditScores;
