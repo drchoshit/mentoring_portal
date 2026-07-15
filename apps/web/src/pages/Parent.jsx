@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 
 function safeJson(v, fallback) {
@@ -9,6 +9,23 @@ function safeJson(v, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function formatKoreanTimestamp(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? raw : `${raw.replace(' ', 'T')}Z`;
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(parsed);
 }
 
 function normalizeLastHwTask(raw) {
@@ -437,6 +454,8 @@ export default function Parent() {
   const [selectedWeekId, setSelectedWeekId] = useState('');
   const [record, setRecord] = useState(null);
   const [mentorNotice, setMentorNotice] = useState(null);
+  const [showCurriculumUpdateNotice, setShowCurriculumUpdateNotice] = useState(false);
+  const curriculumNoticeStudentRef = useRef('');
 
   async function loadOverview() {
     setLoading(true);
@@ -517,6 +536,18 @@ export default function Parent() {
     }
     loadRecord(selectedStudentId, selectedWeekId);
   }, [items, selectedStudentId, selectedWeekId]);
+
+  useEffect(() => {
+    setShowCurriculumUpdateNotice(false);
+    curriculumNoticeStudentRef.current = '';
+  }, [selectedStudentId]);
+
+  useEffect(() => {
+    if (!record?.student?.id || String(record.student.id) !== String(selectedStudentId)) return;
+    if (curriculumNoticeStudentRef.current === String(selectedStudentId)) return;
+    curriculumNoticeStudentRef.current = String(selectedStudentId);
+    setShowCurriculumUpdateNotice(Boolean(record?.curriculum_updated_recently));
+  }, [record?.student?.id, record?.curriculum_updated_at, record?.curriculum_updated_recently, selectedStudentId]);
 
   const selected = useMemo(
     () => items.find((x) => String(x.student.id) === String(selectedStudentId)),
@@ -777,8 +808,19 @@ export default function Parent() {
       </div>
 
       <BlockedSection blocked={isLockedWeek}>
-        <div className={sectionCardClass(SECTION_TONES.subjects)}>
+        <div
+          className={[
+            sectionCardClass(SECTION_TONES.subjects),
+            record?.curriculum_updated_recently ? 'ring-4 ring-amber-300/70 shadow-xl shadow-amber-100' : ''
+          ].join(' ')}
+        >
           <SectionTitle title="과목별 기록" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+          {record?.curriculum_updated_at ? (
+            <div className={['mt-3 flex flex-wrap items-center gap-2 rounded-2xl border px-3 py-2 text-xs', record?.curriculum_updated_recently ? 'border-amber-300 bg-amber-50 font-semibold text-amber-900' : 'border-slate-200 bg-white/70 text-slate-600'].join(' ')}>
+              {record?.curriculum_updated_recently ? <span className="rounded-full bg-amber-200/80 px-2 py-0.5 font-bold">최근 업데이트</span> : null}
+              <span>학습 커리큘럼 최근 업데이트: {formatKoreanTimestamp(record.curriculum_updated_at)}</span>
+            </div>
+          ) : null}
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
             <div className="mt-4 space-y-4">
               {subjectRecords.length ? subjectRecords.map((sr, idx) => {
@@ -915,6 +957,27 @@ export default function Parent() {
       <div className="rounded-2xl border border-slate-200/70 bg-white/70 px-4 py-3 text-xs leading-5 text-slate-500 shadow-sm">
         안내: 학부모 페이지는 조회 전용이며, 공유가 완료된 회차의 기록만 표시됩니다.
       </div>
+
+      {showCurriculumUpdateNotice ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4">
+          <div className="card w-full max-w-lg border-2 border-amber-300 bg-white p-6 shadow-2xl">
+            <div className="inline-flex rounded-full border border-amber-300 bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">
+              최근 2주 이내 업데이트
+            </div>
+            <div className="mt-4 text-lg font-bold text-brand-900">학습 커리큘럼이 업데이트 되었습니다</div>
+            {record?.curriculum_updated_at ? (
+              <div className="mt-2 text-sm text-slate-700">
+                최근 업데이트: {formatKoreanTimestamp(record.curriculum_updated_at)}
+              </div>
+            ) : null}
+            <div className="mt-5 flex justify-end">
+              <button className="btn-primary px-4" type="button" onClick={() => setShowCurriculumUpdateNotice(false)}>
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

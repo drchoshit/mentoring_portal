@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS subject_records (
   a_progress TEXT,
   a_this_hw TEXT,
   a_comment TEXT,
+  curriculum_updated_at TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_by INTEGER REFERENCES users(id),
   UNIQUE(student_id, week_id, subject_id)

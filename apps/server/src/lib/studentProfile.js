@@ -7,7 +7,7 @@ const SCORE_KEYS = new Set([
   'school_scores'
 ]);
 const SCORE_VIEW_ROLES = new Set(['director', 'lead', 'admin']);
-const SCORE_EDIT_ROLES = new Set(['director']);
+const SCORE_EDIT_ROLES = new Set(['director', 'lead', 'admin']);
 
 export function canViewScoreProfile(role) {
   return SCORE_VIEW_ROLES.has(String(role || '').trim());
