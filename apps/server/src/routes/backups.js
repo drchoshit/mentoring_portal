@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import BetterSqlite from 'better-sqlite3';
 import { requireRole } from '../lib/auth.js';
 import { dbFilePath } from '../lib/db.js';
+import { writeAudit } from '../lib/audit.js';
 
 const execFileAsync = promisify(execFile);
 const ROUTE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -685,6 +686,97 @@ export default function backupRoutes(db) {
   router.get('/list', (req, res) => {
     const files = listBackupFiles().slice(0, 200);
     res.json({ backups: files });
+  });
+
+  router.get('/subject-records/:name', (req, res) => {
+    const name = String(req.params.name || '');
+    if (!isSafeBackupFilename(name)) return res.status(400).json({ error: 'Invalid filename' });
+    const filePath = path.join(BACKUP_DIR, name);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Backup not found' });
+    const ids = String(req.query.ids || '')
+      .split(',')
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0);
+    if (!ids.length || ids.length > 100) return res.status(400).json({ error: '1 to 100 subject record ids are required' });
+
+    const backupDb = new BetterSqlite(filePath, { readonly: true, fileMustExist: true });
+    try {
+      const placeholders = ids.map(() => '?').join(',');
+      const records = backupDb.prepare(`
+        SELECT id, student_id, week_id, subject_id, a_this_hw, updated_at, updated_by
+        FROM subject_records
+        WHERE id IN (${placeholders})
+        ORDER BY id
+      `).all(...ids);
+      return res.json({ backup: name, records });
+    } finally {
+      backupDb.close();
+    }
+  });
+
+  router.post('/restore-subject-fields', (req, res) => {
+    const backup = String(req.body?.backup || '');
+    const requested = Array.isArray(req.body?.records) ? req.body.records : [];
+    if (!isSafeBackupFilename(backup)) return res.status(400).json({ error: 'Invalid filename' });
+    if (!requested.length || requested.length > 100) return res.status(400).json({ error: '1 to 100 restore records are required' });
+    const filePath = path.join(BACKUP_DIR, backup);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Backup not found' });
+
+    const ids = [...new Set(requested.map((item) => Number(item?.id)).filter((id) => Number.isInteger(id) && id > 0))];
+    if (!ids.length) return res.status(400).json({ error: 'Valid subject record ids are required' });
+    const allowedFields = new Set(['a_this_hw']);
+    const fieldsById = new Map(requested.map((item) => [
+      Number(item?.id),
+      [...new Set((Array.isArray(item?.fields) ? item.fields : []).filter((field) => allowedFields.has(field)))]
+    ]));
+    if (ids.some((id) => !(fieldsById.get(id)?.length))) {
+      return res.status(400).json({ error: 'Only explicitly allowed fields can be restored' });
+    }
+
+    const backupDb = new BetterSqlite(filePath, { readonly: true, fileMustExist: true });
+    let sourceRows = [];
+    try {
+      const placeholders = ids.map(() => '?').join(',');
+      sourceRows = backupDb.prepare(`
+        SELECT id, a_this_hw
+        FROM subject_records
+        WHERE id IN (${placeholders})
+      `).all(...ids);
+    } finally {
+      backupDb.close();
+    }
+    if (sourceRows.length !== ids.length) return res.status(409).json({ error: 'Some records are missing from the selected backup' });
+
+    const safety = backupNow('pre-field-restore');
+    const sourceById = new Map(sourceRows.map((row) => [Number(row.id), row]));
+    const restored = db.transaction(() => ids.map((id) => {
+      const current = db.prepare('SELECT id, a_this_hw FROM subject_records WHERE id=?').get(id);
+      if (!current) throw new Error(`Current subject record ${id} not found`);
+      const source = sourceById.get(id);
+      const fields = fieldsById.get(id);
+      const setSql = fields.map((field) => `${field}=?`).join(', ');
+      const values = fields.map((field) => source[field]);
+      db.prepare(`UPDATE subject_records SET ${setSql}, updated_at=datetime('now'), updated_by=? WHERE id=?`)
+        .run(...values, req.user.id, id);
+      return { id, fields };
+    }))();
+
+    writeAudit(db, {
+      user_id: req.user.id,
+      action: 'restore_fields',
+      entity: 'subject_record',
+      details: {
+        backup,
+        safety_backup: path.basename(safety.out),
+        records: restored
+      }
+    });
+    return res.json({
+      ok: true,
+      backup,
+      safety_backup: path.basename(safety.out),
+      restored
+    });
   });
 
   router.post('/now', (req, res) => {

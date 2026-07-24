@@ -1066,11 +1066,27 @@ export default function mentoringRoutes(db) {
     const setParts = allowed.map((k) => `${k}=?`);
     if (allowed.includes('a_curriculum')) setParts.push("curriculum_updated_at=datetime('now')");
     const setSql = setParts.join(', ');
-    const values = allowed.map((k) => updates[k] == null ? null : String(updates[k]));
+    const serializeFieldValue = (value) => {
+      if (value == null) return null;
+      if (typeof value === 'string') return value;
+      if (typeof value === 'object') return JSON.stringify(value);
+      return String(value);
+    };
+    const values = allowed.map((k) => serializeFieldValue(updates[k]));
     db.prepare(`UPDATE subject_records SET ${setSql}, updated_at=datetime('now'), updated_by=? WHERE id=?`)
       .run(...values, req.user.id, id);
 
-    writeAudit(db, { user_id: req.user.id, action: 'update', entity: 'subject_record', entity_id: id, details: { fields: allowed } });
+    writeAudit(db, {
+      user_id: req.user.id,
+      action: 'update',
+      entity: 'subject_record',
+      entity_id: id,
+      details: {
+        fields: allowed,
+        before: Object.fromEntries(allowed.map((key) => [key, row[key] ?? null])),
+        after: Object.fromEntries(allowed.map((key, index) => [key, values[index] ?? null]))
+      }
+    });
     res.json({ ok: true, updated_fields: allowed });
   });
 
