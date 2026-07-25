@@ -1283,7 +1283,7 @@ export default function Mentoring() {
 
   async function renameSubject(subjectId, currentName, nextName) {
     const normalizedName = String(nextName || '').trim();
-    if (!subjectId || !normalizedName || normalizedName === String(currentName || '').trim()) return;
+    if (!subjectId || !normalizedName || normalizedName === String(currentName || '').trim()) return false;
     setBusy(true);
     try {
       confirmOrThrow(`과목명을 "${currentName}"에서 "${normalizedName}"(으)로 수정할까요?`);
@@ -1292,8 +1292,10 @@ export default function Mentoring() {
         body: { name: normalizedName }
       });
       await loadAll();
+      return true;
     } catch (e) {
       if (e?.message !== '__CANCEL__') setError(e?.message || '과목명 수정에 실패했습니다.');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -3605,16 +3607,43 @@ function CurriculumStrip({
 
 function SubjectNameEditor({ name, busy, onSave }) {
   const [draftName, setDraftName] = useState(name || '');
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     setDraftName(name || '');
+    setEditing(false);
   }, [name]);
 
   const normalizedName = String(draftName || '').trim();
   const changed = normalizedName && normalizedName !== String(name || '').trim();
 
+  async function saveName() {
+    if (!changed || busy) return;
+    const saved = await onSave?.(normalizedName);
+    if (saved) setEditing(false);
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-0 flex-1 break-words text-base font-semibold text-slate-900">{name}</div>
+        <button
+          className="btn-ghost shrink-0 px-3 py-1.5 text-xs"
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setDraftName(name || '');
+            setEditing(true);
+          }}
+        >
+          과목명 수정
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
       <input
         className="input h-9 min-w-0 flex-1 font-semibold text-slate-900"
         aria-label={`${name || '과목'} 과목명`}
@@ -3623,7 +3652,11 @@ function SubjectNameEditor({ name, busy, onSave }) {
         onKeyDown={(e) => {
           if (e.key === 'Enter' && changed && !busy) {
             e.preventDefault();
-            onSave?.(normalizedName);
+            saveName();
+          }
+          if (e.key === 'Escape' && !busy) {
+            setDraftName(name || '');
+            setEditing(false);
           }
         }}
         disabled={busy}
@@ -3632,9 +3665,20 @@ function SubjectNameEditor({ name, busy, onSave }) {
         className="btn-ghost shrink-0 px-3 py-1.5 text-xs"
         type="button"
         disabled={busy || !changed}
-        onClick={() => onSave?.(normalizedName)}
+        onClick={saveName}
       >
-        이름 저장
+        {busy ? '저장 중...' : '저장'}
+      </button>
+      <button
+        className="btn-ghost shrink-0 px-3 py-1.5 text-xs"
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          setDraftName(name || '');
+          setEditing(false);
+        }}
+      >
+        취소
       </button>
     </div>
   );
