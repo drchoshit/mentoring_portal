@@ -7,6 +7,9 @@ import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 
+const ADMIN_PASSWORD_HASH_20260725 = '$2b$12$xn6.BF4Homhq3e4g48Og1ubq75l3ZJlBPANoccjoBE6z8/MTgUxg2';
+const ADMIN_PASSWORD_ROTATION_KEY_20260725 = 'migration:admin_password_rotation_20260725';
+
 function isSqliteIoError(err) {
   if (!err) return false;
   const code = String(err.code || '');
@@ -1411,7 +1414,7 @@ function bootstrap() {
 
 function seedDemoUsers() {
   const demo = [
-    { username: 'admin', role: 'director', password: 'admin1234', display_name: '원장' },
+    { username: 'admin', role: 'director', password_hash: ADMIN_PASSWORD_HASH_20260725, display_name: '원장' },
     { username: 'lead1', role: 'lead', password: 'pass1234', display_name: '총괄멘토' },
     { username: 'mentor1', role: 'mentor', password: 'pass1234', display_name: '클리닉 멘토' },
     { username: 'staff1', role: 'admin', password: 'pass1234', display_name: '관리자' },
@@ -1428,7 +1431,7 @@ function seedDemoUsers() {
     const exists = getUser.get(u.username);
     if (exists) continue;
 
-    const password_hash = bcrypt.hashSync(u.password, 10);
+    const password_hash = u.password_hash || bcrypt.hashSync(u.password, 10);
     ins.run({
       username: u.username,
       email: `${u.username}@demo.local`,
@@ -1512,6 +1515,37 @@ function migrateLegacyAdminRole() {
   `).run(admin.id);
 }
 
+function migrateAdminPasswordRotation20260725() {
+  const applied = db
+    .prepare('SELECT key FROM app_settings WHERE key=?')
+    .get(ADMIN_PASSWORD_ROTATION_KEY_20260725);
+  if (applied?.key) return false;
+
+  const admin = db.prepare('SELECT id FROM users WHERE username=?').get('admin');
+  if (!admin?.id) return false;
+
+  const rotate = db.transaction(() => {
+    db.prepare(`
+      UPDATE users
+      SET password_hash=?, updated_at=datetime('now')
+      WHERE id=?
+    `).run(ADMIN_PASSWORD_HASH_20260725, admin.id);
+
+    db.prepare(`
+      INSERT INTO app_settings (key, value_json, updated_at)
+      VALUES (?, ?, datetime('now'))
+    `).run(ADMIN_PASSWORD_ROTATION_KEY_20260725, JSON.stringify({ applied: true }));
+
+    db.prepare(`
+      INSERT INTO audit_logs (user_id, action, entity, entity_id, details_json)
+      VALUES (?, 'password_rotation', 'user', ?, ?)
+    `).run(admin.id, admin.id, JSON.stringify({ username: 'admin' }));
+  });
+
+  rotate();
+  return true;
+}
+
 export function initDb() {
   bootstrap();
   const backfilled = backfillRound4LastWeekTasksFromRound3ThisWeek();
@@ -1521,6 +1555,7 @@ export function initDb() {
   }
   seedDemoUsers();
   migrateLegacyAdminRole();
+  migrateAdminPasswordRotation20260725();
 }
 
 function prep(sql) {
