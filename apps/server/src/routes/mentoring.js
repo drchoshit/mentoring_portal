@@ -789,6 +789,43 @@ export default function mentoringRoutes(db) {
     }
   });
 
+  router.put('/subjects/:studentId/:subjectId', (req, res) => {
+    const student_id = Number(req.params.studentId);
+    const subject_id = Number(req.params.subjectId);
+    const normalizedName = String(req.body?.name || '').trim();
+    if (!student_id || !subject_id) return res.status(400).json({ error: 'Missing studentId/subjectId' });
+    if (!normalizedName) return res.status(400).json({ error: 'Missing name' });
+    if (!['director', 'lead', 'admin'].includes(String(req.user.role || ''))) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const row = db
+      .prepare('SELECT id, name FROM mentoring_subjects WHERE id=? AND student_id=?')
+      .get(subject_id, student_id);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    if (row.name === normalizedName) return res.json({ ok: true, id: subject_id, name: normalizedName });
+
+    const duplicate = db
+      .prepare('SELECT id FROM mentoring_subjects WHERE student_id=? AND name=? AND id<>?')
+      .get(student_id, normalizedName, subject_id);
+    if (duplicate?.id) return res.status(400).json({ error: 'Subject exists' });
+
+    try {
+      db.prepare("UPDATE mentoring_subjects SET name=?, updated_at=datetime('now') WHERE id=? AND student_id=?")
+        .run(normalizedName, subject_id, student_id);
+      writeAudit(db, {
+        user_id: req.user.id,
+        action: 'update',
+        entity: 'mentoring_subject',
+        entity_id: subject_id,
+        details: { student_id, previous_name: row.name, name: normalizedName }
+      });
+      return res.json({ ok: true, id: subject_id, name: normalizedName });
+    } catch {
+      return res.status(400).json({ error: 'Subject exists' });
+    }
+  });
+
   router.delete('/subjects/:studentId/:subjectId', (req, res) => {
     const student_id = Number(req.params.studentId);
     const subject_id = Number(req.params.subjectId);
@@ -901,8 +938,7 @@ export default function mentoringRoutes(db) {
     const subject_records_raw = subject_records_all
       .filter((r) => {
         const deletedFromWeekId = toPositiveInt(r?.subject_deleted_from_week_id);
-        if (!deletedFromWeekId || deletedFromWeekId > week_id) return true;
-        return hasMeaningfulSubjectRecord(r);
+        return !deletedFromWeekId || deletedFromWeekId > week_id;
       })
       .map((r) => ({
         ...r,

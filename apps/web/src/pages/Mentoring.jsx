@@ -1281,6 +1281,24 @@ export default function Mentoring() {
     }
   }
 
+  async function renameSubject(subjectId, currentName, nextName) {
+    const normalizedName = String(nextName || '').trim();
+    if (!subjectId || !normalizedName || normalizedName === String(currentName || '').trim()) return;
+    setBusy(true);
+    try {
+      confirmOrThrow(`과목명을 "${currentName}"에서 "${normalizedName}"(으)로 수정할까요?`);
+      await api(`/api/mentoring/subjects/${studentId}/${subjectId}`, {
+        method: 'PUT',
+        body: { name: normalizedName }
+      });
+      await loadAll();
+    } catch (e) {
+      if (e?.message !== '__CANCEL__') setError(e?.message || '과목명 수정에 실패했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deleteSubject(subjectId, subjectName) {
     if (!subjectId) return;
     if (!weekId) {
@@ -1290,8 +1308,14 @@ export default function Mentoring() {
     setBusy(true);
     try {
       const label = subjectName ? `"${subjectName}"` : '해당 과목';
-      confirmOrThrow(`과목 ${label}을(를) 현재 회차 이후에서 숨길까요?\n이미 입력된 기록은 삭제하지 않고 보존됩니다.`);
+      confirmOrThrow(`과목 ${label}을(를) 삭제할까요?\n선택한 회차부터 과목과 학습 커리큘럼에서 제거되며, 이전 회차 기록은 유지됩니다.`);
       await api(`/api/mentoring/subjects/${studentId}/${subjectId}?weekId=${encodeURIComponent(weekId)}`, { method: 'DELETE' });
+      setRec((prev) => ({
+        ...(prev || {}),
+        subject_records: (prev?.subject_records || []).filter(
+          (record) => String(record?.subject_id || record?.id) !== String(subjectId)
+        )
+      }));
       await loadAll();
     } catch (e) {
       if (e?.message !== '__CANCEL__') setError(e.message);
@@ -2673,9 +2697,11 @@ export default function Mentoring() {
               role={user?.role}
               busy={busy}
               parentMode={parentMode}
+              canRenameSubject={['director', 'lead', 'admin'].includes(String(user?.role || ''))}
               drafts={subjectDrafts}
               onChangeDraft={updateSubjectDraft}
               onAutoSave={autoSaveOneSubject}
+              onRenameSubject={renameSubject}
             />
           </div>
         </GoldCard>
@@ -3485,7 +3511,18 @@ function FeedCard({ feed, currentUser, onComment, onDelete }) {
 }
 
 /* 학습 커리큘럼(과목별: 3열 x 2행 가시 그리드) */
-function CurriculumStrip({ subjects, perms, role, parentMode, busy, drafts, onChangeDraft, onAutoSave }) {
+function CurriculumStrip({
+  subjects,
+  perms,
+  role,
+  parentMode,
+  busy,
+  canRenameSubject,
+  drafts,
+  onChangeDraft,
+  onAutoSave,
+  onRenameSubject
+}) {
   const fieldKey = 'a_curriculum';
   const perm = getPerm(perms, fieldKey);
   const editRoles = perm.roles_edit || [];
@@ -3519,7 +3556,16 @@ function CurriculumStrip({ subjects, perms, role, parentMode, busy, drafts, onCh
               <div className={['rounded-2xl border p-4 shadow-sm h-full flex flex-col', subjectTone].join(' ')}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-base font-semibold text-slate-900 break-words">{r.subject_name}</div>
+                    {canRenameSubject ? (
+                      <SubjectNameEditor
+                        subjectId={r.subject_id || r.id}
+                        name={r.subject_name}
+                        busy={busy}
+                        onSave={(nextName) => onRenameSubject?.(r.subject_id || r.id, r.subject_name, nextName)}
+                      />
+                    ) : (
+                      <div className="text-base font-semibold text-slate-900 break-words">{r.subject_name}</div>
+                    )}
                     <div className="mt-1 flex flex-wrap gap-1">
                       {(editRoles || []).map((rKey) => (
                         <RoleTag key={rKey} role={rKey} active={rKey === role} />
@@ -3553,6 +3599,43 @@ function CurriculumStrip({ subjects, perms, role, parentMode, busy, drafts, onCh
         })}
         </div>
       </div>
+    </div>
+  );
+}
+
+function SubjectNameEditor({ name, busy, onSave }) {
+  const [draftName, setDraftName] = useState(name || '');
+
+  useEffect(() => {
+    setDraftName(name || '');
+  }, [name]);
+
+  const normalizedName = String(draftName || '').trim();
+  const changed = normalizedName && normalizedName !== String(name || '').trim();
+
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <input
+        className="input h-9 min-w-0 flex-1 font-semibold text-slate-900"
+        aria-label={`${name || '과목'} 과목명`}
+        value={draftName}
+        onChange={(e) => setDraftName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && changed && !busy) {
+            e.preventDefault();
+            onSave?.(normalizedName);
+          }
+        }}
+        disabled={busy}
+      />
+      <button
+        className="btn-ghost shrink-0 px-3 py-1.5 text-xs"
+        type="button"
+        disabled={busy || !changed}
+        onClick={() => onSave?.(normalizedName)}
+      >
+        이름 저장
+      </button>
     </div>
   );
 }
