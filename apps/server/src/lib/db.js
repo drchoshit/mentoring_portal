@@ -997,6 +997,10 @@ function ensureMentoringTables() {
   if (!subjectCols.has('deleted_from_week_id')) {
     db.exec(`ALTER TABLE mentoring_subjects ADD COLUMN deleted_from_week_id INTEGER;`);
   }
+  if (!subjectCols.has('updated_at')) {
+    db.exec(`ALTER TABLE mentoring_subjects ADD COLUMN updated_at TEXT;`);
+    db.exec(`UPDATE mentoring_subjects SET updated_at=COALESCE(updated_at, created_at, datetime('now'));`);
+  }
 
   const subjectRecordCols = new Set(db.prepare(`PRAGMA table_info(subject_records)`).all().map((r) => r.name));
   if (!subjectRecordCols.has('curriculum_updated_at')) {

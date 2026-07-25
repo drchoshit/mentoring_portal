@@ -96,7 +96,9 @@ CREATE TABLE IF NOT EXISTS mentoring_subjects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  deleted_from_week_id INTEGER REFERENCES weeks(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(student_id, name)
 );
 

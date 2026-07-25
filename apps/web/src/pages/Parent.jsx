@@ -855,10 +855,7 @@ export default function Parent() {
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
             <div className="mt-4 grid grid-cols-1 gap-4">
               {useNewDailyTaskLayout ? (
-                <>
-                  <DailyTasksWeekPanel title="일일 학습 과제(지난주)" tasksByDay={dailyTasks} />
-                  <DailyTasksWeekPanel title="일일 학습 과제(이번주)" tasksByDay={dailyTasksThisWeek} />
-                </>
+                <DailyTasksWeekPanel title="일일 학습 과제(이번주)" tasksByDay={dailyTasksThisWeek} />
               ) : (
                 <DailyTasksWeekPanel title="일일 학습 과제" tasksByDay={dailyTasks} />
               )}
