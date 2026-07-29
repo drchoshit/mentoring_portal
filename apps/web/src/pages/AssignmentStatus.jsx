@@ -1184,7 +1184,7 @@ export default function AssignmentStatus() {
   const canEditAssignment = ['director', 'lead'].includes(String(viewer?.role || '').trim());
   const canUpdateState = Boolean(viewer?.role && viewer.role !== 'parent');
   const canIssueBriefing = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
-  const canUseQuickWrongAnswer = ['director', 'lead'].includes(String(viewer?.role || '').trim());
+  const canUseQuickWrongAnswer = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
 
   function setQueryParams(patch) {
     const cur = Object.fromEntries([...sp.entries()]);
