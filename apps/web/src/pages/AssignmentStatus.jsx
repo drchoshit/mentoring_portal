@@ -400,6 +400,8 @@ const DEFAULT_WRONG_ANSWER_ITEM = {
   incomplete_reason: '',
   status_updated_at: '',
   status_updated_by: '',
+  submitted_at: '',
+  submitted_by: '',
   deleted_at: '',
   deleted_by: ''
 };
@@ -716,6 +718,8 @@ function normalizeWrongAnswerItem(raw) {
     incomplete_reason: incompleteReason,
     status_updated_at: String(raw.status_updated_at || '').trim(),
     status_updated_by: String(raw.status_updated_by || '').trim(),
+    submitted_at: String(raw.submitted_at || '').trim(),
+    submitted_by: String(raw.submitted_by || '').trim(),
     deleted_at: String(raw.deleted_at || '').trim(),
     deleted_by: String(raw.deleted_by || '').trim(),
     images: Array.isArray(raw.images) ? raw.images.map(normalizeWrongAnswerImage).filter(Boolean) : [],
@@ -856,6 +860,8 @@ function makeWrongAnswerProblemSignature(item) {
     completion_status: String(normalized.completion_status || '').trim(),
     completion_feedback: String(normalized.completion_feedback || '').trim(),
     incomplete_reason: String(normalized.incomplete_reason || '').trim(),
+    submitted_at: String(normalized.submitted_at || '').trim(),
+    submitted_by: String(normalized.submitted_by || '').trim(),
     deleted_at: String(normalized.deleted_at || '').trim(),
     mentor_id: String(assignment.mentor_id || '').trim(),
     mentor_name: String(assignment.mentor_name || '').trim(),
@@ -1677,20 +1683,37 @@ export default function AssignmentStatus() {
 
   async function submitQuickWrongAnswerProblem(index) {
     if (!quickWeekRecordId || !canUseQuickWrongAnswer) return;
-    if (quickWrongAnswerDraftMode === 'append') {
-      const localProblems = (Array.isArray(quickWrongAnswerDraft?.problems) ? quickWrongAnswerDraft.problems : [])
-        .map((problem) => normalizeWrongAnswerItem(problem))
-        .filter((problem) => isMeaningfulWrongAnswerProblem(problem));
-      if (!localProblems.length) {
-        setQuickWrongAnswerError('제출할 오답 기록을 먼저 입력해 주세요.');
-        return;
-      }
+    const localProblems = Array.isArray(quickWrongAnswerDraft?.problems)
+      ? quickWrongAnswerDraft.problems.map((problem) => normalizeWrongAnswerItem(problem))
+      : [];
+    const targetProblem = localProblems[index];
+    if (!targetProblem || !isMeaningfulWrongAnswerProblem(targetProblem)) {
+      setQuickWrongAnswerError('제출할 오답 기록을 먼저 입력해 주세요.');
+      return;
+    }
+    const targetAssignment = normalizeWrongAnswerAssignment(targetProblem.assignment || null);
+    if (!String(targetAssignment?.mentor_name || '').trim()) {
+      setQuickWrongAnswerError('멘토를 배정한 뒤 완료 및 제출해 주세요.');
+      return;
     }
     setQuickWrongAnswerSaving(true);
     setQuickWrongAnswerError('');
     try {
+      const submittedAt = new Date().toISOString();
+      const submittedDraft = normalizeWrongAnswerDraftWithSummary({
+        ...quickWrongAnswerDraft,
+        problems: localProblems.map((problem, problemIndex) => (
+          problemIndex === index
+            ? {
+                ...problem,
+                submitted_at: submittedAt,
+                submitted_by: String(viewer?.display_name || viewer?.role || '').trim()
+              }
+            : problem
+        ))
+      });
       const payload = composeQuickWrongAnswerPayload(
-        quickWrongAnswerDraft,
+        submittedDraft,
         quickWrongAnswerPersistedDraft,
         quickWrongAnswerDraftMode
       );
@@ -1699,9 +1722,12 @@ export default function AssignmentStatus() {
         body: { e_wrong_answer_distribution: payload }
       });
       setQuickWrongAnswerPersistedDraft(payload);
-      setQuickWrongAnswerDraft({ problems: [], assignment: null, searched_at: '' });
-      setQuickWrongAnswerDraftMode('append');
-      setQuickWrongAnswerTargetProblemIndex(0);
+      setQuickWrongAnswerDraft(payload);
+      setQuickWrongAnswerDraftMode('full');
+      const nextVisibleProblemIndex = (payload.problems || []).findIndex(
+        (problem) => !String(problem?.submitted_at || '').trim()
+      );
+      setQuickWrongAnswerTargetProblemIndex(nextVisibleProblemIndex >= 0 ? nextVisibleProblemIndex : 0);
       setQuickCollapsedWrongAnswerProblems({});
       setQuickWrongAnswerCandidates([]);
       setQuickWrongAnswerSearched(false);
@@ -2191,6 +2217,7 @@ export default function AssignmentStatus() {
           ) : (
             <div className="mt-4 space-y-3">
               {(Array.isArray(quickWrongAnswerDraft?.problems) ? quickWrongAnswerDraft.problems : []).map((item, idx) => {
+                if (String(item?.submitted_at || '').trim()) return null;
                 const problemAssignment = normalizeWrongAnswerAssignment(
                   item?.assignment || (idx === 0 ? quickWrongAnswerDraft?.assignment : null)
                 );

@@ -382,6 +382,8 @@ const DEFAULT_WRONG_ANSWER_ITEM = {
   incomplete_reason: '',
   status_updated_at: '',
   status_updated_by: '',
+  submitted_at: '',
+  submitted_by: '',
   deleted_at: '',
   deleted_by: ''
 };
@@ -460,6 +462,8 @@ function normalizeWrongAnswerItem(raw, fallbackAssignment = null) {
     incomplete_reason: incompleteReason,
     status_updated_at: String(raw.status_updated_at || '').trim(),
     status_updated_by: String(raw.status_updated_by || '').trim(),
+    submitted_at: String(raw.submitted_at || '').trim(),
+    submitted_by: String(raw.submitted_by || '').trim(),
     deleted_at: String(raw.deleted_at || '').trim(),
     deleted_by: String(raw.deleted_by || '').trim(),
     images: Array.isArray(raw.images)
