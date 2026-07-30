@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import crypto from 'node:crypto';
 
 const DEFAULT_SECRET = 'dev-secret-change-me';
 
@@ -70,5 +71,40 @@ export function requireRole(...roles) {
     if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
     if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     next();
+  };
+}
+
+function safeKeyEquals(actual, expected) {
+  const actualBuffer = Buffer.from(String(actual || ''), 'utf8');
+  const expectedBuffer = Buffer.from(String(expected || ''), 'utf8');
+  if (!actualBuffer.length || actualBuffer.length !== expectedBuffer.length) return false;
+  return crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+export function requireStudentSyncAuth(db) {
+  const requireUserAuth = requireAuth(db);
+
+  return (req, res, next) => {
+    const suppliedKey = String(req.headers['x-student-sync-key'] || '').trim();
+    if (!suppliedKey) return requireUserAuth(req, res, next);
+
+    const configuredKey = String(process.env.STUDENT_SYNC_API_KEY || '').trim();
+    if (!configuredKey || !safeKeyEquals(suppliedKey, configuredKey)) {
+      return res.status(401).json({ error: 'Invalid student sync credentials' });
+    }
+
+    const isCollection = req.path === '/' && ['GET', 'POST'].includes(req.method);
+    const isStudent = /^\/\d+$/.test(req.path) && ['PUT', 'DELETE'].includes(req.method);
+    if (!isCollection && !isStudent) {
+      return res.status(403).json({ error: 'Student sync key is not allowed for this operation' });
+    }
+
+    req.user = {
+      id: null,
+      username: 'student-sync',
+      role: 'admin',
+      display_name: 'Student sync service'
+    };
+    return next();
   };
 }

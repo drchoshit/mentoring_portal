@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 
 import db, { initDb, dbFilePath } from './lib/db.js';
-import { requireAuth } from './lib/auth.js';
+import { requireAuth, requireStudentSyncAuth } from './lib/auth.js';
 
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
@@ -200,7 +200,7 @@ app.use('/api/auth', authRoutes(db));
 app.use('/api/users', requireAuth(db), userRoutes(db));
 app.use('/api/weeks', requireAuth(db), weekRoutes(db));
 app.use('/api/permissions', requireAuth(db), permissionRoutes(db));
-app.use('/api/students', requireAuth(db), studentRoutes(db));
+app.use('/api/students', requireStudentSyncAuth(db), studentRoutes(db));
 app.use('/api/import', requireAuth(db), importRoutes(db));
 app.use('/api/feeds', requireAuth(db), feedRoutes(db));
 app.use('/api/chats', requireAuth(db), chatRoutes(db));
