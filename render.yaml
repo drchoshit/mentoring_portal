@@ -20,6 +20,8 @@ services:
         value: /var/data/db.sqlite
       - key: BACKUP_DIR
         value: /var/data/backups
+      - key: STUDENT_SYNC_API_KEY
+        sync: false
     disk:
       name: mentoring-data
       mountPath: /var/data
