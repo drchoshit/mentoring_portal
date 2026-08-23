@@ -149,6 +149,8 @@ function renderUploadPage({ token = '', submitPath = '/api/problem-upload/mobile
       const previewEl = document.getElementById('preview');
 
       let pending = [];
+      let submitting = false;
+      let uploadCompleted = false;
 
       function setStatus(text) {
         statusEl.textContent = text;
@@ -269,12 +271,19 @@ function renderUploadPage({ token = '', submitPath = '/api/problem-upload/mobile
 
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
+        if (submitting) return;
+        if (uploadCompleted) {
+          setStatus('이 창을 닫고 멘토링 포털에서 업로드 반영 버튼을 눌러주세요.');
+          return;
+        }
+
         const selected = pending.filter((x) => x.selected);
         if (!selected.length) {
           setStatus('전송할 이미지를 최소 1장 선택해 주세요.');
           return;
         }
 
+        submitting = true;
         submitBtn.disabled = true;
         cameraBtn.disabled = true;
         albumBtn.disabled = true;
@@ -296,15 +305,19 @@ function renderUploadPage({ token = '', submitPath = '/api/problem-upload/mobile
           }
           pending = [];
           previewEl.innerHTML = '';
-          setStatus('업로드 완료: ' + (data.uploaded_count || 0) + '장');
+          uploadCompleted = true;
+          submitBtn.textContent = '전송 완료';
+          setStatus('이 창을 닫고 멘토링 포털에서 업로드 반영 버튼을 눌러주세요.');
           uploadedOk = true;
         } catch (err) {
           setStatus('업로드 실패: ' + (err && err.message ? err.message : '오류'));
         } finally {
-          submitBtn.disabled = false;
-          cameraBtn.disabled = false;
-          albumBtn.disabled = false;
-          if (!uploadedOk) renderPreview();
+          submitting = false;
+          if (!uploadedOk) {
+            cameraBtn.disabled = false;
+            albumBtn.disabled = false;
+            renderPreview();
+          }
         }
       });
 
