@@ -112,6 +112,26 @@ function ensureLeadMentoringStatusTable(db) {
   `);
 }
 
+function ensureLeadMentoringReassignmentTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lead_mentoring_reassignments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      week_id INTEGER NOT NULL REFERENCES weeks(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      source_assignment_date TEXT NOT NULL,
+      source_mentor_name TEXT NOT NULL,
+      target_assignment_date TEXT NOT NULL,
+      target_mentor_name TEXT NOT NULL,
+      created_by INTEGER REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(week_id, student_id, source_assignment_date, source_mentor_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_lead_reassignments_target
+      ON lead_mentoring_reassignments(week_id, target_assignment_date, target_mentor_name);
+  `);
+}
+
 function koreanDateParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short'
@@ -131,6 +151,190 @@ function resolveCurrentWeek(db, dateText) {
     WHERE date(?) BETWEEN date(start_date) AND date(end_date)
     ORDER BY id DESC LIMIT 1
   `).get(dateText) || db.prepare('SELECT * FROM weeks ORDER BY id DESC LIMIT 1').get();
+}
+
+function dateForWeekDay(week, dayLabel, fallbackDate = '') {
+  const startMatch = String(week?.start_date || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const endText = String(week?.end_date || '').slice(0, 10);
+  if (!startMatch || !DAY_LABELS.includes(dayLabel)) return fallbackDate;
+  const start = new Date(Date.UTC(Number(startMatch[1]), Number(startMatch[2]) - 1, Number(startMatch[3])));
+  for (let offset = 0; offset < 14; offset += 1) {
+    const date = new Date(start);
+    date.setUTCDate(start.getUTCDate() + offset);
+    const dateText = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+    if (endText && dateText > endText) break;
+    const label = DAY_LABELS[(date.getUTCDay() + 6) % 7];
+    if (label === dayLabel) return dateText;
+  }
+  return String(week?.start_date || '').slice(0, 10) || fallbackDate;
+}
+
+function resolveLeadTodayWeek(db, requestedWeekId, today) {
+  const weekId = parsePositiveInt(requestedWeekId);
+  if (weekId) {
+    const selected = db.prepare('SELECT * FROM weeks WHERE id=?').get(weekId);
+    if (selected?.id) return selected;
+  }
+  return resolveCurrentWeek(db, today.date);
+}
+
+function resolveLeadAssignmentDate(db, weekId, requestedDate) {
+  const week = db.prepare('SELECT * FROM weeks WHERE id=?').get(weekId);
+  const dateText = String(requestedDate || '').slice(0, 10);
+  if (week?.id && /^\d{4}-\d{2}-\d{2}$/.test(dateText)
+    && dateText >= String(week.start_date || '').slice(0, 10)
+    && dateText <= String(week.end_date || '').slice(0, 10)) return dateText;
+  const today = koreanDateParts();
+  return week?.id ? dateForWeekDay(week, today.day, today.date) : today.date;
+}
+
+function periodDateRange(value) {
+  const dates = String(value || '').match(/\d{4}-\d{2}-\d{2}/g) || [];
+  return dates.length >= 2 ? { start: dates[0], end: dates[1] } : null;
+}
+
+function assignmentsForWeek(source, week, todayDate) {
+  const start = String(week?.start_date || '').slice(0, 10);
+  const end = String(week?.end_date || '').slice(0, 10);
+  const byPeriod = source?.assignments_by_period && typeof source.assignments_by_period === 'object'
+    ? source.assignments_by_period
+    : {};
+  for (const [periodId, assignments] of Object.entries(byPeriod)) {
+    const range = periodDateRange(periodId);
+    if (range?.start === start && range?.end === end && Array.isArray(assignments)) return assignments;
+  }
+  const currentRange = periodDateRange(source?.periodId);
+  if (currentRange?.start === start && currentRange?.end === end && Array.isArray(source?.assignments)) {
+    return source.assignments;
+  }
+  if (todayDate >= start && todayDate <= end && Array.isArray(source?.assignments)) return source.assignments;
+  return [];
+}
+
+function weekDateEntries(week) {
+  const startMatch = String(week?.start_date || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const endText = String(week?.end_date || '').slice(0, 10);
+  if (!startMatch) return [];
+  const start = new Date(Date.UTC(Number(startMatch[1]), Number(startMatch[2]) - 1, Number(startMatch[3])));
+  const entries = [];
+  for (let offset = 0; offset < 14; offset += 1) {
+    const date = new Date(start);
+    date.setUTCDate(start.getUTCDate() + offset);
+    const dateText = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+    if (endText && dateText > endText) break;
+    entries.push({ date: dateText, day_label: DAY_LABELS[(date.getUTCDay() + 6) % 7] });
+  }
+  return entries;
+}
+
+function loadWrongAnswerQuestionCounts(db, weekId) {
+  const rows = db.prepare(
+    'SELECT student_id, e_wrong_answer_distribution FROM week_records WHERE week_id=? AND e_wrong_answer_distribution IS NOT NULL'
+  ).all(weekId);
+  const counts = new Map();
+  for (const row of rows) {
+    const distribution = safeJson(row.e_wrong_answer_distribution, {});
+    const problems = Array.isArray(distribution?.problems) ? distribution.problems : [];
+    const count = problems.filter((problem, index) => {
+      if (!problem || typeof problem !== 'object' || String(problem.deleted_at || '').trim()) return false;
+      if (!String(problem.submitted_at || '').trim()) return false;
+      const assignment = problem.assignment || (index === 0 ? distribution.assignment : null);
+      return Boolean(String(assignment?.mentor_name || '').trim());
+    }).length;
+    counts.set(Number(row.student_id), count);
+  }
+  return counts;
+}
+
+function buildLeadRowsForDay(db, { week, assignmentDate, dayLabel, currentDate, source, students, questionCounts }) {
+  const rows = [];
+  const weekAssignments = assignmentsForWeek(source, week, currentDate);
+  for (const raw of weekAssignments) {
+    const mentorName = firstNonEmptyText(raw?.lead_mentor, raw?.leadMentor, raw?.mentor);
+    if (!mentorName) continue;
+    const days = normalizeDays(raw?.scheduledDays).map(normalizeDayLabel).filter(Boolean);
+    if (!days.includes(dayLabel)) continue;
+    const studentId = parsePositiveInt(raw?.student_id);
+    const student = students.get(studentId);
+    if (!student) continue;
+    rows.push({
+      student_id: studentId,
+      external_id: student.external_id || '',
+      student_name: student.name || raw?.name || '',
+      grade: student.grade || '',
+      mentor_name: mentorName,
+      schedule: safeJson(student.schedule_json, {}),
+      schedule_updated_at: student.updated_at || '',
+      question_count: Number(questionCounts.get(studentId) || 0),
+      forced: false,
+      reassigned: false
+    });
+  }
+
+  const state = loadLeadAssignmentBoardState(db);
+  const bucket = getBoardWeekBucket(state, week.id);
+  for (const forced of bucket.forced_assignments || []) {
+    if (normalizeDayLabel(forced.target_day_label) !== dayLabel) continue;
+    const studentId = parsePositiveInt(forced.student_id);
+    const student = students.get(studentId);
+    const mentorName = String(forced.target_mentor_name || '').trim();
+    if (!student || !mentorName) continue;
+    const duplicate = rows.some((row) => row.student_id === studentId && row.mentor_name === mentorName);
+    if (!duplicate) rows.push({
+      student_id: studentId,
+      external_id: student.external_id || '',
+      student_name: student.name || '',
+      grade: student.grade || '',
+      mentor_name: mentorName,
+      schedule: safeJson(student.schedule_json, {}),
+      schedule_updated_at: student.updated_at || '',
+      question_count: Number(questionCounts.get(studentId) || 0),
+      forced: true,
+      forced_time: forced.target_time || '',
+      reassigned: false
+    });
+  }
+
+  ensureLeadMentoringReassignmentTable(db);
+  const reassignments = db.prepare(`
+    SELECT id, student_id, source_assignment_date, source_mentor_name,
+           target_assignment_date, target_mentor_name, created_at
+    FROM lead_mentoring_reassignments
+    WHERE week_id=? AND target_assignment_date=?
+    ORDER BY created_at
+  `).all(week.id, assignmentDate);
+  for (const reassignment of reassignments) {
+    const studentId = parsePositiveInt(reassignment.student_id);
+    const student = students.get(studentId);
+    const mentorName = String(reassignment.target_mentor_name || '').trim();
+    if (!student || !mentorName) continue;
+    const duplicate = rows.find((row) => row.student_id === studentId && row.mentor_name === mentorName);
+    if (duplicate) {
+      duplicate.reassigned = true;
+      duplicate.reassignment = reassignment;
+      continue;
+    }
+    rows.push({
+      student_id: studentId,
+      external_id: student.external_id || '',
+      student_name: student.name || '',
+      grade: student.grade || '',
+      mentor_name: mentorName,
+      schedule: safeJson(student.schedule_json, {}),
+      schedule_updated_at: student.updated_at || '',
+      question_count: Number(questionCounts.get(studentId) || 0),
+      forced: false,
+      reassigned: true,
+      reassignment
+    });
+  }
+
+  const statuses = db.prepare(`
+    SELECT student_id, mentor_name, status, reason, updated_at
+    FROM lead_mentoring_status WHERE assignment_date=? AND week_id=?
+  `).all(assignmentDate, week.id);
+  const statusMap = new Map(statuses.map((item) => [`${item.student_id}:${item.mentor_name}`, item]));
+  return rows.map((row) => ({ ...row, status: statusMap.get(`${row.student_id}:${row.mentor_name}`) || null }));
 }
 
 function parsePositiveInt(value) {
@@ -639,37 +843,65 @@ async function pullMediWeeklyAssignments(db) {
     const byName = buildStudentsByName(db);
     const findByExternal = db.prepare('SELECT id, external_id, name FROM students WHERE external_id=?');
     const findById = db.prepare('SELECT id, external_id, name FROM students WHERE id=?');
-    const assignments = [];
-    let sourceAssignedCount = 0;
-    for (const raw of state.students) {
-      if (raw?.mentoringOptOut === true) continue;
-      const record = raw?.mentorHistory?.[periodId] || {};
-      const mentor = firstNonEmptyText(record.actualMentor, record.mentor, raw.fixedMentor);
-      if (!mentor) continue;
-      sourceAssignedCount += 1;
-      let student = null;
-      for (const candidate of normalizedIdCandidates(raw?.id ?? raw?.external_id)) {
-        student = findByExternal.get(candidate);
-        if (student) break;
-        const numeric = Number(candidate);
-        if (Number.isSafeInteger(numeric) && String(numeric) === candidate) student = findById.get(numeric);
-        if (student) break;
-      }
-      if (!student) {
-        const matches = byName.get(String(raw?.name || '').trim()) || [];
-        if (matches.length === 1) student = matches[0];
-      }
-      if (!student) continue;
-      let scheduledDays = normalizeDays(record.day || raw.selectedMentorDay).map(normalizeDayLabel).filter(Boolean);
-      if (!scheduledDays.length) {
-        scheduledDays = DAY_LABELS.filter((day) =>
-          (Array.isArray(state?.mentorsByDay?.[day]) ? state.mentorsByDay[day] : []).some(
-            (item) => String(item?.name || '').trim() === mentor
-          )
+    const buildPeriodAssignments = (targetPeriodId) => {
+      const assignments = [];
+      let sourceAssignedCount = 0;
+      for (const raw of state.students) {
+        if (raw?.mentoringOptOut === true) continue;
+        const record = raw?.mentorHistory?.[targetPeriodId] || {};
+        const mentor = firstNonEmptyText(
+          record.actualMentor,
+          record.mentor,
+          targetPeriodId === periodId ? raw.fixedMentor : ''
         );
+        if (!mentor) continue;
+        sourceAssignedCount += 1;
+        let student = null;
+        for (const candidate of normalizedIdCandidates(raw?.id ?? raw?.external_id)) {
+          student = findByExternal.get(candidate);
+          if (student) break;
+          const numeric = Number(candidate);
+          if (Number.isSafeInteger(numeric) && String(numeric) === candidate) student = findById.get(numeric);
+          if (student) break;
+        }
+        if (!student) {
+          const matches = byName.get(String(raw?.name || '').trim()) || [];
+          if (matches.length === 1) student = matches[0];
+        }
+        if (!student) continue;
+        let scheduledDays = normalizeDays(record.day || (targetPeriodId === periodId ? raw.selectedMentorDay : ''))
+          .map(normalizeDayLabel)
+          .filter(Boolean);
+        if (!scheduledDays.length && targetPeriodId === periodId) {
+          scheduledDays = DAY_LABELS.filter((day) =>
+            (Array.isArray(state?.mentorsByDay?.[day]) ? state.mentorsByDay[day] : []).some(
+              (item) => String(item?.name || '').trim() === mentor
+            )
+          );
+        }
+        assignments.push({ student_id: student.id, external_id: student.external_id || '', name: student.name || raw?.name || '', mentor, lead_mentor: mentor, scheduledDays });
       }
-      assignments.push({ student_id: student.id, external_id: student.external_id || '', name: student.name || raw?.name || '', mentor, lead_mentor: mentor, scheduledDays });
+      return { assignments, sourceAssignedCount };
+    };
+
+    const periodIds = Array.from(new Set([
+      ...((Array.isArray(state.periods) ? state.periods : []).map((item) => firstNonEmptyText(item?.id, item)).filter(Boolean)),
+      periodId
+    ]));
+    const previousSource = loadAssignments(db) || {};
+    const assignmentsByPeriod = previousSource.assignments_by_period && typeof previousSource.assignments_by_period === 'object'
+      ? { ...previousSource.assignments_by_period }
+      : {};
+    let currentResult = { assignments: [], sourceAssignedCount: 0 };
+    for (const targetPeriodId of periodIds) {
+      const result = buildPeriodAssignments(targetPeriodId);
+      if (result.sourceAssignedCount > 0 || !Array.isArray(assignmentsByPeriod[targetPeriodId])) {
+        assignmentsByPeriod[targetPeriodId] = result.assignments;
+      }
+      if (targetPeriodId === periodId) currentResult = result;
     }
+    const assignments = currentResult.assignments;
+    const sourceAssignedCount = currentResult.sourceAssignedCount;
     if (sourceAssignedCount > 0 && assignments.length !== sourceAssignedCount) {
       throw new Error(`메디위클리 학생 매칭 불일치 (${assignments.length}/${sourceAssignedCount})`);
     }
@@ -678,7 +910,8 @@ async function pullMediWeeklyAssignments(db) {
       exportedAt: snapshot?.updatedAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       source: 'medi-weekly-live',
-      assignments
+      assignments,
+      assignments_by_period: assignmentsByPeriod
     });
     mediWeeklyLastError = '';
     return { configured: true, updated: true, error: '' };
@@ -721,9 +954,10 @@ export default function mentorAssignmentsRoutes(db) {
     const liveSources = await syncLiveSources(db);
     const liveSync = liveSources.weekly;
     const scheduleSync = liveSources.schedule;
-    const now = koreanDateParts();
-    const week = resolveCurrentWeek(db, now.date);
-    if (!week?.id) return res.json({ date: now.date, day_label: now.day, week: null, lead_mentors: [], assignments: [] });
+    const today = koreanDateParts();
+    const week = resolveLeadTodayWeek(db, req.query.weekId || req.query.week_id, today);
+    const assignmentDate = week?.id ? dateForWeekDay(week, today.day, today.date) : today.date;
+    if (!week?.id) return res.json({ date: assignmentDate, day_label: today.day, week: null, lead_mentors: [], assignments: [] });
 
     const source = loadAssignments(db) || {};
     const mentorInfo = loadMentorInfoSetting(db);
@@ -732,62 +966,26 @@ export default function mentorAssignmentsRoutes(db) {
     );
     const studentRows = db.prepare('SELECT id, external_id, name, grade, schedule_json, updated_at FROM students').all();
     const students = new Map(studentRows.map((student) => [Number(student.id), student]));
-    const rows = [];
-
-    for (const raw of Array.isArray(source.assignments) ? source.assignments : []) {
+    const weekAssignments = assignmentsForWeek(source, week, today.date);
+    for (const raw of weekAssignments) {
       const mentorName = firstNonEmptyText(raw?.lead_mentor, raw?.leadMentor, raw?.mentor);
-      if (!mentorName) continue;
-      leads.add(mentorName);
-      const days = normalizeDays(raw?.scheduledDays).map(normalizeDayLabel).filter(Boolean);
-      if (!days.includes(now.day)) continue;
-      const studentId = parsePositiveInt(raw?.student_id);
-      const student = students.get(studentId);
-      if (!student) continue;
-      rows.push({
-        student_id: studentId,
-        external_id: student.external_id || '',
-        student_name: student.name || raw?.name || '',
-        grade: student.grade || '',
-        mentor_name: mentorName,
-        schedule: safeJson(student.schedule_json, {}),
-        schedule_updated_at: student.updated_at || '',
-        forced: false
-      });
+      if (mentorName) leads.add(mentorName);
     }
-
-    const state = loadLeadAssignmentBoardState(db);
-    const bucket = getBoardWeekBucket(state, week.id);
-    for (const forced of bucket.forced_assignments || []) {
-      if (normalizeDayLabel(forced.target_day_label) !== now.day) continue;
-      const studentId = parsePositiveInt(forced.student_id);
-      const student = students.get(studentId);
-      const mentorName = String(forced.target_mentor_name || '').trim();
-      if (!student || !mentorName) continue;
-      leads.add(mentorName);
-      const duplicate = rows.some((row) => row.student_id === studentId && row.mentor_name === mentorName);
-      if (!duplicate) rows.push({
-        student_id: studentId,
-        external_id: student.external_id || '',
-        student_name: student.name || '',
-        grade: student.grade || '',
-        mentor_name: mentorName,
-        schedule: safeJson(student.schedule_json, {}),
-        schedule_updated_at: student.updated_at || '',
-        forced: true,
-        forced_time: forced.target_time || ''
-      });
-    }
-
-    const statuses = db.prepare(`
-      SELECT student_id, mentor_name, status, reason, updated_at
-      FROM lead_mentoring_status WHERE assignment_date=? AND week_id=?
-    `).all(now.date, week.id);
-    const statusMap = new Map(statuses.map((item) => [`${item.student_id}:${item.mentor_name}`, item]));
-    const assignments = rows.map((row) => ({ ...row, status: statusMap.get(`${row.student_id}:${row.mentor_name}`) || null }));
+    const questionCounts = loadWrongAnswerQuestionCounts(db, week.id);
+    const assignments = buildLeadRowsForDay(db, {
+      week,
+      assignmentDate,
+      dayLabel: today.day,
+      currentDate: today.date,
+      source,
+      students,
+      questionCounts
+    });
+    for (const row of assignments) leads.add(row.mentor_name);
 
     return res.json({
-      date: now.date,
-      day_label: now.day,
+      date: assignmentDate,
+      day_label: today.day,
       week,
       source_updated_at: source.updatedAt || '',
       source: source.source || 'portal-import',
@@ -803,6 +1001,108 @@ export default function mentorAssignmentsRoutes(db) {
     });
   });
 
+  router.get('/lead-week-status', requireRole('director', 'admin'), async (req, res) => {
+    ensureLeadMentoringStatusTable(db);
+    ensureLeadMentoringReassignmentTable(db);
+    const liveSources = await syncLiveSources(db);
+    const today = koreanDateParts();
+    const week = resolveLeadTodayWeek(db, req.query.weekId || req.query.week_id, today);
+    if (!week?.id) return res.status(404).json({ error: '회차를 찾지 못했습니다.' });
+
+    const source = loadAssignments(db) || {};
+    const mentorInfo = loadMentorInfoSetting(db);
+    const studentRows = db.prepare('SELECT id, external_id, name, grade, schedule_json, updated_at FROM students').all();
+    const students = new Map(studentRows.map((student) => [Number(student.id), student]));
+    const questionCounts = loadWrongAnswerQuestionCounts(db, week.id);
+    const days = weekDateEntries(week).map((entry) => ({
+      ...entry,
+      assignments: buildLeadRowsForDay(db, {
+        week,
+        assignmentDate: entry.date,
+        dayLabel: entry.day_label,
+        currentDate: today.date,
+        source,
+        students,
+        questionCounts
+      })
+    }));
+    const assignments = days.flatMap((day) => day.assignments.map((row) => ({
+      ...row,
+      assignment_date: day.date,
+      day_label: day.day_label
+    })));
+    const leads = new Set(
+      (mentorInfo.mentors || []).filter((item) => item.role === 'lead').map((item) => item.name).filter(Boolean)
+    );
+    for (const row of assignments) leads.add(row.mentor_name);
+
+    return res.json({
+      week,
+      days,
+      assignments,
+      lead_mentors: Array.from(leads).sort((a, b) => a.localeCompare(b, 'ko')),
+      lead_mentor_details: Array.from(leads).map((name) => {
+        const info = (mentorInfo.mentors || []).find((item) => item.name === name);
+        return { name, schedule: info?.schedule || {} };
+      }),
+      source_updated_at: source.updatedAt || '',
+      live_sync: liveSources.weekly,
+      schedule_sync: liveSources.schedule
+    });
+  });
+
+  router.post('/lead-today/reassign', requireRole('director', 'admin', 'lead'), (req, res) => {
+    ensureLeadMentoringStatusTable(db);
+    ensureLeadMentoringReassignmentTable(db);
+    const weekId = parsePositiveInt(req.body?.week_id);
+    const studentId = parsePositiveInt(req.body?.student_id);
+    const sourceDate = String(req.body?.source_assignment_date || '').slice(0, 10);
+    const sourceMentorName = String(req.body?.source_mentor_name || '').trim();
+    const targetDate = String(req.body?.target_assignment_date || '').slice(0, 10);
+    const targetMentorName = String(req.body?.target_mentor_name || '').trim();
+    if (!weekId || !studentId || !sourceDate || !sourceMentorName || !targetDate || !targetMentorName) {
+      return res.status(400).json({ error: '재배정할 학생, 날짜, 총괄멘토 정보가 필요합니다.' });
+    }
+    const week = db.prepare('SELECT id, start_date, end_date FROM weeks WHERE id=?').get(weekId);
+    if (!week?.id) return res.status(404).json({ error: '회차를 찾지 못했습니다.' });
+    const weekStart = String(week.start_date || '').slice(0, 10);
+    const weekEnd = String(week.end_date || '').slice(0, 10);
+    if (targetDate < weekStart || targetDate > weekEnd) {
+      return res.status(400).json({ error: '선택한 회차 안의 날짜로 재배정해 주세요.' });
+    }
+    const missed = db.prepare(`
+      SELECT id FROM lead_mentoring_status
+      WHERE assignment_date=? AND student_id=? AND week_id=? AND mentor_name=? AND status='missed'
+    `).get(sourceDate, studentId, weekId, sourceMentorName);
+    if (!missed?.id) return res.status(400).json({ error: '미진행 처리된 총괄멘토링만 재배정할 수 있습니다.' });
+
+    db.prepare(`
+      INSERT INTO lead_mentoring_reassignments
+        (week_id, student_id, source_assignment_date, source_mentor_name,
+         target_assignment_date, target_mentor_name, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      ON CONFLICT(week_id, student_id, source_assignment_date, source_mentor_name) DO UPDATE SET
+        target_assignment_date=excluded.target_assignment_date,
+        target_mentor_name=excluded.target_mentor_name,
+        created_by=excluded.created_by,
+        updated_at=datetime('now')
+    `).run(weekId, studentId, sourceDate, sourceMentorName, targetDate, targetMentorName, req.user.id);
+    writeAudit(db, {
+      user_id: req.user.id,
+      action: 'update',
+      entity: 'lead_mentoring_reassignment',
+      details: {
+        week_id: weekId,
+        student_id: studentId,
+        source_assignment_date: sourceDate,
+        source_mentor_name: sourceMentorName,
+        target_assignment_date: targetDate,
+        target_mentor_name: targetMentorName
+      }
+    });
+    return res.json({ ok: true });
+  });
+
   router.post('/lead-today/missed', requireRole('admin', 'lead'), (req, res) => {
     ensureLeadMentoringStatusTable(db);
     const studentId = parsePositiveInt(req.body?.student_id);
@@ -811,15 +1111,15 @@ export default function mentorAssignmentsRoutes(db) {
     const reason = String(req.body?.reason || '').trim();
     if (!studentId || !weekId || !mentorName) return res.status(400).json({ error: '학생과 총괄멘토 정보가 필요합니다.' });
     if (!reason) return res.status(400).json({ error: '미진행 사유를 반드시 입력해 주세요.' });
-    const now = koreanDateParts();
+    const assignmentDate = resolveLeadAssignmentDate(db, weekId, req.body?.assignment_date);
     db.prepare(`
       INSERT INTO lead_mentoring_status
         (assignment_date, student_id, week_id, mentor_name, status, reason, updated_by, updated_at)
       VALUES (?, ?, ?, ?, 'missed', ?, ?, datetime('now'))
       ON CONFLICT(assignment_date, student_id, week_id, mentor_name) DO UPDATE SET
         status='missed', reason=excluded.reason, updated_by=excluded.updated_by, updated_at=datetime('now')
-    `).run(now.date, studentId, weekId, mentorName, reason, req.user.id);
-    writeAudit(db, { user_id: req.user.id, action: 'workflow', entity: 'lead_mentoring_missed', details: { student_id: studentId, week_id: weekId, mentor_name: mentorName, reason, assignment_date: now.date } });
+    `).run(assignmentDate, studentId, weekId, mentorName, reason, req.user.id);
+    writeAudit(db, { user_id: req.user.id, action: 'workflow', entity: 'lead_mentoring_missed', details: { student_id: studentId, week_id: weekId, mentor_name: mentorName, reason, assignment_date: assignmentDate } });
     return res.json({ ok: true });
   });
 
@@ -829,15 +1129,15 @@ export default function mentorAssignmentsRoutes(db) {
     const weekId = parsePositiveInt(req.body?.week_id);
     const mentorName = String(req.body?.mentor_name || '').trim();
     if (!studentId || !weekId || !mentorName) return res.status(400).json({ error: '학생과 총괄멘토 정보가 필요합니다.' });
-    const now = koreanDateParts();
+    const assignmentDate = resolveLeadAssignmentDate(db, weekId, req.body?.assignment_date);
     db.prepare(`
       INSERT INTO lead_mentoring_status
         (assignment_date, student_id, week_id, mentor_name, status, reason, updated_by, updated_at)
       VALUES (?, ?, ?, ?, 'completed', NULL, ?, datetime('now'))
       ON CONFLICT(assignment_date, student_id, week_id, mentor_name) DO UPDATE SET
         status='completed', reason=NULL, updated_by=excluded.updated_by, updated_at=datetime('now')
-    `).run(now.date, studentId, weekId, mentorName, req.user.id);
-    writeAudit(db, { user_id: req.user.id, action: 'workflow', entity: 'lead_mentoring_completed', details: { student_id: studentId, week_id: weekId, mentor_name: mentorName, assignment_date: now.date } });
+    `).run(assignmentDate, studentId, weekId, mentorName, req.user.id);
+    writeAudit(db, { user_id: req.user.id, action: 'workflow', entity: 'lead_mentoring_completed', details: { student_id: studentId, week_id: weekId, mentor_name: mentorName, assignment_date: assignmentDate } });
     return res.json({ ok: true });
   });
 

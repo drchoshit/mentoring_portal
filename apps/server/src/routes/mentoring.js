@@ -1540,8 +1540,8 @@ export default function mentoringRoutes(db) {
   });
 
   router.put('/assignment-status/:weekRecordId', (req, res) => {
-    if (!['director', 'lead'].includes(String(req.user.role || '').trim())) {
-      return res.status(403).json({ error: 'Only director/lead can update assignment status' });
+    if (!['director', 'lead', 'admin'].includes(String(req.user.role || '').trim())) {
+      return res.status(403).json({ error: 'Only director/lead/admin can update assignment status' });
     }
 
     const weekRecordId = Number(req.params.weekRecordId || 0);
@@ -1589,8 +1589,13 @@ export default function mentoringRoutes(db) {
       Math.min(240, Number(req.body?.session_duration_minutes ?? currentAssignment.session_duration_minutes ?? 20) || 20)
     );
 
-    const assignedAt = String(currentAssignment.assigned_at || '').trim() || new Date().toISOString();
-    const assignedBy = String(currentAssignment.assigned_by || '').trim() || req.user.role;
+    const mentorChanged = mentorName !== String(currentAssignment.mentor_name || '').trim();
+    const assignedAt = mentorChanged
+      ? new Date().toISOString()
+      : String(currentAssignment.assigned_at || '').trim() || new Date().toISOString();
+    const assignedBy = mentorChanged
+      ? String(req.user.display_name || req.user.username || req.user.role || '').trim()
+      : String(currentAssignment.assigned_by || '').trim() || req.user.role;
 
     const nextAssignment = normalizeWrongAnswerAssignment({
       ...currentAssignment,

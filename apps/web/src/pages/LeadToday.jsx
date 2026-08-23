@@ -1,11 +1,35 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { useAuth } from '../auth/AuthProvider.jsx';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_LABELS = { Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금', Sat: '토', Sun: '일' };
 const KO_TO_EN = Object.fromEntries(Object.entries(DAY_LABELS).map(([key, value]) => [value, key]));
+
+function weekOptionLabel(week) {
+  const label = String(week?.label || '').replace(/주차/g, '회차');
+  const start = String(week?.start_date || '').slice(5).replace('-', '/');
+  const end = String(week?.end_date || '').slice(5).replace('-', '/');
+  return start && end ? `${label} (${start} ~ ${end})` : label;
+}
+
+function weekDateOptions(week) {
+  const match = String(week?.start_date || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const endText = String(week?.end_date || '').slice(0, 10);
+  if (!match) return [];
+  const start = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  const options = [];
+  for (let index = 0; index < 14; index += 1) {
+    const date = new Date(start);
+    date.setUTCDate(start.getUTCDate() + index);
+    const value = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+    if (endText && value > endText) break;
+    const day = DAYS[(date.getUTCDay() + 6) % 7];
+    options.push({ value, label: `${DAY_LABELS[day]} ${date.getUTCMonth() + 1}/${date.getUTCDate()}` });
+  }
+  return options;
+}
 
 function workDateLabels(name, details, week) {
   const schedule = (details || []).find((item) => item?.name === name)?.schedule || {};
@@ -118,14 +142,20 @@ function WeeklySchedule({ schedule, today }) {
   );
 }
 
-function StudentCard({ row, dayLabel, weekId, canChangeStatus, onMissed, onCompleted }) {
+function StudentCard({ row, dayLabel, weekId, week, assignmentDate, leadMentors, isCurrentDate, canChangeStatus, onMissed, onCompleted, onReassign }) {
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
   const [showReason, setShowReason] = useState(false);
   const [reason, setReason] = useState(row?.status?.reason || '');
+  const [showReassign, setShowReassign] = useState(false);
+  const dateOptions = weekDateOptions(week);
+  const defaultTargetDate = dateOptions.find((option) => option.value > assignmentDate)?.value || dateOptions[0]?.value || '';
+  const [targetDate, setTargetDate] = useState(defaultTargetDate);
+  const [targetMentor, setTargetMentor] = useState(String(row?.mentor_name || ''));
+  const [reassigning, setReassigning] = useState(false);
   const todayKey = KO_TO_EN[dayLabel];
   const todayItems = scheduleItems(row.schedule, todayKey);
-  const inCenter = todayItems.some((item) => isHappeningNow(item));
+  const inCenter = isCurrentDate && todayItems.some((item) => isHappeningNow(item));
   const meta = statusMeta(row.status);
 
   return (
@@ -139,12 +169,14 @@ function StudentCard({ row, dayLabel, weekId, canChangeStatus, onMissed, onCompl
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
             <span>{row.mentor_name}</span>
             {row.forced ? <span className="font-bold text-amber-600">추가 배정</span> : null}
+            {row.reassigned ? <span className="font-bold text-violet-600">재배정</span> : null}
+            <span className="rounded-full bg-violet-50 px-2 py-0.5 font-bold text-violet-700">질문 {Number(row.question_count || 0)}개</span>
             {inCenter ? <span className="inline-flex items-center gap-1 rounded-full bg-[#5b8def] px-2 py-0.5 font-black text-white"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />지금 재원 중</span> : null}
           </div>
         </div>
 
         <div className="min-w-0">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">오늘 일정</div>
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">선택 요일 일정</div>
           <div className="flex min-w-0 flex-wrap gap-1.5">
             {todayItems.length ? todayItems.map((item, index) => (
               <span key={index} className={`max-w-full truncate rounded-md px-2 py-1 text-[11px] font-medium ${isCenterItem(item) ? 'bg-[#e3efff] text-[#3970c9]' : 'bg-slate-50 text-slate-600'}`}>
@@ -162,6 +194,7 @@ function StudentCard({ row, dayLabel, weekId, canChangeStatus, onMissed, onCompl
           <button className="btn-ghost px-3 py-1.5 text-xs" type="button" onClick={() => setExpanded((value) => !value)}>{expanded ? '접기' : '주간 일정'}</button>
           {canChangeStatus ? <button className="rounded-xl bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-default disabled:opacity-50" type="button" disabled={row?.status?.status === 'completed'} onClick={() => onCompleted(row)}>✓ 진행</button> : null}
           {canChangeStatus ? <button className="btn-danger-soft px-3 py-1.5 text-xs" type="button" onClick={() => setShowReason((value) => !value)}>× 미진행</button> : null}
+          {canChangeStatus && row?.status?.status === 'missed' ? <button className="rounded-xl bg-violet-50 px-3 py-1.5 text-xs font-bold text-violet-700 transition hover:bg-violet-100" type="button" onClick={() => setShowReassign((value) => !value)}>↻ 재배정</button> : null}
           <button className="btn-primary px-3 py-1.5 text-xs" type="button" onClick={() => navigate(`/students/${row.student_id}/mentoring?week=${weekId}`)}>기록 작성</button>
         </div>
       </div>
@@ -178,6 +211,28 @@ function StudentCard({ row, dayLabel, weekId, canChangeStatus, onMissed, onCompl
           </div>
         </div>
       ) : null}
+      {showReassign ? (
+        <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50/70 p-3">
+          <div className="text-xs font-black text-violet-800">미진행 학생 재배정</div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <select className="input" value={targetMentor} onChange={(event) => setTargetMentor(event.target.value)}>
+              {(leadMentors || []).map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+            <select className="input" value={targetDate} onChange={(event) => setTargetDate(event.target.value)}>
+              {dateOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            <button className="btn-primary" type="button" disabled={reassigning || !targetMentor || !targetDate} onClick={async () => {
+              setReassigning(true);
+              try {
+                await onReassign(row, { targetMentor, targetDate });
+                setShowReassign(false);
+              } finally {
+                setReassigning(false);
+              }
+            }}>{reassigning ? '재배정 중...' : '재배정 확정'}</button>
+          </div>
+        </div>
+      ) : null}
       {expanded ? <WeeklySchedule schedule={row.schedule} today={dayLabel} /> : null}
     </article>
   );
@@ -185,17 +240,26 @@ function StudentCard({ row, dayLabel, weekId, canChangeStatus, onMissed, onCompl
 
 export default function LeadToday() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState(null);
+  const [weeks, setWeeks] = useState([]);
+  const [weekId, setWeekId] = useState(String(searchParams.get('week') || ''));
   const [selected, setSelected] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const isAdmin = ['admin', 'director'].includes(String(user?.role || ''));
 
-  async function load({ quiet = false } = {}) {
+  async function load({ quiet = false, targetWeekId = weekId } = {}) {
     if (!quiet) setLoading(true);
     try {
-      const result = await api('/api/mentor-assignments/lead-today');
+      const query = targetWeekId ? `?weekId=${encodeURIComponent(targetWeekId)}` : '';
+      const result = await api(`/api/mentor-assignments/lead-today${query}`);
       setData(result);
+      const resolvedWeekId = String(result?.week?.id || '');
+      if (resolvedWeekId && resolvedWeekId !== String(weekId || '')) {
+        setWeekId(resolvedWeekId);
+        setSearchParams({ week: resolvedWeekId }, { replace: true });
+      }
       setError('');
     } catch (err) {
       setError(err?.message || '오늘의 멘토링을 불러오지 못했습니다.');
@@ -205,10 +269,16 @@ export default function LeadToday() {
   }
 
   useEffect(() => {
-    load();
-    const timer = window.setInterval(() => load({ quiet: true }), 60000);
-    return () => window.clearInterval(timer);
+    api('/api/weeks')
+      .then((result) => setWeeks(Array.isArray(result?.weeks) ? result.weeks : []))
+      .catch((err) => setError(err?.message || '회차 정보를 불러오지 못했습니다.'));
   }, []);
+
+  useEffect(() => {
+    void load({ targetWeekId: weekId });
+    const timer = window.setInterval(() => load({ quiet: true, targetWeekId: weekId }), 60000);
+    return () => window.clearInterval(timer);
+  }, [weekId]);
 
   const rows = useMemo(() => {
     const all = Array.isArray(data?.assignments) ? data.assignments : [];
@@ -228,7 +298,7 @@ export default function LeadToday() {
     try {
       await api('/api/mentor-assignments/lead-today/missed', {
         method: 'POST',
-        body: { student_id: row.student_id, week_id: data.week.id, mentor_name: row.mentor_name, reason }
+        body: { student_id: row.student_id, week_id: data.week.id, mentor_name: row.mentor_name, assignment_date: data.date, reason }
       });
       await load({ quiet: true });
     } catch (err) {
@@ -240,7 +310,7 @@ export default function LeadToday() {
     try {
       await api('/api/mentor-assignments/lead-today/completed', {
         method: 'POST',
-        body: { student_id: row.student_id, week_id: data.week.id, mentor_name: row.mentor_name }
+        body: { student_id: row.student_id, week_id: data.week.id, mentor_name: row.mentor_name, assignment_date: data.date }
       });
       await load({ quiet: true });
     } catch (err) {
@@ -248,9 +318,33 @@ export default function LeadToday() {
     }
   }
 
+  async function reassign(row, { targetMentor, targetDate }) {
+    try {
+      await api('/api/mentor-assignments/lead-today/reassign', {
+        method: 'POST',
+        body: {
+          student_id: row.student_id,
+          week_id: data.week.id,
+          source_assignment_date: data.date,
+          source_mentor_name: row.mentor_name,
+          target_assignment_date: targetDate,
+          target_mentor_name: targetMentor
+        }
+      });
+      await load({ quiet: true, targetWeekId: weekId });
+    } catch (err) {
+      setError(err?.message || '재배정에 실패했습니다.');
+      throw err;
+    }
+  }
+
   const overviewRows = selected && selected !== '전체' ? rows : (data?.assignments || []);
   const overviewCompleted = overviewRows.filter((row) => row?.status?.status === 'completed').length;
   const overviewMissed = overviewRows.filter((row) => row?.status?.status === 'missed').length;
+  const currentDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date());
+  const isCurrentDate = String(data?.date || '') === currentDate;
 
   return (
     <div className="space-y-6">
@@ -259,17 +353,27 @@ export default function LeadToday() {
         <div className="relative grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
         <div>
           <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[#3970c9]">
-            <span>Today</span><span className="h-1 w-1 rounded-full bg-[#5b8def]" />
+            <span>{isCurrentDate ? 'Today' : 'Selected round'}</span><span className="h-1 w-1 rounded-full bg-[#5b8def]" />
             <span>{data?.date || ''} {data?.day_label ? `${data.day_label}요일` : ''}</span>
           </div>
-          <h1 className="mt-2 text-3xl font-black tracking-[-0.035em] text-[#1d2b43]">오늘의 총괄 멘토링</h1>
-          <p className="mt-1 text-sm text-[#60728e]">담당 멘토를 선택하고 오늘의 진행 상황을 빠르게 관리하세요.</p>
+          <h1 className="mt-2 text-3xl font-black tracking-[-0.035em] text-[#1d2b43]">{isCurrentDate ? '오늘의 총괄 멘토링' : '회차별 총괄 멘토링'}</h1>
+          <p className="mt-1 text-sm text-[#60728e]">회차와 담당 멘토를 선택하고 진행 상황을 빠르게 확인하세요.</p>
         </div>
         <div className="flex flex-wrap items-stretch gap-2">
-          <div className="min-w-[88px] rounded-2xl bg-white/75 px-4 py-3 shadow-sm"><div className="text-[10px] font-bold text-slate-400">오늘 배정</div><div className="mt-0.5 text-xl font-black text-[#1d2b43]">{overviewRows.length}<span className="ml-0.5 text-xs font-medium text-slate-400">명</span></div></div>
+          <label className="min-w-64 rounded-2xl bg-white/75 px-4 py-2.5 shadow-sm">
+            <span className="block text-[10px] font-bold text-slate-400">회차 선택</span>
+            <select className="mt-1 w-full bg-transparent text-sm font-bold text-[#1d2b43] outline-none" value={weekId} onChange={(event) => {
+              const value = String(event.target.value || '');
+              setWeekId(value);
+              setSearchParams({ week: value }, { replace: true });
+            }}>
+              {weeks.map((week) => <option key={week.id} value={week.id}>{weekOptionLabel(week)}</option>)}
+            </select>
+          </label>
+          <div className="min-w-[88px] rounded-2xl bg-white/75 px-4 py-3 shadow-sm"><div className="text-[10px] font-bold text-slate-400">선택일 배정</div><div className="mt-0.5 text-xl font-black text-[#1d2b43]">{overviewRows.length}<span className="ml-0.5 text-xs font-medium text-slate-400">명</span></div></div>
           <div className="min-w-[88px] rounded-2xl bg-emerald-50/90 px-4 py-3"><div className="text-[10px] font-bold text-emerald-600">완료</div><div className="mt-0.5 text-xl font-black text-emerald-700">{overviewCompleted}</div></div>
           <div className="min-w-[88px] rounded-2xl bg-rose-50/90 px-4 py-3"><div className="text-[10px] font-bold text-rose-500">미진행</div><div className="mt-0.5 text-xl font-black text-rose-600">{overviewMissed}</div></div>
-          <button type="button" onClick={() => load()} className="rounded-2xl bg-[#5b8def] px-4 text-xs font-bold text-white shadow-sm shadow-blue-200/70 transition hover:bg-[#4779d8]">↻ 새로고침</button>
+          <button type="button" onClick={() => load({ targetWeekId: weekId })} className="rounded-2xl bg-[#5b8def] px-4 text-xs font-bold text-white shadow-sm shadow-blue-200/70 transition hover:bg-[#4779d8]">↻ 새로고침</button>
         </div>
         </div>
       </section>
@@ -283,7 +387,7 @@ export default function LeadToday() {
       ) : null}
       <section className="py-2">
         <div className="mb-4 flex items-end justify-between gap-3">
-          <div><h2 className="text-sm font-black text-[#1d2b43]">총괄멘토 선택</h2><p className="mt-0.5 text-xs text-slate-500">선택한 이름이 오늘 업무의 ‘나’로 표시됩니다.</p></div>
+          <div><h2 className="text-sm font-black text-[#1d2b43]">총괄멘토 선택</h2><p className="mt-0.5 text-xs text-slate-500">선택한 이름이 해당 회차 업무의 ‘나’로 표시됩니다.</p></div>
           {data?.source_updated_at ? <div className="text-right text-xs text-slate-400"><div>{data?.source === 'medi-weekly-live' ? '메디위클리 실시간 연동' : '포털 배정 데이터'}</div><div>{new Date(data.source_updated_at).toLocaleString('ko-KR')}</div></div> : null}
         </div>
         {loading ? <div className="card p-8 text-center text-sm text-slate-500">배정 정보를 불러오는 중입니다.</div> : (
@@ -296,12 +400,12 @@ export default function LeadToday() {
           <div className="pb-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div><div className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#5b8def]">Mentoring queue</div><div className="mt-1 flex items-baseline gap-2"><h2 className="text-lg font-black text-[#1d2b43]">{selected === '전체' ? '전체 총괄멘토' : `${selected} (나)`}</h2><span className="text-xs text-slate-400">{data?.week?.label || '현재 회차'}</span></div></div>
-              <div className="flex items-center gap-2 text-xs"><strong className="rounded-full bg-[#e3efff] px-3 py-1.5 text-[#3970c9]">오늘 {rows.length}명</strong><span className="rounded-full bg-emerald-50 px-3 py-1.5 text-emerald-700">완료 {completed}</span><span className="rounded-full bg-zinc-100 px-3 py-1.5 text-zinc-600">진행 전 {pending}</span><span className="rounded-full bg-rose-50 px-3 py-1.5 text-rose-600">미진행 {missed}</span></div>
+              <div className="flex items-center gap-2 text-xs"><strong className="rounded-full bg-[#e3efff] px-3 py-1.5 text-[#3970c9]">선택일 {rows.length}명</strong><span className="rounded-full bg-emerald-50 px-3 py-1.5 text-emerald-700">완료 {completed}</span><span className="rounded-full bg-zinc-100 px-3 py-1.5 text-zinc-600">진행 전 {pending}</span><span className="rounded-full bg-rose-50 px-3 py-1.5 text-rose-600">미진행 {missed}</span></div>
             </div>
             <div className="mt-3 h-1 overflow-hidden rounded-full bg-[#e1eaf5]"><div className="h-full rounded-full bg-[#5b8def] transition-all" style={{ width: `${rows.length ? Math.round((completed / rows.length) * 100) : 0}%` }} /></div>
           </div>
-          {rows.length ? rows.map((row) => <StudentCard key={`${row.mentor_name}-${row.student_id}`} row={row} dayLabel={data.day_label} weekId={data.week?.id} canChangeStatus={['lead', 'admin'].includes(String(user?.role || ''))} onMissed={markMissed} onCompleted={markCompleted} />) : (
-            <div className="rounded-xl bg-white p-8 text-center shadow-sm"><div className="text-sm font-bold text-slate-700">오늘 배정된 학생이 없습니다.</div><div className="mt-1 text-xs text-slate-500">배정 데이터와 선택한 멘토 이름을 확인해 주세요.</div></div>
+          {rows.length ? rows.map((row) => <StudentCard key={`${data?.week?.id}-${row.mentor_name}-${row.student_id}`} row={row} dayLabel={data.day_label} weekId={data.week?.id} week={data.week} assignmentDate={data.date} leadMentors={data?.lead_mentors || []} isCurrentDate={isCurrentDate} canChangeStatus={['lead', 'admin'].includes(String(user?.role || ''))} onMissed={markMissed} onCompleted={markCompleted} onReassign={reassign} />) : (
+            <div className="rounded-xl bg-white p-8 text-center shadow-sm"><div className="text-sm font-bold text-slate-700">선택한 회차의 해당 요일에 배정된 학생이 없습니다.</div><div className="mt-1 text-xs text-slate-500">배정 데이터와 선택한 멘토 이름을 확인해 주세요.</div></div>
           )}
         </section>
       ) : !loading ? <div className="rounded-xl bg-[#e3efff] p-7 text-center text-sm font-bold text-[#3970c9]">위에서 내 이름을 선택해 주세요.</div> : null}
