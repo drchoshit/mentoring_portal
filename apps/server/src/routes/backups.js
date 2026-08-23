@@ -11,6 +11,7 @@ import BetterSqlite from 'better-sqlite3';
 import { requireRole } from '../lib/auth.js';
 import { dbFilePath } from '../lib/db.js';
 import { writeAudit } from '../lib/audit.js';
+import { createAtomicSqliteBackup } from '../lib/safeBackup.js';
 
 const execFileAsync = promisify(execFile);
 const ROUTE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -216,7 +217,7 @@ export default function backupRoutes(db) {
   }
 
   function resolveBackupSourceCandidates() {
-    const candidates = uniqPaths([PRIMARY_DB_PATH, DB_PATH]).filter((p) => {
+    const candidates = uniqPaths([DB_PATH, PRIMARY_DB_PATH]).filter((p) => {
       try {
         return fs.existsSync(p) && fs.statSync(p).isFile();
       } catch {
@@ -267,7 +268,7 @@ export default function backupRoutes(db) {
     }
   }
 
-  function backupNow(reason = 'manual') {
+  async function backupNow(reason = 'manual') {
     const stamp = timestampStamp();
     const out = path.join(BACKUP_DIR, `db-${stamp}-${reason}.sqlite`);
     const sources = resolveBackupSourceCandidates();
@@ -285,7 +286,7 @@ export default function backupRoutes(db) {
       }
       try {
         ensureBackupSpaceForSource(source);
-        fs.copyFileSync(source, out);
+        await createAtomicSqliteBackup(db, out);
         pruneByKeepMax();
         return { out, source };
       } catch (e) {
@@ -714,7 +715,7 @@ export default function backupRoutes(db) {
     }
   });
 
-  router.post('/restore-subject-fields', (req, res) => {
+  router.post('/restore-subject-fields', async (req, res) => {
     const backup = String(req.body?.backup || '');
     const requested = Array.isArray(req.body?.records) ? req.body.records : [];
     if (!isSafeBackupFilename(backup)) return res.status(400).json({ error: 'Invalid filename' });
@@ -747,7 +748,7 @@ export default function backupRoutes(db) {
     }
     if (sourceRows.length !== ids.length) return res.status(409).json({ error: 'Some records are missing from the selected backup' });
 
-    const safety = backupNow('pre-field-restore');
+    const safety = await backupNow('pre-field-restore');
     const sourceById = new Map(sourceRows.map((row) => [Number(row.id), row]));
     const restored = db.transaction(() => ids.map((id) => {
       const current = db.prepare('SELECT id, a_this_hw FROM subject_records WHERE id=?').get(id);
@@ -779,15 +780,15 @@ export default function backupRoutes(db) {
     });
   });
 
-  router.post('/now', (req, res) => {
+  router.post('/now', async (req, res) => {
     try {
-      const { out, source } = backupNow('manual');
+      const { out, source } = await backupNow('manual');
       res.json({ ok: true, file: path.basename(out), source });
     } catch (e) {
       const code = String(e?.code || '').trim();
       const msg = String(e?.message || '').trim();
       const detail = [code, msg].filter(Boolean).join(' ');
-      res.status(500).json({ error: `Backup failed${detail ? ` (${detail})` : ''}` });
+      res.status(code === 'BACKUP_IN_PROGRESS' ? 409 : 500).json({ error: `Backup failed${detail ? ` (${detail})` : ''}` });
     }
   });
 
@@ -1174,7 +1175,7 @@ export default function backupRoutes(db) {
     }
   });
 
-  router.post('/full-import', fullUpload.single('file'), (req, res) => {
+  router.post('/full-import', fullUpload.single('file'), async (req, res) => {
     const uploadedPath = String(req.file?.path || '').trim();
     if (!uploadedPath) return res.status(400).json({ error: '업로드 파일이 없습니다.' });
 
@@ -1216,7 +1217,7 @@ export default function backupRoutes(db) {
       let preImportBackupSource = null;
       const warnings = [];
       try {
-        const saved = backupNow('preimport');
+        const saved = await backupNow('preimport');
         preImportBackup = path.basename(saved.out);
         preImportBackupSource = saved.source;
       } catch (e) {

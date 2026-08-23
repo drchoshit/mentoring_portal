@@ -2052,7 +2052,48 @@ export default function mentoringRoutes(db) {
     });
     tx();
 
-    writeAudit(db, { user_id: req.user.id, action: 'workflow', entity: 'submit_to_director', details: { student_id, week_id } });
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS lead_mentoring_status (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        assignment_date TEXT NOT NULL,
+        student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+        week_id INTEGER NOT NULL REFERENCES weeks(id) ON DELETE CASCADE,
+        mentor_name TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('completed','missed')),
+        reason TEXT,
+        updated_by INTEGER REFERENCES users(id),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(assignment_date, student_id, week_id, mentor_name)
+      );
+    `);
+    const dateParts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short'
+    }).formatToParts(new Date());
+    const datePart = (type) => dateParts.find((item) => item.type === type)?.value || '';
+    const assignmentDate = `${datePart('year')}-${datePart('month')}-${datePart('day')}`;
+    const assignmentDay = ({ Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금', Sat: '토', Sun: '일' })[datePart('weekday')] || '';
+    let mentorName = String(req.user.display_name || req.user.username || '').trim();
+    try {
+      const boardSetting = db.prepare("SELECT value_json FROM app_settings WHERE key='lead_assignment_board'").get();
+      const boardData = JSON.parse(boardSetting?.value_json || '{}');
+      const forced = (boardData?.by_week?.[String(week_id)]?.forced_assignments || []).find(
+        (item) => Number(item?.student_id || 0) === Number(student_id) && String(item?.target_day_label || '').trim() === assignmentDay
+      );
+      const assignmentSetting = db.prepare("SELECT value_json FROM app_settings WHERE key='mentor_assignments'").get();
+      const assignmentData = JSON.parse(assignmentSetting?.value_json || '{}');
+      const matched = (Array.isArray(assignmentData?.assignments) ? assignmentData.assignments : []).find(
+        (item) => Number(item?.student_id || 0) === Number(student_id)
+      );
+      mentorName = String(forced?.target_mentor_name || matched?.lead_mentor || matched?.leadMentor || mentorName).trim() || mentorName;
+    } catch {}
+    db.prepare(`
+      INSERT INTO lead_mentoring_status
+        (assignment_date, student_id, week_id, mentor_name, status, reason, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, 'completed', NULL, ?, datetime('now'))
+      ON CONFLICT(assignment_date, student_id, week_id, mentor_name) DO UPDATE SET
+        status='completed', reason=NULL, updated_by=excluded.updated_by, updated_at=datetime('now')
+    `).run(assignmentDate, Number(student_id), Number(week_id), mentorName, req.user.id);
+    writeAudit(db, { user_id: req.user.id, action: 'workflow', entity: 'submit_to_director', details: { student_id, week_id, assignment_date: assignmentDate } });
     res.json({ ok: true });
   });
 

@@ -17,11 +17,10 @@ function Item({ to, children }) {
       to={to}
       className={({ isActive }) =>
         [
-          'inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition',
-          'border',
+          'inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-semibold transition',
           isActive
-            ? 'bg-brand-800 text-white border-brand-800 shadow-sm'
-            : 'bg-white/70 text-slate-700 border-slate-200 hover:bg-white hover:border-slate-300'
+            ? 'bg-[#e3efff] text-[#3970c9]'
+            : 'text-zinc-500 hover:bg-[#eff6ff] hover:text-[#5b8def]'
         ].join(' ')
       }
     >
@@ -36,7 +35,7 @@ export default function AppShell({ children }) {
 
   const menu = [];
   if (role !== 'parent') {
-    menu.push({ to: '/', label: '피드' });
+    menu.push({ to: '/', label: role === 'lead' ? '오늘 멘토링' : '피드' });
     menu.push({ to: '/students', label: '학생' });
     menu.push({ to: '/assignment-status', label: '질답 배정현황' });
     if (['director', 'lead', 'admin'].includes(role)) {
@@ -49,28 +48,28 @@ export default function AppShell({ children }) {
 
   return (
     <div className="min-h-screen">
-      <header className="sticky top-0 z-40 border-b border-gold-400/30 bg-white/70 backdrop-blur">
-        <div className="app-shell-container flex items-center justify-between py-3">
+      <header className="sticky top-0 z-40 bg-white/90 shadow-[0_1px_12px_rgba(51,79,118,0.05)] backdrop-blur-xl">
+        <div className="app-shell-container flex items-center justify-between py-3.5">
           <Link
             to={role === 'parent' ? '/parent' : '/'}
-            className="font-semibold tracking-wide text-brand-800"
+            className="flex items-center gap-2 text-lg font-black tracking-tight text-[#1d2b43]"
           >
-            Mentoring Portal
+            <span>Mentoring <span className="text-[#5b8def]">Portal</span></span>
           </Link>
 
           <div className="flex items-center gap-3 text-sm">
             <div className="text-slate-700">
               {user?.display_name} ({ROLE_LABEL[role] || role})
             </div>
-            <button className="btn-ghost" onClick={logout}>
+            <button className="btn-ghost !border-0" onClick={logout}>
               로그아웃
             </button>
           </div>
         </div>
 
-        <div className="border-t border-slate-200/60">
-          <div className="app-shell-container py-2">
-            <nav className="flex flex-wrap gap-2 overflow-x-auto">
+        <div className="bg-[#f8fbff]/90">
+          <div className="app-shell-container">
+            <nav className="flex flex-wrap gap-5 overflow-x-auto">
               {menu.map((item) => (
                 <Item key={item.to} to={item.to}>
                   {item.label}

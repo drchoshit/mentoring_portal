@@ -118,19 +118,19 @@ export default function userRoutes(db) {
       return res.status(400).json({ error: '학부모 계정 비밀번호는 이 화면에서 변경할 수 없습니다.' });
     }
 
-    db.prepare('UPDATE users SET display_name=?, updated_at=datetime("now") WHERE id=?')
+    db.prepare("UPDATE users SET display_name=?, updated_at=datetime('now') WHERE id=?")
       .run((display_name ?? existing.display_name) ?? existing.username, id);
 
-    db.prepare('UPDATE users SET role=?, updated_at=datetime("now") WHERE id=?')
+    db.prepare("UPDATE users SET role=?, updated_at=datetime('now') WHERE id=?")
       .run(String(role || existing.role || 'mentor'), id);
 
     const v = (is_active === 0 || is_active === 1) ? is_active : existing.is_active;
-    db.prepare('UPDATE users SET is_active=?, updated_at=datetime("now") WHERE id=?')
+    db.prepare("UPDATE users SET is_active=?, updated_at=datetime('now') WHERE id=?")
       .run(v ?? 1, id);
 
     if (password && String(password).trim()) {
       const password_hash = bcrypt.hashSync(String(password).trim(), 10);
-      db.prepare('UPDATE users SET password_hash=?, updated_at=datetime("now") WHERE id=?')
+      db.prepare("UPDATE users SET password_hash=?, updated_at=datetime('now') WHERE id=?")
         .run(password_hash, id);
     }
 

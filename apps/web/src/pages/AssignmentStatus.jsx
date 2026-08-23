@@ -2172,7 +2172,7 @@ export default function AssignmentStatus() {
                 )}
               </select>
               <button
-                className="btn-ghost h-9 px-3 text-sm"
+                className="btn-refresh h-9 px-3 text-sm"
                 type="button"
                 onClick={() => void loadStudents()}
                 disabled={quickWrongAnswerLoading || quickWrongAnswerSaving}
@@ -2180,7 +2180,7 @@ export default function AssignmentStatus() {
                 학생 새로고침
               </button>
               <button
-                className="btn-ghost h-9 px-3 text-sm"
+                className="btn-refresh h-9 px-3 text-sm"
                 type="button"
                 onClick={() => void loadQuickWrongAnswerRecord(quickStudentId, weekId)}
                 disabled={!quickStudentId || !weekId || quickWrongAnswerLoading || quickWrongAnswerSaving}
@@ -2521,7 +2521,7 @@ export default function AssignmentStatus() {
                     </option>
                   ))}
                 </select>
-                <button className="btn-ghost" type="button" onClick={() => loadStatus(weekId)} disabled={busy || !weekId}>
+                <button className="btn-refresh shrink-0" type="button" onClick={() => loadStatus(weekId)} disabled={busy || !weekId}>
                   새로고침
                 </button>
               </div>

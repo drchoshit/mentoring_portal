@@ -3,15 +3,15 @@
 @tailwind utilities;
 
 :root {
-  --bg-top: #fbf8ef;
-  --bg-bottom: #f7f3ea;
+  --bg-top: #f7faff;
+  --bg-bottom: #eef4fb;
   --surface: #ffffff;
-  --border-soft: #ddd6c7;
-  --border-strong: #cdbfa6;
-  --text-main: #2a2b2d;
-  --focus-ring: rgba(116, 125, 107, 0.24);
-  --primary: #3f5a4b;
-  --primary-hover: #31463a;
+  --border-soft: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --text-main: #0f172a;
+  --focus-ring: rgba(91, 141, 239, 0.16);
+  --primary: #5b8def;
+  --primary-hover: #4779d8;
 }
 
 html, body, #root {
@@ -24,7 +24,10 @@ body {
   min-width: 320px;
   overflow-x: hidden;
   color: var(--text-main);
-  background: linear-gradient(165deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+  background:
+    radial-gradient(circle at 88% 8%, rgba(91, 141, 239, 0.08) 0%, transparent 24%),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+  background-attachment: fixed;
 }
 
 .app-shell-container {
@@ -52,7 +55,7 @@ body {
 .card {
   @apply rounded-2xl border bg-white/90 shadow-sm backdrop-blur;
   border-color: var(--border-soft);
-  box-shadow: 0 10px 24px rgba(58, 46, 31, 0.05);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.055);
 }
 
 .btn {
@@ -61,18 +64,30 @@ body {
 
 .btn-primary {
   @apply btn text-white shadow-sm;
-  background: linear-gradient(180deg, #4d6a59 0%, var(--primary) 100%);
-  border: 1px solid #425947;
+  background: #5b8def;
+  border: 0;
 }
 
 .btn-ghost {
   @apply btn text-slate-700;
   background: rgba(255, 255, 255, 0.85);
-  border: 1px solid var(--border-soft);
+  border: 0;
+}
+
+.btn-refresh {
+  @apply btn whitespace-nowrap border border-slate-300 bg-white px-4 text-slate-700 shadow-sm;
+}
+
+.btn-refresh:hover {
+  @apply border-blue-300 bg-blue-50 text-blue-700 shadow;
+}
+
+.btn-refresh:disabled {
+  @apply cursor-not-allowed opacity-50;
 }
 
 .btn-primary:hover {
-  background: linear-gradient(180deg, #3e594a 0%, var(--primary-hover) 100%);
+  background: #4779d8;
 }
 
 .btn-ghost:hover {
@@ -87,7 +102,7 @@ body {
 }
 
 .input:focus {
-  border-color: #8ea78f;
+  border-color: #7ca5f2;
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
@@ -108,6 +123,14 @@ body {
 }
 
 .textarea:focus {
-  border-color: #8ea78f;
+  border-color: #7ca5f2;
   box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.btn-danger-soft {
+  @apply btn bg-rose-50 text-rose-700 hover:bg-rose-100;
+}
+
+.btn-danger {
+  @apply btn bg-rose-600 text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50;
 }

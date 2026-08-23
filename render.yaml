@@ -22,6 +22,28 @@ services:
         value: /var/data/backups
       - key: STUDENT_SYNC_API_KEY
         sync: false
+      - key: MEDI_WEEKLY_BASE_URL
+        sync: false
+      - key: MEDI_WEEKLY_USERNAME
+        sync: false
+      - key: MEDI_WEEKLY_PASSWORD
+        sync: false
+      - key: MEDI_WEEKLY_JWT_SECRET
+        sync: false
+      - key: MEDI_SCHEDULE_BASE_URL
+        sync: false
+      - key: MEDI_SCHEDULE_USERNAME
+        sync: false
+      - key: MEDI_SCHEDULE_PASSWORD
+        sync: false
+      - key: MEDI_SCHEDULE_ALLOW_CREATE
+        value: false
+      - key: MEDI_SCHEDULE_SYNC_PROFILES
+        value: false
+      - key: LIVE_SYNC_INTERVAL_MS
+        value: 60000
+      - key: LIVE_SYNC_TIMEOUT_MS
+        value: 20000
     disk:
       name: mentoring-data
       mountPath: /var/data
