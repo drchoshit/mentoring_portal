@@ -201,7 +201,9 @@ function assignmentsForWeek(source, week, todayDate) {
     : {};
   for (const [periodId, assignments] of Object.entries(byPeriod)) {
     const range = periodDateRange(periodId);
-    if (range?.start === start && range?.end === end && Array.isArray(assignments)) return assignments;
+    if (range?.start === start && range?.end === end && Array.isArray(assignments) && assignments.length) {
+      return assignments;
+    }
   }
   const currentRange = periodDateRange(source?.periodId);
   if (currentRange?.start === start && currentRange?.end === end && Array.isArray(source?.assignments)) {
@@ -356,6 +358,10 @@ function normalizeDayLabel(value) {
   if (raw === '금요일') return '금';
   if (raw === '토요일') return '토';
   if (raw === '일요일') return '일';
+  const koreanDay = raw.match(/(?:^|[\s,(/])(?:([월화수목금토일])요일|([월화수목금토일]))(?=$|[\s,()/.:-])/);
+  if (koreanDay?.[1] || koreanDay?.[2]) return koreanDay[1] || koreanDay[2];
+  const englishMatch = raw.toLowerCase().match(/\b(mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/);
+  if (englishMatch?.[1]) return englishDay[englishMatch[1]] || '';
   return '';
 }
 
@@ -982,6 +988,23 @@ export default function mentorAssignmentsRoutes(db) {
       questionCounts
     });
     for (const row of assignments) leads.add(row.mentor_name);
+    const weeklyAssignmentCounts = { all: 0 };
+    for (const entry of weekDateEntries(week)) {
+      const dayRows = buildLeadRowsForDay(db, {
+        week,
+        assignmentDate: entry.date,
+        dayLabel: entry.day_label,
+        currentDate: today.date,
+        source,
+        students,
+        questionCounts
+      });
+      weeklyAssignmentCounts.all += dayRows.length;
+      for (const row of dayRows) {
+        weeklyAssignmentCounts[row.mentor_name] = (weeklyAssignmentCounts[row.mentor_name] || 0) + 1;
+        leads.add(row.mentor_name);
+      }
+    }
 
     return res.json({
       date: assignmentDate,
@@ -997,6 +1020,7 @@ export default function mentorAssignmentsRoutes(db) {
         const info = (mentorInfo.mentors || []).find((item) => item.name === name);
         return { name, schedule: info?.schedule || {} };
       }),
+      weekly_assignment_counts: weeklyAssignmentCounts,
       assignments
     });
   });
@@ -1101,6 +1125,44 @@ export default function mentorAssignmentsRoutes(db) {
       }
     });
     return res.json({ ok: true });
+  });
+
+  router.put('/lead-today/status', requireRole('director', 'admin', 'lead'), (req, res) => {
+    ensureLeadMentoringStatusTable(db);
+    const studentId = parsePositiveInt(req.body?.student_id);
+    const weekId = parsePositiveInt(req.body?.week_id);
+    const mentorName = String(req.body?.mentor_name || '').trim();
+    const requestedStatus = String(req.body?.status || 'pending').trim().toLowerCase();
+    const status = ['pending', 'completed', 'missed'].includes(requestedStatus) ? requestedStatus : '';
+    const reason = String(req.body?.reason || '').replace(/\r\n/g, '\n').trim().slice(0, 1000);
+    if (!studentId || !weekId || !mentorName || !status) {
+      return res.status(400).json({ error: '학생, 회차, 총괄멘토, 상태 정보가 필요합니다.' });
+    }
+    if (status === 'missed' && !reason) {
+      return res.status(400).json({ error: '미진행 사유를 입력해 주세요.' });
+    }
+    const assignmentDate = resolveLeadAssignmentDate(db, weekId, req.body?.assignment_date);
+    if (status === 'pending') {
+      db.prepare(`
+        DELETE FROM lead_mentoring_status
+        WHERE assignment_date=? AND student_id=? AND week_id=? AND mentor_name=?
+      `).run(assignmentDate, studentId, weekId, mentorName);
+    } else {
+      db.prepare(`
+        INSERT INTO lead_mentoring_status
+          (assignment_date, student_id, week_id, mentor_name, status, reason, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(assignment_date, student_id, week_id, mentor_name) DO UPDATE SET
+          status=excluded.status, reason=excluded.reason, updated_by=excluded.updated_by, updated_at=datetime('now')
+      `).run(assignmentDate, studentId, weekId, mentorName, status, status === 'missed' ? reason : null, req.user.id);
+    }
+    writeAudit(db, {
+      user_id: req.user.id,
+      action: 'update',
+      entity: 'lead_mentoring_status',
+      details: { student_id: studentId, week_id: weekId, mentor_name: mentorName, assignment_date: assignmentDate, status, reason: status === 'missed' ? reason : '' }
+    });
+    return res.json({ ok: true, status, reason: status === 'missed' ? reason : '' });
   });
 
   router.post('/lead-today/missed', requireRole('admin', 'lead'), (req, res) => {

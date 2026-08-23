@@ -1188,7 +1188,7 @@ export default function AssignmentStatus() {
   const mentorSectionRefs = useRef(new Map());
   const isDirector = viewer?.role === 'director';
   const canEditAssignment = ['director', 'lead'].includes(String(viewer?.role || '').trim());
-  const canUpdateState = Boolean(viewer?.role && viewer.role !== 'parent');
+  const canUpdateState = ['director', 'admin', 'mentor'].includes(String(viewer?.role || '').trim());
   const canIssueBriefing = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
   const canUseQuickWrongAnswer = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
 

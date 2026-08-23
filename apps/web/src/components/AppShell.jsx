@@ -40,10 +40,10 @@ export default function AppShell({ children }) {
     if (['director', 'lead', 'admin'].includes(role)) {
       menu.push({ to: '/wrong-answer-assignment', label: '오답 배정' });
     }
-    menu.push({ to: '/assignment-status', label: '질답 배정현황' });
+    menu.push({ to: '/assignment-status', label: '질답 배정 현황' });
     if (['director', 'admin'].includes(role)) {
-      menu.push({ to: '/lead-mentoring-status', label: '총괄멘토링 현황' });
       menu.push({ to: '/question-completion-status', label: '질답 완료 현황' });
+      menu.push({ to: '/lead-mentoring-status', label: '총괄멘토링 현황' });
     }
     if (['director', 'lead', 'admin'].includes(role)) {
       menu.push({ to: '/lead-assignment-board', label: '총괄멘토 배정표' });
