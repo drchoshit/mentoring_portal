@@ -1031,8 +1031,6 @@ export default function mentorAssignmentsRoutes(db) {
       if (mentorName && !isDirectorMentorName(mentorName, directorNames)) leads.add(mentorName);
     }
     const questionCounts = loadWrongAnswerQuestionCounts(db, week.id);
-    const isCurrentWeek = today.date >= String(week.start_date || '').slice(0, 10)
-      && today.date <= String(week.end_date || '').slice(0, 10);
     const weekRows = [];
     const weeklyAssignmentCounts = { all: 0 };
     for (const entry of weekDateEntries(week)) {
@@ -1054,9 +1052,7 @@ export default function mentorAssignmentsRoutes(db) {
         leads.add(row.mentor_name);
       }
     }
-    const assignments = isCurrentWeek
-      ? weekRows.filter((row) => row.assignment_date === assignmentDate)
-      : weekRows;
+    const assignments = weekRows;
     const directorConsultingAssignments = req.user.role === 'director'
       ? buildDirectorConsultingRows({
           week,
@@ -1077,7 +1073,7 @@ export default function mentorAssignmentsRoutes(db) {
       live_sync: liveSync,
       schedule_sync: scheduleSync,
       viewer: { role: req.user.role, display_name: req.user.display_name || '' },
-      view_scope: isCurrentWeek ? 'day' : 'week',
+      view_scope: 'week',
       lead_mentors: Array.from(leads).sort((a, b) => a.localeCompare(b, 'ko')),
       lead_mentor_details: Array.from(leads).map((name) => {
         const info = (mentorInfo.mentors || []).find((item) => item.name === name);

@@ -402,12 +402,12 @@ export default function LeadToday() {
         <div className="relative grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
         <div>
           <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[#3970c9]">
-            <span>{isCurrentDate ? 'Today' : 'Selected round'}</span><span className="h-1 w-1 rounded-full bg-[#5b8def]" />
+            <span>{isWeekView ? 'Selected round' : 'Today'}</span><span className="h-1 w-1 rounded-full bg-[#5b8def]" />
             <span>{isWeekView
               ? `${data?.week?.start_date || ''} ~ ${data?.week?.end_date || ''}`
               : `${data?.date || ''} ${data?.day_label ? `${data.day_label}요일` : ''}`}</span>
           </div>
-          <h1 className="mt-2 text-3xl font-black tracking-[-0.035em] text-[#1d2b43]">{isCurrentDate ? '오늘의 총괄 멘토링' : '회차별 총괄 멘토링'}</h1>
+          <h1 className="mt-2 text-3xl font-black tracking-[-0.035em] text-[#1d2b43]">{isWeekView ? '회차별 총괄 멘토링' : '오늘의 총괄 멘토링'}</h1>
           <p className="mt-1 text-sm text-[#60728e]">회차와 담당 멘토를 선택하고 진행 상황을 빠르게 확인하세요.</p>
         </div>
         <div className="flex flex-wrap items-stretch gap-2">
