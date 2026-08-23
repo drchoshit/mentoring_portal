@@ -9,6 +9,7 @@ import Feeds from './pages/Feeds.jsx';
 import Students from './pages/Students.jsx';
 import Mentoring from './pages/Mentoring.jsx';
 import AssignmentStatus from './pages/AssignmentStatus.jsx';
+import WrongAnswerAssignment from './pages/WrongAnswerAssignment.jsx';
 import LeadAssignmentBoard from './pages/LeadAssignmentBoard.jsx';
 import Settings from './pages/Settings.jsx';
 import Parent from './pages/Parent.jsx';
@@ -106,6 +107,15 @@ export default function App() {
         element={
           <Guard roles={['director','lead','mentor','admin']}>
             <Shell><Mentoring /></Shell>
+          </Guard>
+        }
+      />
+
+      <Route
+        path="/wrong-answer-assignment"
+        element={
+          <Guard roles={['director','lead','admin']}>
+            <Shell><WrongAnswerAssignment /></Shell>
           </Guard>
         }
       />
