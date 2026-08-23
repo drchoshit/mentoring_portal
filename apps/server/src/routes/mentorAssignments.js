@@ -1018,14 +1018,15 @@ export default function mentorAssignmentsRoutes(db) {
     const bucket = getBoardWeekBucket(state, weekId);
 
     const studentRows = db
-      .prepare('SELECT id, external_id, name FROM students')
+      .prepare('SELECT id, external_id, name, schedule_json FROM students')
       .all();
     const studentMap = new Map(
       studentRows.map((row) => [
         Number(row?.id || 0),
         {
           external_id: String(row?.external_id || '').trim(),
-          name: String(row?.name || '').trim()
+          name: String(row?.name || '').trim(),
+          schedule: safeJson(row?.schedule_json, {})
         }
       ])
     );
@@ -1071,6 +1072,13 @@ export default function mentorAssignmentsRoutes(db) {
       board_updated_at: state.updatedAt || '',
       source_updated_at: String(assignmentData?.updatedAt || '').trim(),
       lead_mentors: leadMentors,
+      lead_mentor_details: leadMentors.map((name) => {
+        const info = (mentorInfo.mentors || []).find((item) => String(item?.name || '').trim() === name);
+        return { name, schedule: info?.schedule || {} };
+      }),
+      student_schedules: Object.fromEntries(
+        Array.from(studentMap.entries()).map(([studentId, student]) => [String(studentId), student.schedule || {}])
+      ),
       assignments,
       missing_marks: missingMarks,
       forced_assignments: forcedAssignments

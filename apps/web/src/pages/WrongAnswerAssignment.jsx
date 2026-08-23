@@ -197,6 +197,7 @@ export default function WrongAnswerAssignment() {
   const [targetIndex, setTargetIndex] = useState(0);
   const [draft, setDraft] = useState({ ...EMPTY_PROBLEM });
   const [selectedMentor, setSelectedMentor] = useState('');
+  const [mentorPickerOpen, setMentorPickerOpen] = useState(false);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -213,6 +214,7 @@ export default function WrongAnswerAssignment() {
   function resetDraft(nextIndex = targetIndex) {
     setDraft({ ...EMPTY_PROBLEM, images: [] });
     setSelectedMentor('');
+    setMentorPickerOpen(false);
     setTargetIndex(nextIndex);
   }
 
@@ -286,6 +288,7 @@ export default function WrongAnswerAssignment() {
     const date = picked?.date || null;
     const start = best ? formatMinutes(best.start) : String(fallback?.time || '').split(/[~-]/)[0]?.trim();
     setSelectedMentor(mentor.name);
+    setMentorPickerOpen(false);
     setDraft((prev) => ({
       ...prev,
       assignment: {
@@ -429,51 +432,72 @@ export default function WrongAnswerAssignment() {
         </div>
       </section>
 
-      <section className="card p-5 md:p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-black text-slate-900">클리닉 멘토 선택</h2>
-            <p className="text-sm text-slate-500">출근 요일·날짜와 {selectedStudent?.name || '학생'}의 센터 재원 시간 적합도를 함께 표시합니다.</p>
-          </div>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">클리닉 멘토 {mentorCards.length}명</span>
-        </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {mentorCards.map((mentor) => {
-            const tone = compatibilityTone(mentor);
-            const selected = selectedMentor === mentor.name;
-            return (
-              <button key={mentor.name} type="button" onClick={() => selectMentor(mentor)} className={[
-                'rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md',
-                selected ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200' : 'border-slate-200 bg-white'
-              ].join(' ')}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="font-black text-slate-900">{mentor.name}</div>
-                  <span className={`rounded-full border px-2 py-1 text-[11px] font-bold ${tone.cls}`}>{tone.label}</span>
-                </div>
-                <div className="mt-3 space-y-1.5 text-xs text-slate-600">
-                  {mentor.work.length ? mentor.work.map((slot, index) => (
-                    <div key={`${mentor.name}-${slot.day}-${index}`} className="rounded-lg bg-slate-50 px-2.5 py-1.5">
-                      <b className="text-slate-800">{slot.dayLabel} {slot.date?.label || ''}</b> · {slot.time}
-                    </div>
-                  )) : <div className="rounded-lg bg-slate-50 px-2.5 py-2">출근 일정 미등록</div>}
-                </div>
-                <div className="mt-3 rounded-xl border border-dashed border-slate-200 px-3 py-2 text-xs">
-                  {mentor.overlaps.length ? (
-                    <><b className="text-emerald-700">겹치는 시간 {mentor.total}분</b><div className="mt-1 text-slate-600">{mentor.overlaps.slice(0, 2).map((item) => `${item.dayLabel} ${item.date?.label || ''} · 학생 ${item.studentTime} / 멘토 ${item.mentorTime}`).join(' · ')}</div></>
-                  ) : <span className="font-semibold text-rose-600">학생의 센터 재원 시간과 겹치지 않습니다.</span>}
-                </div>
-              </button>
-            );
-          })}
-          {!mentorCards.length ? <div className="rounded-2xl border border-dashed border-slate-300 p-5 text-sm text-slate-500">등록된 클리닉 멘토 출근 정보가 없습니다.</div> : null}
-        </div>
-      </section>
-
       <section className="card border-emerald-200 p-5 md:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div><h2 className="text-lg font-black text-slate-900">오답 기록</h2><p className="text-sm text-slate-500">입력 카드는 항상 1개만 표시되며 제출 후 즉시 비워집니다.</p></div>
-          {selectedMentor ? <span className="rounded-full bg-blue-600 px-3 py-1.5 text-xs font-bold text-white">배정 멘토 · {selectedMentor}</span> : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedMentor ? <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">배정 멘토 · {selectedMentor}</span> : null}
+            <button
+              type="button"
+              className="btn border border-blue-600 bg-blue-600 text-white shadow-sm hover:bg-blue-700"
+              onClick={() => setMentorPickerOpen((open) => !open)}
+              aria-expanded={mentorPickerOpen}
+            >
+              {selectedMentor ? '멘토 다시 선택' : '멘토 선택'}
+            </button>
+          </div>
         </div>
+        {mentorPickerOpen ? (
+          <div className="mt-4 rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50/80 via-white to-emerald-50/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="font-black text-slate-900">클리닉 멘토 선택</div>
+                <div className="text-xs text-slate-600">{selectedStudent?.name || '학생'}의 센터 재원 시간과 많이 겹치는 멘토부터 표시합니다.</div>
+              </div>
+              <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm">클리닉 멘토 {mentorCards.length}명</span>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {mentorCards.map((mentor, index) => {
+                const tone = compatibilityTone(mentor);
+                const selected = selectedMentor === mentor.name;
+                const startsMatchGroup = mentor.total > 0 && index === 0;
+                const startsMismatchGroup = mentor.total === 0 && (index === 0 || mentorCards[index - 1]?.total > 0);
+                return (
+                  <React.Fragment key={mentor.name}>
+                    {startsMatchGroup ? (
+                      <div className="md:col-span-2 xl:col-span-3 text-xs font-bold text-emerald-700">학생 일정과 맞는 추천 멘토</div>
+                    ) : null}
+                    {startsMismatchGroup ? (
+                      <div className="md:col-span-2 xl:col-span-3 mt-1 border-t border-slate-200 pt-3 text-xs font-bold text-slate-500">학생 일정과 겹치지 않는 멘토</div>
+                    ) : null}
+                    <button type="button" onClick={() => selectMentor(mentor)} className={[
+                      'rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md',
+                      selected ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200' : mentor.total > 0 ? 'border-emerald-200 bg-white' : 'border-slate-200 bg-white'
+                    ].join(' ')}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="font-black text-slate-900">{mentor.name}</div>
+                        <span className={`rounded-full border px-2 py-1 text-[11px] font-bold ${tone.cls}`}>{tone.label}</span>
+                      </div>
+                      <div className="mt-3 space-y-1.5 text-xs text-slate-600">
+                        {mentor.work.length ? mentor.work.map((slot, slotIndex) => (
+                          <div key={`${mentor.name}-${slot.day}-${slotIndex}`} className="rounded-lg bg-slate-50 px-2.5 py-1.5">
+                            <b className="text-slate-800">{slot.dayLabel} {slot.date?.label || ''}</b> · {slot.time}
+                          </div>
+                        )) : <div className="rounded-lg bg-slate-50 px-2.5 py-2">출근 일정 미등록</div>}
+                      </div>
+                      <div className="mt-3 rounded-xl border border-dashed border-slate-200 px-3 py-2 text-xs">
+                        {mentor.overlaps.length ? (
+                          <><b className="text-emerald-700">겹치는 시간 {mentor.total}분</b><div className="mt-1 text-slate-600">{mentor.overlaps.slice(0, 2).map((item) => `${item.dayLabel} ${item.date?.label || ''} · 학생 ${item.studentTime} / 멘토 ${item.mentorTime}`).join(' · ')}</div></>
+                        ) : <span className="font-semibold text-rose-600">학생의 센터 재원 시간과 겹치지 않습니다.</span>}
+                      </div>
+                    </button>
+                  </React.Fragment>
+                );
+              })}
+              {!mentorCards.length ? <div className="rounded-2xl border border-dashed border-slate-300 p-5 text-sm text-slate-500">등록된 클리닉 멘토 출근 정보가 없습니다.</div> : null}
+            </div>
+          </div>
+        ) : null}
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <label className="text-xs font-semibold text-slate-600">과목<input className="input mt-1 w-full" value={draft.subject} onChange={(e) => setDraft((prev) => ({ ...prev, subject: e.target.value }))} /></label>
           <label className="text-xs font-semibold text-slate-600">교재명<input className="input mt-1 w-full" value={draft.material} onChange={(e) => setDraft((prev) => ({ ...prev, material: e.target.value }))} /></label>

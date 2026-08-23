@@ -4,7 +4,9 @@ import { api } from '../api.js';
 import { useAuth } from '../auth/AuthProvider.jsx';
 
 const DAY_COLUMNS = ['월', '화', '수', '목', '금', '토', '일', ''];
+const TIMELINE_DAYS = DAY_COLUMNS.slice(0, 6);
 const DAY_ORDER = new Map(DAY_COLUMNS.map((day, idx) => [day, idx]));
+const TIMELINE_SLOT_MINUTES = 20;
 
 function dayLabelText(day) {
   return day ? `${day}요일` : '미지정';
@@ -18,6 +20,12 @@ function fmtDateTime(value) {
 function normalizeDayLabel(value) {
   const raw = String(value || '').trim();
   if (DAY_COLUMNS.includes(raw)) return raw;
+  const englishDays = {
+    Mon: '월', Monday: '월', Tue: '화', Tuesday: '화', Wed: '수', Wednesday: '수',
+    Thu: '목', Thursday: '목', Fri: '금', Friday: '금', Sat: '토', Saturday: '토',
+    Sun: '일', Sunday: '일'
+  };
+  if (englishDays[raw]) return englishDays[raw];
   if (raw === '월요일') return '월';
   if (raw === '화요일') return '화';
   if (raw === '수요일') return '수';
@@ -86,6 +94,166 @@ function normText(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function timeToMinutes(value) {
+  const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function minutesToTime(value) {
+  const safe = ((Number(value || 0) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`;
+}
+
+function parseTimeRanges(value) {
+  return String(value || '')
+    .replace(/[∼〜～]/g, '~')
+    .replace(/[–—−]/g, '-')
+    .split(/[,/|\n]+/)
+    .map((part) => part.trim().replace(/\s+/g, ''))
+    .map((part) => {
+      const separator = part.includes('~') ? '~' : part.includes('-') ? '-' : '';
+      if (!separator) return null;
+      const [startText, endText] = part.split(separator);
+      const start = timeToMinutes(startText);
+      let end = timeToMinutes(endText);
+      if (start == null || end == null) return null;
+      if (end < start) end += 1440;
+      return end > start ? { start, end } : null;
+    })
+    .filter(Boolean);
+}
+
+function normalizeScheduleByDay(value) {
+  const raw = value && typeof value === 'object' ? value : {};
+  const result = Object.fromEntries(TIMELINE_DAYS.map((day) => [day, []]));
+  for (const [rawDay, rawEntries] of Object.entries(raw)) {
+    const day = normalizeDayLabel(rawDay);
+    if (!TIMELINE_DAYS.includes(day)) continue;
+    result[day] = (Array.isArray(rawEntries) ? rawEntries : [rawEntries]).map((entry) => {
+      if (typeof entry === 'string') return { time: entry, title: '', type: '' };
+      const start = String(entry?.start || entry?.start_time || '').trim();
+      const end = String(entry?.end || entry?.end_time || '').trim();
+      return {
+        time: String(entry?.time || entry?.time_range || entry?.workTime || (start && end ? `${start}~${end}` : '')).trim(),
+        title: String(entry?.title || entry?.description || '').trim(),
+        type: String(entry?.type || entry?.kind || '').trim()
+      };
+    }).filter((entry) => parseTimeRanges(entry.time).length);
+  }
+  return result;
+}
+
+function isCenterSchedule(entry) {
+  const text = `${entry?.type || ''} ${entry?.title || ''}`;
+  return text.includes('센터') && !text.includes('미등원') && !text.includes('결석');
+}
+
+function isWorkingSchedule(entry) {
+  const text = `${entry?.type || ''} ${entry?.title || ''}`;
+  return !text.includes('미등원') && !text.includes('결석');
+}
+
+function rangesLabel(ranges) {
+  return (ranges || []).map((range) => `${minutesToTime(range.start)}~${minutesToTime(range.end)}`).join(', ');
+}
+
+function buildTimelineSlots(entries) {
+  const slots = [];
+  for (const entry of entries || []) {
+    for (const range of parseTimeRanges(entry?.time)) {
+      for (let start = range.start; start + TIMELINE_SLOT_MINUTES <= range.end; start += TIMELINE_SLOT_MINUTES) {
+        slots.push({ start, end: start + TIMELINE_SLOT_MINUTES, student: null });
+      }
+    }
+  }
+  const unique = new Map(slots.map((slot) => [`${slot.start}-${slot.end}`, slot]));
+  return Array.from(unique.values()).sort((a, b) => a.start - b.start);
+}
+
+function buildMentoringTimeline(boardRows, mentorDetails, studentSchedules, missingMap) {
+  const mentorScheduleMap = new Map(
+    (mentorDetails || []).map((mentor) => [String(mentor?.name || '').trim(), normalizeScheduleByDay(mentor?.schedule)])
+  );
+  const result = Object.fromEntries(TIMELINE_DAYS.map((day) => [day, []]));
+
+  for (const day of TIMELINE_DAYS) {
+    for (const row of boardRows || []) {
+      const mentorName = String(row?.mentor_name || '').trim();
+      if (!mentorName) continue;
+      const mentorDaySchedule = (mentorScheduleMap.get(mentorName)?.[day] || []).filter(isWorkingSchedule);
+      const entries = row?.by_day?.[day] || [];
+      if (!mentorDaySchedule.length && !entries.length) continue;
+
+      const slots = buildTimelineSlots(mentorDaySchedule);
+      const requests = entries.map((entry) => {
+        const studentSchedule = normalizeScheduleByDay(studentSchedules?.[String(entry.student_id)] || {});
+        const attendance = (studentSchedule[day] || [])
+          .filter(isCenterSchedule)
+          .flatMap((item) => parseTimeRanges(item.time));
+        const eligible = [];
+        slots.forEach((slot, index) => {
+          const overlap = attendance.reduce(
+            (max, range) => Math.max(max, Math.min(range.end, slot.end) - Math.max(range.start, slot.start)),
+            0
+          );
+          if (overlap >= TIMELINE_SLOT_MINUTES) eligible.push(index);
+        });
+        const forcedTime = timeToMinutes(entry?.target_time);
+        const fixedIndex = forcedTime == null
+          ? -1
+          : slots.findIndex((slot, index) => slot.start <= forcedTime && forcedTime < slot.end && eligible.includes(index));
+        return {
+          ...entry,
+          attendance,
+          attendance_label: rangesLabel(attendance),
+          eligible,
+          fixed_index: fixedIndex,
+          missing: !entry.forced && missingMap.has(buildMissingKey(entry.student_id, mentorName, day))
+        };
+      });
+
+      const used = new Set();
+      const unassigned = [];
+      const ordered = [...requests].sort((a, b) => {
+        if (a.missing !== b.missing) return a.missing ? 1 : -1;
+        if ((a.fixed_index >= 0) !== (b.fixed_index >= 0)) return a.fixed_index >= 0 ? -1 : 1;
+        if (a.eligible.length !== b.eligible.length) return a.eligible.length - b.eligible.length;
+        return String(a.student_name || '').localeCompare(String(b.student_name || ''), 'ko');
+      });
+      for (const request of ordered) {
+        if (request.missing) {
+          unassigned.push(`${request.student_name || request.external_id || '학생'} (누락)`);
+          continue;
+        }
+        const candidates = request.fixed_index >= 0
+          ? [request.fixed_index, ...request.eligible.filter((index) => index !== request.fixed_index)]
+          : request.eligible;
+        const picked = candidates.find((index) => !used.has(index));
+        if (picked == null) {
+          unassigned.push(request.student_name || request.external_id || '학생');
+          continue;
+        }
+        used.add(picked);
+        slots[picked].student = request;
+      }
+
+      result[day].push({
+        mentor_name: mentorName,
+        slots,
+        unassigned,
+        assigned_count: slots.filter((slot) => slot.student).length,
+        request_count: requests.length
+      });
+    }
+    result[day].sort((a, b) => a.mentor_name.localeCompare(b.mentor_name, 'ko'));
+  }
+  return result;
+}
+
 function createEmptyBoardRow(mentorName) {
   return {
     mentor_name: mentorName,
@@ -101,6 +269,8 @@ export default function LeadAssignmentBoard() {
   const [weeks, setWeeks] = useState([]);
   const [weekId, setWeekId] = useState(String(sp.get('week') || ''));
   const [leadMentorRoster, setLeadMentorRoster] = useState([]);
+  const [leadMentorDetails, setLeadMentorDetails] = useState([]);
+  const [studentSchedules, setStudentSchedules] = useState({});
   const [assignments, setAssignments] = useState([]);
   const [missingMarks, setMissingMarks] = useState([]);
   const [forcedAssignments, setForcedAssignments] = useState([]);
@@ -126,6 +296,8 @@ export default function LeadAssignmentBoard() {
   async function loadBoard(targetWeekId) {
     if (!targetWeekId) {
       setLeadMentorRoster([]);
+      setLeadMentorDetails([]);
+      setStudentSchedules({});
       setAssignments([]);
       setMissingMarks([]);
       setForcedAssignments([]);
@@ -140,12 +312,16 @@ export default function LeadAssignmentBoard() {
           ? board.lead_mentors.map((name) => String(name || '').trim()).filter(Boolean)
           : []
       );
+      setLeadMentorDetails(Array.isArray(board?.lead_mentor_details) ? board.lead_mentor_details : []);
+      setStudentSchedules(board?.student_schedules && typeof board.student_schedules === 'object' ? board.student_schedules : {});
       setAssignments(Array.isArray(board?.assignments) ? board.assignments : []);
       setMissingMarks(Array.isArray(board?.missing_marks) ? board.missing_marks : []);
       setForcedAssignments(Array.isArray(board?.forced_assignments) ? board.forced_assignments : []);
     } catch (e) {
       setError(e?.message || '총괄멘토 배정표를 불러오지 못했습니다.');
       setLeadMentorRoster([]);
+      setLeadMentorDetails([]);
+      setStudentSchedules({});
       setAssignments([]);
       setMissingMarks([]);
       setForcedAssignments([]);
@@ -267,7 +443,8 @@ export default function LeadAssignmentBoard() {
         student_name: String(item?.student_name || baseStudent.name || '').trim(),
         mentor_name: mentorName,
         day_label: day,
-        forced: true
+        forced: true,
+        target_time: String(item?.target_time || '').trim()
       });
     }
 
@@ -337,6 +514,11 @@ export default function LeadAssignmentBoard() {
     }
     return map;
   }, [boardRows, missingMap]);
+
+  const timelineByDay = useMemo(
+    () => buildMentoringTimeline(boardRows, leadMentorDetails, studentSchedules, missingMap),
+    [boardRows, leadMentorDetails, studentSchedules, missingMap]
+  );
 
   const filteredRows = useMemo(() => {
     const mentorQ = normText(mentorFilter);
@@ -594,6 +776,75 @@ export default function LeadAssignmentBoard() {
           </div>
         </div>
       </div>
+
+      <section className="card overflow-hidden border border-blue-100 bg-gradient-to-br from-white via-blue-50/30 to-emerald-50/35 shadow-[0_22px_55px_-38px_rgba(37,99,235,0.5)]">
+        <div className="border-b border-blue-100/80 bg-white/85 px-5 py-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-[0.18em] text-blue-600">Mentoring timeline</div>
+              <h2 className="mt-1 text-xl font-black tracking-tight text-slate-900">요일별 멘토링 진행 현황표 <span className="text-base font-bold text-slate-500">(시간대 기준)</span></h2>
+              <p className="mt-1 text-sm text-slate-600">메디위클리와 같은 20분 단위로 총괄멘토 출근 시간과 학생 센터 재원 시간을 맞춰 표시합니다.</p>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-semibold">
+              <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-blue-700">배정 학생</span>
+              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500">빈 슬롯</span>
+              <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-rose-700">미배정</span>
+            </div>
+          </div>
+        </div>
+        <div className="grid gap-4 p-5 md:grid-cols-2">
+          {TIMELINE_DAYS.map((day) => {
+            const mentors = timelineByDay[day] || [];
+            const assignedTotal = mentors.reduce((sum, mentor) => sum + mentor.assigned_count, 0);
+            const requestTotal = mentors.reduce((sum, mentor) => sum + mentor.request_count, 0);
+            return (
+              <article key={`timeline-${day}`} className={['overflow-hidden rounded-2xl border shadow-sm', dayTone(day)].join(' ')}>
+                <div className="flex items-center justify-between border-b border-white/80 bg-white/70 px-4 py-3 backdrop-blur-sm">
+                  <h3 className="text-base font-black text-slate-900">{day}요일</h3>
+                  <span className="rounded-full border border-white bg-white/90 px-2.5 py-1 text-[11px] font-bold text-slate-600">{assignedTotal}/{requestTotal}명</span>
+                </div>
+                <div className="space-y-3 p-3.5">
+                  {!mentors.length ? (
+                    <div className="rounded-xl border border-dashed border-slate-300 bg-white/65 px-3 py-7 text-center text-sm text-slate-500">배정 없음</div>
+                  ) : mentors.map((mentor) => (
+                    <div key={`${day}-${mentor.mentor_name}`} className="rounded-xl border border-white/90 bg-white/90 p-3 shadow-[0_8px_24px_-20px_rgba(15,23,42,0.65)]">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-black text-slate-900">{mentor.mentor_name}</div>
+                        <span className="rounded-full bg-slate-900 px-2.5 py-1 text-[11px] font-bold text-white">{mentor.assigned_count}/{mentor.request_count}명</span>
+                      </div>
+                      {mentor.slots.length ? (
+                        <div className="mt-2 grid gap-1.5">
+                          {mentor.slots.map((slot, slotIndex) => (
+                            <div
+                              key={`${day}-${mentor.mentor_name}-${slot.start}-${slotIndex}`}
+                              className={[
+                                'grid grid-cols-[96px_minmax(0,1fr)] items-center gap-2 rounded-lg border px-2.5 py-2 text-xs',
+                                slot.student ? 'border-blue-100 bg-blue-50/80 text-slate-800' : 'border-slate-100 bg-slate-50/80 text-slate-400'
+                              ].join(' ')}
+                            >
+                              <span className={slot.student ? 'font-bold text-blue-700' : 'font-semibold'}>{minutesToTime(slot.start)}~{minutesToTime(slot.end)}</span>
+                              <span>
+                                {slot.student ? (
+                                  <><b className="text-slate-900">{slot.student.student_name || slot.student.external_id || '학생'}</b>{slot.student.attendance_label ? <span className="ml-1 text-[11px] text-slate-500">({slot.student.attendance_label})</span> : null}</>
+                                ) : '빈 슬롯'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">멘토 출근 시간이 등록되지 않아 시간 슬롯을 만들 수 없습니다.</div>
+                      )}
+                      {mentor.unassigned.length ? (
+                        <div className="mt-2 rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">미배정: {mentor.unassigned.join(', ')}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
 
       <div className="card p-5">
         <div className="text-sm font-semibold text-brand-900">누락 학생 및 강제 배정</div>
