@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { API_BASE, api } from '../api.js';
 import { useAuth } from '../auth/AuthProvider.jsx';
@@ -209,14 +209,27 @@ export default function WrongAnswerAssignment() {
   const [draft, setDraft] = useState({ ...EMPTY_PROBLEM });
   const [selectedMentor, setSelectedMentor] = useState('');
   const [mentorPickerOpen, setMentorPickerOpen] = useState(false);
+  const [studentPickerOpen, setStudentPickerOpen] = useState(false);
+  const [studentQuery, setStudentQuery] = useState('');
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const studentPickerRef = useRef(null);
 
   const selectedWeek = useMemo(() => weeks.find((week) => String(week.id) === String(weekId)) || null, [weeks, weekId]);
   const selectedStudent = useMemo(() => students.find((student) => String(student.id) === String(studentId)) || null, [students, studentId]);
+  const filteredStudents = useMemo(() => {
+    const query = String(studentQuery || '').toLocaleLowerCase('ko-KR').replace(/\s+/g, '');
+    if (!query) return students;
+    return students.filter((student) => {
+      const searchable = `${student?.external_id || ''} ${student?.name || ''}`
+        .toLocaleLowerCase('ko-KR')
+        .replace(/\s+/g, '');
+      return searchable.includes(query);
+    });
+  }, [studentQuery, students]);
   const mentorCards = useMemo(
     () => buildMentorCards(mentorInfo, studentSchedule, selectedWeek),
     [mentorInfo, studentSchedule, selectedWeek]
@@ -291,6 +304,28 @@ export default function WrongAnswerAssignment() {
   useEffect(() => {
     if (weekId && studentId) void loadRecord(studentId, weekId);
   }, [weekId, studentId]);
+  useEffect(() => {
+    if (!studentPickerOpen) return undefined;
+    const closePicker = (event) => {
+      if (!studentPickerRef.current?.contains(event.target)) setStudentPickerOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setStudentPickerOpen(false);
+    };
+    document.addEventListener('pointerdown', closePicker);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closePicker);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [studentPickerOpen]);
+
+  function selectStudent(value) {
+    setStudentId(value);
+    setStudentQuery('');
+    setStudentPickerOpen(false);
+    setSearchParams({ week: weekId, student: value }, { replace: true });
+  }
 
   function selectMentor(mentor) {
     const best = mentor.overlaps[0] || null;
@@ -442,13 +477,59 @@ export default function WrongAnswerAssignment() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div><h2 className="text-lg font-black text-slate-900">오답 기록</h2><p className="text-sm text-slate-500">입력 카드는 항상 1개만 표시되며 제출 후 즉시 비워집니다.</p></div>
           <div className="flex flex-wrap items-center gap-2">
-            <select className="input min-w-60" value={studentId} onChange={(e) => {
-              const value = String(e.target.value || '');
-              setStudentId(value);
-              setSearchParams({ week: weekId, student: value }, { replace: true });
-            }} aria-label="학생 선택">
-              {students.map((student) => <option key={student.id} value={student.id}>{student.external_id ? `${student.external_id} · ` : ''}{student.name}</option>)}
-            </select>
+            <div className="relative" ref={studentPickerRef}>
+              <button
+                type="button"
+                className="input flex min-w-60 items-center justify-between gap-3 text-left"
+                onClick={() => {
+                  setStudentQuery('');
+                  setStudentPickerOpen((open) => !open);
+                }}
+                aria-haspopup="listbox"
+                aria-expanded={studentPickerOpen}
+                aria-label="학생 선택"
+              >
+                <span className="truncate">
+                  {selectedStudent
+                    ? `${selectedStudent.external_id ? `${selectedStudent.external_id} · ` : ''}${selectedStudent.name}`
+                    : '학생을 선택해 주세요'}
+                </span>
+                <span className="text-xs text-slate-400" aria-hidden="true">▼</span>
+              </button>
+              {studentPickerOpen ? (
+                <div className="absolute right-0 z-30 mt-2 w-[min(22rem,calc(100vw-3rem))] rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                  <input
+                    autoFocus
+                    className="input w-full"
+                    value={studentQuery}
+                    onChange={(event) => setStudentQuery(event.target.value)}
+                    placeholder="학생 이름 또는 아이디 검색"
+                    aria-label="학생 이름 또는 아이디 검색"
+                  />
+                  <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-slate-100 p-1" role="listbox" aria-label="학생 검색 결과">
+                    {filteredStudents.map((student) => {
+                      const selected = String(student.id) === String(studentId);
+                      return (
+                        <button
+                          key={student.id}
+                          type="button"
+                          className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition ${selected ? 'bg-blue-600 font-bold text-white' : 'text-slate-800 hover:bg-blue-50'}`}
+                          onClick={() => selectStudent(String(student.id))}
+                          role="option"
+                          aria-selected={selected}
+                        >
+                          <span className="truncate">{student.external_id ? `${student.external_id} · ` : ''}{student.name}</span>
+                          {selected ? <span className="ml-2 text-xs">선택됨</span> : null}
+                        </button>
+                      );
+                    })}
+                    {!filteredStudents.length ? (
+                      <div className="px-3 py-6 text-center text-sm text-slate-500">검색 결과가 없습니다.</div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <button
               type="button"
               className="btn border border-blue-600 bg-blue-600 text-white shadow-sm hover:bg-blue-700"
