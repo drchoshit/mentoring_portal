@@ -36,6 +36,9 @@ export default function AppShell({ children }) {
   const menu = [];
   if (role !== 'parent') {
     menu.push({ to: '/', label: role === 'lead' ? '오늘 멘토링' : '피드' });
+    if (role === 'director') {
+      menu.push({ to: '/lead-today', label: '오늘 멘토링' });
+    }
     menu.push({ to: '/students', label: '학생' });
     if (['director', 'lead', 'admin'].includes(role)) {
       menu.push({ to: '/wrong-answer-assignment', label: '오답 배정' });

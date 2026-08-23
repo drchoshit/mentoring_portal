@@ -91,7 +91,7 @@ function statusMeta(status) {
   };
 }
 
-function MentorPicker({ names, selected, onSelect, showAll, counts, weekCounts, details, week }) {
+function MentorPicker({ names, selected, onSelect, showAll, counts, weekCounts, details, week, viewScope }) {
   const options = showAll ? ['전체', ...names] : names;
   return (
     <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
@@ -110,7 +110,9 @@ function MentorPicker({ names, selected, onSelect, showAll, counts, weekCounts, 
             <div className="flex items-center justify-between gap-2">
               <span className="truncate text-sm font-bold">{name}{active && name !== '전체' ? ' (나)' : ''}</span>
               <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${active ? 'bg-[#5b8def] text-white' : 'bg-[#eef3f9] text-zinc-500'}`}>
-                오늘 {name === '전체' ? counts.all : (counts[name] || 0)} · 회차 {name === '전체' ? (weekCounts?.all || 0) : (weekCounts?.[name] || 0)}
+                {viewScope === 'week'
+                  ? `회차 ${name === '전체' ? (weekCounts?.all || 0) : (weekCounts?.[name] || 0)}`
+                  : `오늘 ${name === '전체' ? counts.all : (counts[name] || 0)} · 회차 ${name === '전체' ? (weekCounts?.all || 0) : (weekCounts?.[name] || 0)}`}
               </span>
             </div>
             {name !== '전체' ? <div className={`mt-1.5 truncate text-[10px] ${active ? 'text-[#3970c9]' : workDates.length ? 'text-[#5b8def]' : 'text-zinc-400'}`}>{workDates.length ? `출근 ${workDates.join(' · ')}` : '출근일 미등록'}</div> : null}
@@ -141,6 +143,49 @@ function WeeklySchedule({ schedule, today }) {
         );
       })}
     </div>
+  );
+}
+
+function DirectorConsultingList({ rows, weekId, week }) {
+  const navigate = useNavigate();
+  const items = Array.isArray(rows) ? rows : [];
+  return (
+    <section className="overflow-hidden rounded-[1.5rem] border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-orange-50 shadow-[0_10px_28px_rgba(180,120,35,0.10)]">
+      <div className="flex flex-col gap-2 border-b border-amber-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-[10px] font-black uppercase tracking-[0.17em] text-amber-600">Director consulting</div>
+          <h2 className="mt-1 text-lg font-black text-slate-900">원장 컨설팅 리스트</h2>
+          <p className="mt-0.5 text-xs text-slate-500">원장 계정에서만 보이는 {week?.label || '선택 회차'} 컨설팅 대상입니다.</p>
+        </div>
+        <span className="w-fit rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-800">총 {items.length}명</span>
+      </div>
+      <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+        {items.map((row) => {
+          const days = Array.isArray(row?.consulting_days) ? row.consulting_days : [];
+          const centerSchedules = DAYS.flatMap((day) => scheduleItems(row?.schedule, day)
+            .filter(isCenterItem)
+            .map((item) => `${DAY_LABELS[day]} ${item?.time || '시간 미정'}`));
+          return (
+            <article key={`${row.mentor_name}-${row.student_id}`} className="rounded-2xl border border-amber-100 bg-white/90 p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-black text-slate-950">{row.student_name}</div>
+                  <div className="mt-1 text-[11px] text-slate-500">{row.external_id || '-'}{row.grade ? ` · ${row.grade}` : ''}</div>
+                </div>
+                <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-700">{row.mentor_name}</span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {(days.length ? days : ['요일 미지정']).map((day) => <span key={day} className="rounded-md bg-orange-50 px-2 py-1 text-[11px] font-bold text-orange-700">{day === '요일 미지정' ? day : `${day}요일`}</span>)}
+                <span className="rounded-md bg-violet-50 px-2 py-1 text-[11px] font-bold text-violet-700">질문 {Number(row.question_count || 0)}개</span>
+              </div>
+              <div className="mt-3 text-[11px] leading-5 text-slate-500">{centerSchedules.length ? centerSchedules.slice(0, 3).join(' · ') : '센터 재원 일정 미등록'}</div>
+              <button className="btn-ghost mt-3 w-full text-xs" type="button" onClick={() => navigate(`/students/${row.student_id}/mentoring?week=${weekId}`)}>컨설팅 기록 열기</button>
+            </article>
+          );
+        })}
+        {!items.length ? <div className="rounded-2xl border border-dashed border-amber-200 bg-white/70 p-8 text-center text-sm text-slate-500 md:col-span-2 xl:col-span-3">선택 회차의 원장 컨설팅 대상이 없습니다.</div> : null}
+      </div>
+    </section>
   );
 }
 
@@ -250,6 +295,8 @@ export default function LeadToday() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const isAdmin = ['admin', 'director'].includes(String(user?.role || ''));
+  const isDirector = String(user?.role || '') === 'director';
+  const isWeekView = data?.view_scope === 'week';
 
   async function load({ quiet = false, targetWeekId = weekId } = {}) {
     if (!quiet) setLoading(true);
@@ -300,7 +347,7 @@ export default function LeadToday() {
     try {
       await api('/api/mentor-assignments/lead-today/missed', {
         method: 'POST',
-        body: { student_id: row.student_id, week_id: data.week.id, mentor_name: row.mentor_name, assignment_date: data.date, reason }
+        body: { student_id: row.student_id, week_id: data.week.id, mentor_name: row.mentor_name, assignment_date: row.assignment_date || data.date, reason }
       });
       await load({ quiet: true });
     } catch (err) {
@@ -312,7 +359,7 @@ export default function LeadToday() {
     try {
       await api('/api/mentor-assignments/lead-today/completed', {
         method: 'POST',
-        body: { student_id: row.student_id, week_id: data.week.id, mentor_name: row.mentor_name, assignment_date: data.date }
+        body: { student_id: row.student_id, week_id: data.week.id, mentor_name: row.mentor_name, assignment_date: row.assignment_date || data.date }
       });
       await load({ quiet: true });
     } catch (err) {
@@ -327,7 +374,7 @@ export default function LeadToday() {
         body: {
           student_id: row.student_id,
           week_id: data.week.id,
-          source_assignment_date: data.date,
+          source_assignment_date: row.assignment_date || data.date,
           source_mentor_name: row.mentor_name,
           target_assignment_date: targetDate,
           target_mentor_name: targetMentor
@@ -356,7 +403,9 @@ export default function LeadToday() {
         <div>
           <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[#3970c9]">
             <span>{isCurrentDate ? 'Today' : 'Selected round'}</span><span className="h-1 w-1 rounded-full bg-[#5b8def]" />
-            <span>{data?.date || ''} {data?.day_label ? `${data.day_label}요일` : ''}</span>
+            <span>{isWeekView
+              ? `${data?.week?.start_date || ''} ~ ${data?.week?.end_date || ''}`
+              : `${data?.date || ''} ${data?.day_label ? `${data.day_label}요일` : ''}`}</span>
           </div>
           <h1 className="mt-2 text-3xl font-black tracking-[-0.035em] text-[#1d2b43]">{isCurrentDate ? '오늘의 총괄 멘토링' : '회차별 총괄 멘토링'}</h1>
           <p className="mt-1 text-sm text-[#60728e]">회차와 담당 멘토를 선택하고 진행 상황을 빠르게 확인하세요.</p>
@@ -372,7 +421,7 @@ export default function LeadToday() {
               {weeks.map((week) => <option key={week.id} value={week.id}>{weekOptionLabel(week)}</option>)}
             </select>
           </label>
-          <div className="min-w-[88px] rounded-2xl bg-white/75 px-4 py-3 shadow-sm"><div className="text-[10px] font-bold text-slate-400">선택일 배정</div><div className="mt-0.5 text-xl font-black text-[#1d2b43]">{overviewRows.length}<span className="ml-0.5 text-xs font-medium text-slate-400">명</span></div></div>
+          <div className="min-w-[88px] rounded-2xl bg-white/75 px-4 py-3 shadow-sm"><div className="text-[10px] font-bold text-slate-400">{isWeekView ? '회차 배정' : '선택일 배정'}</div><div className="mt-0.5 text-xl font-black text-[#1d2b43]">{overviewRows.length}<span className="ml-0.5 text-xs font-medium text-slate-400">명</span></div></div>
           <div className="min-w-[88px] rounded-2xl bg-emerald-50/90 px-4 py-3"><div className="text-[10px] font-bold text-emerald-600">완료</div><div className="mt-0.5 text-xl font-black text-emerald-700">{overviewCompleted}</div></div>
           <div className="min-w-[88px] rounded-2xl bg-rose-50/90 px-4 py-3"><div className="text-[10px] font-bold text-rose-500">미진행</div><div className="mt-0.5 text-xl font-black text-rose-600">{overviewMissed}</div></div>
           <button type="button" onClick={() => load({ targetWeekId: weekId })} className="rounded-2xl bg-[#5b8def] px-4 text-xs font-bold text-white shadow-sm shadow-blue-200/70 transition hover:bg-[#4779d8]">↻ 새로고침</button>
@@ -387,13 +436,14 @@ export default function LeadToday() {
       {data?.schedule_sync?.configured && data?.schedule_sync?.error ? (
         <div className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">메디 스케줄의 일부 일정을 연결하지 못했습니다. · {data.schedule_sync.error}</div>
       ) : null}
+      {isDirector ? <DirectorConsultingList rows={data?.director_consulting_assignments || []} weekId={data?.week?.id} week={data?.week} /> : null}
       <section className="py-2">
         <div className="mb-4 flex items-end justify-between gap-3">
           <div><h2 className="text-sm font-black text-[#1d2b43]">총괄멘토 선택</h2><p className="mt-0.5 text-xs text-slate-500">선택한 이름이 해당 회차 업무의 ‘나’로 표시됩니다.</p></div>
           {data?.source_updated_at ? <div className="text-right text-xs text-slate-400"><div>{data?.source === 'medi-weekly-live' ? '메디위클리 실시간 연동' : '포털 배정 데이터'}</div><div>{new Date(data.source_updated_at).toLocaleString('ko-KR')}</div></div> : null}
         </div>
         {loading ? <div className="card p-8 text-center text-sm text-slate-500">배정 정보를 불러오는 중입니다.</div> : (
-          <MentorPicker names={data?.lead_mentors || []} selected={selected} onSelect={setSelected} showAll={isAdmin} counts={assignmentCounts} weekCounts={data?.weekly_assignment_counts || {}} details={data?.lead_mentor_details || []} week={data?.week} />
+          <MentorPicker names={data?.lead_mentors || []} selected={selected} onSelect={setSelected} showAll={isAdmin} counts={assignmentCounts} weekCounts={data?.weekly_assignment_counts || {}} details={data?.lead_mentor_details || []} week={data?.week} viewScope={data?.view_scope || 'day'} />
         )}
       </section>
 
@@ -402,12 +452,12 @@ export default function LeadToday() {
           <div className="pb-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div><div className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#5b8def]">Mentoring queue</div><div className="mt-1 flex items-baseline gap-2"><h2 className="text-lg font-black text-[#1d2b43]">{selected === '전체' ? '전체 총괄멘토' : `${selected} (나)`}</h2><span className="text-xs text-slate-400">{data?.week?.label || '현재 회차'}</span></div></div>
-              <div className="flex items-center gap-2 text-xs"><strong className="rounded-full bg-[#e3efff] px-3 py-1.5 text-[#3970c9]">선택일 {rows.length}명</strong><span className="rounded-full bg-emerald-50 px-3 py-1.5 text-emerald-700">완료 {completed}</span><span className="rounded-full bg-zinc-100 px-3 py-1.5 text-zinc-600">진행 전 {pending}</span><span className="rounded-full bg-rose-50 px-3 py-1.5 text-rose-600">미진행 {missed}</span></div>
+              <div className="flex items-center gap-2 text-xs"><strong className="rounded-full bg-[#e3efff] px-3 py-1.5 text-[#3970c9]">{isWeekView ? '회차' : '선택일'} {rows.length}명</strong><span className="rounded-full bg-emerald-50 px-3 py-1.5 text-emerald-700">완료 {completed}</span><span className="rounded-full bg-zinc-100 px-3 py-1.5 text-zinc-600">진행 전 {pending}</span><span className="rounded-full bg-rose-50 px-3 py-1.5 text-rose-600">미진행 {missed}</span></div>
             </div>
             <div className="mt-3 h-1 overflow-hidden rounded-full bg-[#e1eaf5]"><div className="h-full rounded-full bg-[#5b8def] transition-all" style={{ width: `${rows.length ? Math.round((completed / rows.length) * 100) : 0}%` }} /></div>
           </div>
-          {rows.length ? rows.map((row) => <StudentCard key={`${data?.week?.id}-${row.mentor_name}-${row.student_id}`} row={row} dayLabel={data.day_label} weekId={data.week?.id} week={data.week} assignmentDate={data.date} leadMentors={data?.lead_mentors || []} isCurrentDate={isCurrentDate} canChangeStatus={['lead', 'admin'].includes(String(user?.role || ''))} onMissed={markMissed} onCompleted={markCompleted} onReassign={reassign} />) : (
-            <div className="rounded-xl bg-white p-8 text-center shadow-sm"><div className="text-sm font-bold text-slate-700">선택한 회차의 해당 요일에 배정된 학생이 없습니다.</div><div className="mt-1 text-xs text-slate-500">배정 데이터와 선택한 멘토 이름을 확인해 주세요.</div></div>
+          {rows.length ? rows.map((row) => <StudentCard key={`${data?.week?.id}-${row.assignment_date || data?.date}-${row.mentor_name}-${row.student_id}`} row={row} dayLabel={row.day_label || data.day_label} weekId={data.week?.id} week={data.week} assignmentDate={row.assignment_date || data.date} leadMentors={data?.lead_mentors || []} isCurrentDate={isCurrentDate && String(row.assignment_date || data.date) === currentDate} canChangeStatus={['lead', 'admin'].includes(String(user?.role || ''))} onMissed={markMissed} onCompleted={markCompleted} onReassign={reassign} />) : (
+            <div className="rounded-xl bg-white p-8 text-center shadow-sm"><div className="text-sm font-bold text-slate-700">{isWeekView ? '선택한 회차에 배정된 학생이 없습니다.' : '선택한 회차의 해당 요일에 배정된 학생이 없습니다.'}</div><div className="mt-1 text-xs text-slate-500">배정 데이터와 선택한 멘토 이름을 확인해 주세요.</div></div>
           )}
         </section>
       ) : !loading ? <div className="rounded-xl bg-[#e3efff] p-7 text-center text-sm font-bold text-[#3970c9]">위에서 내 이름을 선택해 주세요.</div> : null}

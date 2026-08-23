@@ -193,6 +193,21 @@ function periodDateRange(value) {
   return dates.length >= 2 ? { start: dates[0], end: dates[1] } : null;
 }
 
+function periodMatchesWeek(value, weekStart, weekEnd) {
+  const start = String(weekStart || '').slice(0, 10);
+  const end = String(weekEnd || '').slice(0, 10);
+  const range = periodDateRange(value);
+  if (range) return range.start === start && range.end === end;
+  const compactDates = String(value || '').match(/\d{1,2}\/\d{1,2}/g) || [];
+  if (compactDates.length < 2) return false;
+  const compact = (dateText) => {
+    const match = String(dateText || '').match(/^\d{4}-(\d{2})-(\d{2})$/);
+    if (!match) return '';
+    return `${Number(match[1])}/${Number(match[2])}`;
+  };
+  return compactDates[0] === compact(start) && compactDates[1] === compact(end);
+}
+
 function assignmentsForWeek(source, week, todayDate) {
   const start = String(week?.start_date || '').slice(0, 10);
   const end = String(week?.end_date || '').slice(0, 10);
@@ -200,13 +215,11 @@ function assignmentsForWeek(source, week, todayDate) {
     ? source.assignments_by_period
     : {};
   for (const [periodId, assignments] of Object.entries(byPeriod)) {
-    const range = periodDateRange(periodId);
-    if (range?.start === start && range?.end === end && Array.isArray(assignments) && assignments.length) {
+    if (periodMatchesWeek(periodId, start, end) && Array.isArray(assignments) && assignments.length) {
       return assignments;
     }
   }
-  const currentRange = periodDateRange(source?.periodId);
-  if (currentRange?.start === start && currentRange?.end === end && Array.isArray(source?.assignments)) {
+  if (periodMatchesWeek(source?.periodId, start, end) && Array.isArray(source?.assignments)) {
     return source.assignments;
   }
   if (todayDate >= start && todayDate <= end && Array.isArray(source?.assignments)) return source.assignments;
@@ -337,6 +350,40 @@ function buildLeadRowsForDay(db, { week, assignmentDate, dayLabel, currentDate, 
   `).all(assignmentDate, week.id);
   const statusMap = new Map(statuses.map((item) => [`${item.student_id}:${item.mentor_name}`, item]));
   return rows.map((row) => ({ ...row, status: statusMap.get(`${row.student_id}:${row.mentor_name}`) || null }));
+}
+
+function mentorNameKey(value) {
+  return String(value || '').trim().replace(/\s+/g, '').toLowerCase();
+}
+
+function isDirectorMentorName(value, directorNames = new Set()) {
+  const key = mentorNameKey(value);
+  if (!key) return false;
+  if (key.includes('원장') || key === 'director') return true;
+  return directorNames.has(key);
+}
+
+function buildDirectorConsultingRows({ week, currentDate, source, students, questionCounts, directorNames }) {
+  const rows = [];
+  for (const raw of assignmentsForWeek(source, week, currentDate)) {
+    const mentorName = firstNonEmptyText(raw?.lead_mentor, raw?.leadMentor, raw?.mentor);
+    if (!isDirectorMentorName(mentorName, directorNames)) continue;
+    const studentId = parsePositiveInt(raw?.student_id);
+    const student = students.get(studentId);
+    if (!student) continue;
+    rows.push({
+      student_id: studentId,
+      external_id: student.external_id || '',
+      student_name: student.name || raw?.name || '',
+      grade: student.grade || '',
+      mentor_name: mentorName,
+      consulting_days: Array.from(new Set(normalizeDays(raw?.scheduledDays).map(normalizeDayLabel).filter(Boolean))),
+      schedule: safeJson(student.schedule_json, {}),
+      schedule_updated_at: student.updated_at || '',
+      question_count: Number(questionCounts.get(studentId) || 0)
+    });
+  }
+  return rows.sort((a, b) => String(a.student_name || '').localeCompare(String(b.student_name || ''), 'ko'));
 }
 
 function parsePositiveInt(value) {
@@ -967,6 +1014,12 @@ export default function mentorAssignmentsRoutes(db) {
 
     const source = loadAssignments(db) || {};
     const mentorInfo = loadMentorInfoSetting(db);
+    const directorNames = new Set(
+      (mentorInfo.mentors || [])
+        .filter((item) => item.role === 'director')
+        .map((item) => mentorNameKey(item.name))
+        .filter(Boolean)
+    );
     const leads = new Set(
       (mentorInfo.mentors || []).filter((item) => item.role === 'lead').map((item) => item.name).filter(Boolean)
     );
@@ -975,19 +1028,12 @@ export default function mentorAssignmentsRoutes(db) {
     const weekAssignments = assignmentsForWeek(source, week, today.date);
     for (const raw of weekAssignments) {
       const mentorName = firstNonEmptyText(raw?.lead_mentor, raw?.leadMentor, raw?.mentor);
-      if (mentorName) leads.add(mentorName);
+      if (mentorName && !isDirectorMentorName(mentorName, directorNames)) leads.add(mentorName);
     }
     const questionCounts = loadWrongAnswerQuestionCounts(db, week.id);
-    const assignments = buildLeadRowsForDay(db, {
-      week,
-      assignmentDate,
-      dayLabel: today.day,
-      currentDate: today.date,
-      source,
-      students,
-      questionCounts
-    });
-    for (const row of assignments) leads.add(row.mentor_name);
+    const isCurrentWeek = today.date >= String(week.start_date || '').slice(0, 10)
+      && today.date <= String(week.end_date || '').slice(0, 10);
+    const weekRows = [];
     const weeklyAssignmentCounts = { all: 0 };
     for (const entry of weekDateEntries(week)) {
       const dayRows = buildLeadRowsForDay(db, {
@@ -999,12 +1045,28 @@ export default function mentorAssignmentsRoutes(db) {
         students,
         questionCounts
       });
-      weeklyAssignmentCounts.all += dayRows.length;
       for (const row of dayRows) {
+        if (isDirectorMentorName(row.mentor_name, directorNames)) continue;
+        const scopedRow = { ...row, assignment_date: entry.date, day_label: entry.day_label };
+        weekRows.push(scopedRow);
+        weeklyAssignmentCounts.all += 1;
         weeklyAssignmentCounts[row.mentor_name] = (weeklyAssignmentCounts[row.mentor_name] || 0) + 1;
         leads.add(row.mentor_name);
       }
     }
+    const assignments = isCurrentWeek
+      ? weekRows.filter((row) => row.assignment_date === assignmentDate)
+      : weekRows;
+    const directorConsultingAssignments = req.user.role === 'director'
+      ? buildDirectorConsultingRows({
+          week,
+          currentDate: today.date,
+          source,
+          students,
+          questionCounts,
+          directorNames
+        })
+      : [];
 
     return res.json({
       date: assignmentDate,
@@ -1015,12 +1077,17 @@ export default function mentorAssignmentsRoutes(db) {
       live_sync: liveSync,
       schedule_sync: scheduleSync,
       viewer: { role: req.user.role, display_name: req.user.display_name || '' },
+      view_scope: isCurrentWeek ? 'day' : 'week',
       lead_mentors: Array.from(leads).sort((a, b) => a.localeCompare(b, 'ko')),
       lead_mentor_details: Array.from(leads).map((name) => {
         const info = (mentorInfo.mentors || []).find((item) => item.name === name);
         return { name, schedule: info?.schedule || {} };
       }),
       weekly_assignment_counts: weeklyAssignmentCounts,
+      ...(req.user.role === 'director' ? {
+        director_consulting_assignments: directorConsultingAssignments,
+        director_consulting_count: directorConsultingAssignments.length
+      } : {}),
       assignments
     });
   });
@@ -1331,11 +1398,20 @@ export default function mentorAssignmentsRoutes(db) {
       });
     }
 
+    const periodId = parsed.periodId ? String(parsed.periodId).trim() : '';
+    const previous = loadAssignments(db) || {};
+    const assignmentsByPeriod = previous.assignments_by_period && typeof previous.assignments_by_period === 'object'
+      ? { ...previous.assignments_by_period }
+      : {};
+    if (periodId) assignmentsByPeriod[periodId] = assignments;
     const stored = {
-      periodId: parsed.periodId ? String(parsed.periodId).trim() : '',
+      ...previous,
+      periodId,
       exportedAt: parsed.exportedAt ? String(parsed.exportedAt).trim() : '',
       updatedAt: new Date().toISOString(),
-      assignments
+      source: 'portal-import',
+      assignments,
+      assignments_by_period: assignmentsByPeriod
     };
 
     saveAssignments(db, stored);
@@ -1344,7 +1420,7 @@ export default function mentorAssignmentsRoutes(db) {
       user_id: req.user.id,
       action: 'import',
       entity: 'mentor_assignments',
-      details: { stored: assignments.length, missing: missing.length }
+      details: { stored: assignments.length, missing: missing.length, period_id: periodId, preserved_periods: Object.keys(assignmentsByPeriod).length }
     });
 
     return res.json({ data: stored, missing });
@@ -1355,8 +1431,12 @@ export default function mentorAssignmentsRoutes(db) {
     if (!weekId) return res.status(404).json({ error: 'Week not found' });
 
     const assignmentData = loadAssignments(db);
-    const assignments = Array.isArray(assignmentData?.assignments)
-      ? assignmentData.assignments.map((item) => ({
+    const boardWeek = db.prepare('SELECT id, start_date, end_date FROM weeks WHERE id=?').get(weekId);
+    const boardSourceAssignments = boardWeek?.id
+      ? assignmentsForWeek(assignmentData || {}, boardWeek, koreanDateParts().date)
+      : [];
+    const assignments = Array.isArray(boardSourceAssignments)
+      ? boardSourceAssignments.map((item) => ({
           student_id: parsePositiveInt(item?.student_id) || 0,
           external_id: String(item?.external_id || '').trim(),
           name: String(item?.name || '').trim(),

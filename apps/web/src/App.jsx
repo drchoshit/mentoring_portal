@@ -123,6 +123,15 @@ export default function App() {
       />
 
       <Route
+        path="/lead-today"
+        element={
+          <Guard roles={['director','lead','admin']}>
+            <Shell><LeadToday /></Shell>
+          </Guard>
+        }
+      />
+
+      <Route
         path="/assignment-status"
         element={
           <Guard roles={['director','lead','mentor','admin']}>
