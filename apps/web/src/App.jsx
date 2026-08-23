@@ -14,6 +14,8 @@ import LeadAssignmentBoard from './pages/LeadAssignmentBoard.jsx';
 import Settings from './pages/Settings.jsx';
 import Parent from './pages/Parent.jsx';
 import LeadToday from './pages/LeadToday.jsx';
+import LeadMentoringStatus from './pages/LeadMentoringStatus.jsx';
+import QuestionCompletionStatus from './pages/QuestionCompletionStatus.jsx';
 
 function Shell({ children }) {
   return <AppShell>{children}</AppShell>;
@@ -125,6 +127,24 @@ export default function App() {
         element={
           <Guard roles={['director','lead','mentor','admin']}>
             <Shell><AssignmentStatus /></Shell>
+          </Guard>
+        }
+      />
+
+      <Route
+        path="/lead-mentoring-status"
+        element={
+          <Guard roles={['director','admin']}>
+            <Shell><LeadMentoringStatus /></Shell>
+          </Guard>
+        }
+      />
+
+      <Route
+        path="/question-completion-status"
+        element={
+          <Guard roles={['director','admin']}>
+            <Shell><QuestionCompletionStatus /></Shell>
           </Guard>
         }
       />
