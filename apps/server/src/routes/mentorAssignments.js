@@ -1,5 +1,6 @@
 import express from 'express';
 import multer from 'multer';
+import jwt from 'jsonwebtoken';
 import { requireRole } from '../lib/auth.js';
 import { writeAudit } from '../lib/audit.js';
 
@@ -10,6 +11,17 @@ const upload = multer({
 
 const DAY_LABELS = ['월', '화', '수', '목', '금', '토', '일'];
 const LEAD_ASSIGNMENT_BOARD_KEY = 'lead_assignment_board';
+let mediWeeklyToken = '';
+let mediWeeklyTokenAt = 0;
+let mediWeeklyLastPullAt = 0;
+let mediWeeklyLastError = '';
+let mediScheduleToken = '';
+let mediScheduleTokenAt = 0;
+let mediScheduleLastPullAt = 0;
+let mediScheduleLastError = '';
+let mediScheduleLastResult = { configured: false, updated: false, error: '' };
+let liveSyncStarted = false;
+let liveSyncPromise = null;
 
 function parseJsonFile(req) {
   if (!req.file) throw new Error('Missing file');
@@ -81,6 +93,46 @@ function parsePayload(payload) {
   return null;
 }
 
+function ensureLeadMentoringStatusTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lead_mentoring_status (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      assignment_date TEXT NOT NULL,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      week_id INTEGER NOT NULL REFERENCES weeks(id) ON DELETE CASCADE,
+      mentor_name TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('completed','missed')),
+      reason TEXT,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(assignment_date, student_id, week_id, mentor_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_lead_mentoring_status_date_mentor
+      ON lead_mentoring_status(assignment_date, mentor_name, status);
+  `);
+}
+
+function koreanDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short'
+  }).formatToParts(date);
+  const pick = (type) => parts.find((part) => part.type === type)?.value || '';
+  const dayMap = { Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금', Sat: '토', Sun: '일' };
+  return { date: `${pick('year')}-${pick('month')}-${pick('day')}`, day: dayMap[pick('weekday')] || '' };
+}
+
+function safeJson(value, fallback = {}) {
+  try { return JSON.parse(value || JSON.stringify(fallback)); } catch { return fallback; }
+}
+
+function resolveCurrentWeek(db, dateText) {
+  return db.prepare(`
+    SELECT * FROM weeks
+    WHERE date(?) BETWEEN date(start_date) AND date(end_date)
+    ORDER BY id DESC LIMIT 1
+  `).get(dateText) || db.prepare('SELECT * FROM weeks ORDER BY id DESC LIMIT 1').get();
+}
+
 function parsePositiveInt(value) {
   const n = Number(value);
   if (!Number.isInteger(n) || n <= 0) return null;
@@ -91,6 +143,8 @@ function normalizeDayLabel(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
   if (DAY_LABELS.includes(raw)) return raw;
+  const englishDay = { mon: '월', monday: '월', tue: '화', tuesday: '화', wed: '수', wednesday: '수', thu: '목', thursday: '목', fri: '금', friday: '금', sat: '토', saturday: '토', sun: '일', sunday: '일' };
+  if (englishDay[raw.toLowerCase()]) return englishDay[raw.toLowerCase()];
   if (raw === '월요일') return '월';
   if (raw === '화요일') return '화';
   if (raw === '수요일') return '수';
@@ -147,7 +201,8 @@ function loadMentorInfoSetting(db) {
     const mentors = Array.isArray(parsed?.mentors)
       ? parsed.mentors.map((item) => ({
           name: String(item?.name || item?.display_name || '').trim(),
-          role: normalizeMentorRole(item?.role)
+          role: normalizeMentorRole(item?.role),
+          schedule: item?.schedule && typeof item.schedule === 'object' ? item.schedule : {}
         }))
       : [];
     return { mentors };
@@ -323,8 +378,468 @@ function buildStudentsByName(db) {
   return map;
 }
 
+async function fetchJson(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutMs = Math.max(1000, Number(process.env.LIVE_SYNC_TIMEOUT_MS || 15000));
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function mondayForDate(dateText) {
+  const date = new Date(`${dateText}T00:00:00Z`);
+  const weekday = date.getUTCDay();
+  const offset = weekday === 0 ? -6 : 1 - weekday;
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
+
+function addIsoDays(dateText, days) {
+  const date = new Date(`${dateText}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function buildLiveScheduleJson(weekStart, rows) {
+  const dayMap = { '월': 'Mon', '화': 'Tue', '수': 'Wed', '목': 'Thu', '금': 'Fri', '토': 'Sat', '일': 'Sun' };
+  const result = {
+    week_start: weekStart,
+    week_range_text: `${weekStart} ~ ${addIsoDays(weekStart, 6)}`,
+    Mon: [], Tue: [], Wed: [], Thu: [], Fri: [], Sat: [], Sun: []
+  };
+  for (const row of rows || []) {
+    const day = dayMap[String(row?.day || '').trim()];
+    if (!day) continue;
+    const start = String(row?.start || '').trim();
+    const end = String(row?.end || '').trim();
+    if (!start || !end) continue;
+    const type = String(row?.type || '').trim();
+    const description = String(row?.description || '').trim();
+    result[day].push({
+      time: `${start}~${end}`,
+      title: description ? `${type} ${description}`.trim() : type,
+      type
+    });
+  }
+  for (const day of Object.values(dayMap)) {
+    result[day].sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  }
+  return result;
+}
+
+async function pullMediSchedule(db, { force = false } = {}) {
+  const baseUrl = String(process.env.MEDI_SCHEDULE_BASE_URL || '').trim().replace(/\/+$/, '');
+  const username = String(process.env.MEDI_SCHEDULE_USERNAME || '').trim();
+  const password = String(process.env.MEDI_SCHEDULE_PASSWORD || '').trim();
+  const allowCreate = /^(1|true|yes|on)$/i.test(String(process.env.MEDI_SCHEDULE_ALLOW_CREATE || 'false').trim());
+  const syncProfiles = /^(1|true|yes|on)$/i.test(String(process.env.MEDI_SCHEDULE_SYNC_PROFILES || 'false').trim());
+  if (!baseUrl || !username || !password) return { configured: false, updated: false, error: '' };
+  if (!force && Date.now() - mediScheduleLastPullAt < 30000) {
+    return { ...mediScheduleLastResult, updated: false, error: mediScheduleLastError };
+  }
+  mediScheduleLastPullAt = Date.now();
+
+  try {
+    if (!mediScheduleToken || Date.now() - mediScheduleTokenAt > 10 * 60 * 1000) {
+      const login = await fetchJson(`${baseUrl}/api/admin/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password })
+      });
+      mediScheduleToken = String(login?.token || '').trim();
+      mediScheduleTokenAt = Date.now();
+      if (!mediScheduleToken) throw new Error('메디 스케줄 인증 토큰이 없습니다.');
+    }
+
+    const weekStart = mondayForDate(koreanDateParts().date);
+    let snapshot;
+    try {
+      snapshot = await fetchJson(`${baseUrl}/api/admin/studentschedules?weekStart=${encodeURIComponent(weekStart)}`, {
+        headers: { Authorization: `Bearer ${mediScheduleToken}` }
+      });
+    } catch (error) {
+      if (!/401|token|auth/i.test(String(error?.message || ''))) throw error;
+      mediScheduleToken = '';
+      mediScheduleTokenAt = 0;
+      throw error;
+    }
+
+    const sourceStudents = Array.isArray(snapshot?.students) ? snapshot.students : [];
+    const sourceSchedules = Array.isArray(snapshot?.schedules) ? snapshot.schedules : [];
+    if (!sourceStudents.length) throw new Error('메디 스케줄 학생 목록이 비어 있습니다.');
+
+    const schedulesByStudent = new Map();
+    for (const row of sourceSchedules) {
+      const key = String(row?.student_id ?? row?.student_code ?? '').trim();
+      if (!key) continue;
+      if (!schedulesByStudent.has(key)) schedulesByStudent.set(key, []);
+      schedulesByStudent.get(key).push(row);
+    }
+
+    const byName = buildStudentsByName(db);
+    const findByExternal = db.prepare('SELECT id, external_id, name, grade, student_phone, parent_phone, schedule_json FROM students WHERE external_id=?');
+    const findById = db.prepare('SELECT id, external_id, name, grade, student_phone, parent_phone, schedule_json FROM students WHERE id=?');
+    const insertStudent = db.prepare(`
+      INSERT INTO students
+        (external_id, name, grade, student_phone, parent_phone, schedule_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `);
+    const updateSchedule = db.prepare(`
+      UPDATE students
+      SET schedule_json=?, updated_at=datetime('now')
+      WHERE id=?
+    `);
+    const updateStudentProfileAndSchedule = db.prepare(`
+      UPDATE students
+      SET external_id=?, name=?, grade=?, student_phone=?, parent_phone=?, schedule_json=?, updated_at=datetime('now')
+      WHERE id=?
+    `);
+    let matched = 0;
+    let changed = 0;
+    let created = 0;
+    const unmatched = [];
+    const applyRows = db.transaction(() => {
+      for (const raw of sourceStudents) {
+        const sourceId = String(raw?.id ?? '').trim();
+        let student = sourceId ? findByExternal.get(sourceId) : null;
+        if (!student && /^\d+$/.test(sourceId)) {
+          const byInternalId = findById.get(Number(sourceId));
+          if (byInternalId && String(byInternalId.name || '').trim() === String(raw?.name || '').trim()) {
+            student = byInternalId;
+          }
+        }
+        if (!student) {
+          const nameMatches = byName.get(String(raw?.name || '').trim()) || [];
+          if (nameMatches.length === 1) student = nameMatches[0];
+        }
+        const scheduleJson = JSON.stringify(buildLiveScheduleJson(weekStart, schedulesByStudent.get(sourceId) || []));
+        if (!student) {
+          const name = String(raw?.name || '').trim();
+          if (!allowCreate || !sourceId || !name) {
+            unmatched.push({ external_id: sourceId, name });
+            continue;
+          }
+          const inserted = insertStudent.run(
+            sourceId,
+            name,
+            String(raw?.grade || '').trim(),
+            String(raw?.studentPhone || '').trim(),
+            String(raw?.parentPhone || '').trim(),
+            scheduleJson
+          );
+          student = { id: Number(inserted.lastInsertRowid), external_id: sourceId, name, schedule_json: scheduleJson };
+          created += 1;
+          changed += 1;
+          matched += 1;
+          continue;
+        }
+        matched += 1;
+        if (!syncProfiles) {
+          if (scheduleJson !== String(student.schedule_json || '')) {
+            updateSchedule.run(scheduleJson, student.id);
+            changed += 1;
+          }
+          continue;
+        }
+        const next = {
+          external_id: String(student.external_id || sourceId).trim(),
+          name: String(raw?.name || student.name || '').trim(),
+          grade: String(raw?.grade || student.grade || '').trim(),
+          student_phone: String(raw?.studentPhone || student.student_phone || '').trim(),
+          parent_phone: String(raw?.parentPhone || student.parent_phone || '').trim()
+        };
+        const hasChange =
+          next.external_id !== String(student.external_id || '') ||
+          next.name !== String(student.name || '') ||
+          next.grade !== String(student.grade || '') ||
+          next.student_phone !== String(student.student_phone || '') ||
+          next.parent_phone !== String(student.parent_phone || '') ||
+          scheduleJson !== String(student.schedule_json || '');
+        if (hasChange) {
+          updateStudentProfileAndSchedule.run(
+            next.external_id,
+            next.name,
+            next.grade,
+            next.student_phone,
+            next.parent_phone,
+            scheduleJson,
+            student.id
+          );
+          changed += 1;
+        }
+      }
+    });
+    applyRows();
+
+    mediScheduleLastError = unmatched.length
+      ? `메디 스케줄 학생 매칭 불일치 (${matched}/${sourceStudents.length})`
+      : '';
+    mediScheduleLastResult = {
+      configured: true,
+      updated: changed > 0,
+      matched,
+      created,
+      source_students: sourceStudents.length,
+      schedule_rows: sourceSchedules.length,
+      week_start: weekStart,
+      allow_create: allowCreate,
+      sync_profiles: syncProfiles,
+      error: mediScheduleLastError
+    };
+    return mediScheduleLastResult;
+  } catch (error) {
+    mediScheduleLastError = String(error?.message || '메디 스케줄 동기화 실패');
+    mediScheduleLastResult = { configured: true, updated: false, error: mediScheduleLastError };
+    return mediScheduleLastResult;
+  }
+}
+
+async function pullMediWeeklyAssignments(db) {
+  const baseUrl = String(process.env.MEDI_WEEKLY_BASE_URL || '').trim().replace(/\/+$/, '');
+  const username = String(process.env.MEDI_WEEKLY_USERNAME || '').trim();
+  const password = String(process.env.MEDI_WEEKLY_PASSWORD || '').trim();
+  const jwtSecret = String(process.env.MEDI_WEEKLY_JWT_SECRET || '').trim();
+  if (!baseUrl || !username || (!password && !jwtSecret)) return { configured: false, updated: false, error: '' };
+  if (Date.now() - mediWeeklyLastPullAt < 30000) {
+    return { configured: true, updated: false, error: mediWeeklyLastError };
+  }
+  mediWeeklyLastPullAt = Date.now();
+
+  try {
+    if (!mediWeeklyToken || Date.now() - mediWeeklyTokenAt > 10 * 60 * 1000) {
+      if (jwtSecret) {
+        mediWeeklyToken = jwt.sign({ username }, jwtSecret, { expiresIn: '12m' });
+      } else {
+        const login = await fetchJson(`${baseUrl}/api/login`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password })
+        });
+        mediWeeklyToken = String(login?.token || '').trim();
+      }
+      mediWeeklyTokenAt = Date.now();
+      if (!mediWeeklyToken) throw new Error('메디위클리 인증 토큰이 없습니다.');
+    }
+
+    let snapshot;
+    try {
+      snapshot = await fetchJson(`${baseUrl}/api/state`, { headers: { Authorization: `Bearer ${mediWeeklyToken}` } });
+    } catch (error) {
+      if (!/401|token|auth/i.test(String(error?.message || ''))) throw error;
+      mediWeeklyToken = '';
+      mediWeeklyTokenAt = 0;
+      throw error;
+    }
+    const state = snapshot?.state || {};
+    const periodId = firstNonEmptyText(state.selectedPeriod, state.currentPeriodId, state.periods?.[state.periods.length - 1]?.id);
+    if (!periodId || !Array.isArray(state.students)) throw new Error('메디위클리의 현재 배정 회차를 찾지 못했습니다.');
+
+    const byName = buildStudentsByName(db);
+    const findByExternal = db.prepare('SELECT id, external_id, name FROM students WHERE external_id=?');
+    const findById = db.prepare('SELECT id, external_id, name FROM students WHERE id=?');
+    const assignments = [];
+    let sourceAssignedCount = 0;
+    for (const raw of state.students) {
+      if (raw?.mentoringOptOut === true) continue;
+      const record = raw?.mentorHistory?.[periodId] || {};
+      const mentor = firstNonEmptyText(record.actualMentor, record.mentor, raw.fixedMentor);
+      if (!mentor) continue;
+      sourceAssignedCount += 1;
+      let student = null;
+      for (const candidate of normalizedIdCandidates(raw?.id ?? raw?.external_id)) {
+        student = findByExternal.get(candidate);
+        if (student) break;
+        const numeric = Number(candidate);
+        if (Number.isSafeInteger(numeric) && String(numeric) === candidate) student = findById.get(numeric);
+        if (student) break;
+      }
+      if (!student) {
+        const matches = byName.get(String(raw?.name || '').trim()) || [];
+        if (matches.length === 1) student = matches[0];
+      }
+      if (!student) continue;
+      let scheduledDays = normalizeDays(record.day || raw.selectedMentorDay).map(normalizeDayLabel).filter(Boolean);
+      if (!scheduledDays.length) {
+        scheduledDays = DAY_LABELS.filter((day) =>
+          (Array.isArray(state?.mentorsByDay?.[day]) ? state.mentorsByDay[day] : []).some(
+            (item) => String(item?.name || '').trim() === mentor
+          )
+        );
+      }
+      assignments.push({ student_id: student.id, external_id: student.external_id || '', name: student.name || raw?.name || '', mentor, lead_mentor: mentor, scheduledDays });
+    }
+    if (sourceAssignedCount > 0 && assignments.length !== sourceAssignedCount) {
+      throw new Error(`메디위클리 학생 매칭 불일치 (${assignments.length}/${sourceAssignedCount})`);
+    }
+    saveAssignments(db, {
+      periodId,
+      exportedAt: snapshot?.updatedAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      source: 'medi-weekly-live',
+      assignments
+    });
+    mediWeeklyLastError = '';
+    return { configured: true, updated: true, error: '' };
+  } catch (error) {
+    mediWeeklyLastError = String(error?.message || '메디위클리 동기화 실패');
+    return { configured: true, updated: false, error: mediWeeklyLastError };
+  }
+}
+
+async function syncLiveSources(db, { force = false } = {}) {
+  if (liveSyncPromise) return liveSyncPromise;
+  if (force) {
+    mediWeeklyLastPullAt = 0;
+    mediScheduleLastPullAt = 0;
+  }
+  liveSyncPromise = pullMediSchedule(db, { force })
+    .then(async (schedule) => ({ schedule, weekly: await pullMediWeeklyAssignments(db) }))
+    .finally(() => { liveSyncPromise = null; });
+  return liveSyncPromise;
+}
+
 export default function mentorAssignmentsRoutes(db) {
   const router = express.Router();
+
+  if (!liveSyncStarted) {
+    liveSyncStarted = true;
+    const intervalMs = Math.max(15000, Number(process.env.LIVE_SYNC_INTERVAL_MS || 60000));
+    const initialTimer = setTimeout(() => {
+      syncLiveSources(db, { force: true }).catch((error) => console.error('[live-sync] initial sync failed:', error));
+    }, 1000);
+    initialTimer.unref?.();
+    const interval = setInterval(() => {
+      syncLiveSources(db, { force: true }).catch((error) => console.error('[live-sync] interval sync failed:', error));
+    }, intervalMs);
+    interval.unref?.();
+  }
+
+  router.get('/lead-today', requireRole('director', 'admin', 'lead'), async (req, res) => {
+    ensureLeadMentoringStatusTable(db);
+    const liveSources = await syncLiveSources(db);
+    const liveSync = liveSources.weekly;
+    const scheduleSync = liveSources.schedule;
+    const now = koreanDateParts();
+    const week = resolveCurrentWeek(db, now.date);
+    if (!week?.id) return res.json({ date: now.date, day_label: now.day, week: null, lead_mentors: [], assignments: [] });
+
+    const source = loadAssignments(db) || {};
+    const mentorInfo = loadMentorInfoSetting(db);
+    const leads = new Set(
+      (mentorInfo.mentors || []).filter((item) => item.role === 'lead').map((item) => item.name).filter(Boolean)
+    );
+    const studentRows = db.prepare('SELECT id, external_id, name, grade, schedule_json, updated_at FROM students').all();
+    const students = new Map(studentRows.map((student) => [Number(student.id), student]));
+    const rows = [];
+
+    for (const raw of Array.isArray(source.assignments) ? source.assignments : []) {
+      const mentorName = firstNonEmptyText(raw?.lead_mentor, raw?.leadMentor, raw?.mentor);
+      if (!mentorName) continue;
+      leads.add(mentorName);
+      const days = normalizeDays(raw?.scheduledDays).map(normalizeDayLabel).filter(Boolean);
+      if (!days.includes(now.day)) continue;
+      const studentId = parsePositiveInt(raw?.student_id);
+      const student = students.get(studentId);
+      if (!student) continue;
+      rows.push({
+        student_id: studentId,
+        external_id: student.external_id || '',
+        student_name: student.name || raw?.name || '',
+        grade: student.grade || '',
+        mentor_name: mentorName,
+        schedule: safeJson(student.schedule_json, {}),
+        schedule_updated_at: student.updated_at || '',
+        forced: false
+      });
+    }
+
+    const state = loadLeadAssignmentBoardState(db);
+    const bucket = getBoardWeekBucket(state, week.id);
+    for (const forced of bucket.forced_assignments || []) {
+      if (normalizeDayLabel(forced.target_day_label) !== now.day) continue;
+      const studentId = parsePositiveInt(forced.student_id);
+      const student = students.get(studentId);
+      const mentorName = String(forced.target_mentor_name || '').trim();
+      if (!student || !mentorName) continue;
+      leads.add(mentorName);
+      const duplicate = rows.some((row) => row.student_id === studentId && row.mentor_name === mentorName);
+      if (!duplicate) rows.push({
+        student_id: studentId,
+        external_id: student.external_id || '',
+        student_name: student.name || '',
+        grade: student.grade || '',
+        mentor_name: mentorName,
+        schedule: safeJson(student.schedule_json, {}),
+        schedule_updated_at: student.updated_at || '',
+        forced: true,
+        forced_time: forced.target_time || ''
+      });
+    }
+
+    const statuses = db.prepare(`
+      SELECT student_id, mentor_name, status, reason, updated_at
+      FROM lead_mentoring_status WHERE assignment_date=? AND week_id=?
+    `).all(now.date, week.id);
+    const statusMap = new Map(statuses.map((item) => [`${item.student_id}:${item.mentor_name}`, item]));
+    const assignments = rows.map((row) => ({ ...row, status: statusMap.get(`${row.student_id}:${row.mentor_name}`) || null }));
+
+    return res.json({
+      date: now.date,
+      day_label: now.day,
+      week,
+      source_updated_at: source.updatedAt || '',
+      source: source.source || 'portal-import',
+      live_sync: liveSync,
+      schedule_sync: scheduleSync,
+      viewer: { role: req.user.role, display_name: req.user.display_name || '' },
+      lead_mentors: Array.from(leads).sort((a, b) => a.localeCompare(b, 'ko')),
+      lead_mentor_details: Array.from(leads).map((name) => {
+        const info = (mentorInfo.mentors || []).find((item) => item.name === name);
+        return { name, schedule: info?.schedule || {} };
+      }),
+      assignments
+    });
+  });
+
+  router.post('/lead-today/missed', requireRole('admin', 'lead'), (req, res) => {
+    ensureLeadMentoringStatusTable(db);
+    const studentId = parsePositiveInt(req.body?.student_id);
+    const weekId = parsePositiveInt(req.body?.week_id);
+    const mentorName = String(req.body?.mentor_name || '').trim();
+    const reason = String(req.body?.reason || '').trim();
+    if (!studentId || !weekId || !mentorName) return res.status(400).json({ error: '학생과 총괄멘토 정보가 필요합니다.' });
+    if (!reason) return res.status(400).json({ error: '미진행 사유를 반드시 입력해 주세요.' });
+    const now = koreanDateParts();
+    db.prepare(`
+      INSERT INTO lead_mentoring_status
+        (assignment_date, student_id, week_id, mentor_name, status, reason, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, 'missed', ?, ?, datetime('now'))
+      ON CONFLICT(assignment_date, student_id, week_id, mentor_name) DO UPDATE SET
+        status='missed', reason=excluded.reason, updated_by=excluded.updated_by, updated_at=datetime('now')
+    `).run(now.date, studentId, weekId, mentorName, reason, req.user.id);
+    writeAudit(db, { user_id: req.user.id, action: 'workflow', entity: 'lead_mentoring_missed', details: { student_id: studentId, week_id: weekId, mentor_name: mentorName, reason, assignment_date: now.date } });
+    return res.json({ ok: true });
+  });
+
+  router.post('/lead-today/completed', requireRole('admin', 'lead'), (req, res) => {
+    ensureLeadMentoringStatusTable(db);
+    const studentId = parsePositiveInt(req.body?.student_id);
+    const weekId = parsePositiveInt(req.body?.week_id);
+    const mentorName = String(req.body?.mentor_name || '').trim();
+    if (!studentId || !weekId || !mentorName) return res.status(400).json({ error: '학생과 총괄멘토 정보가 필요합니다.' });
+    const now = koreanDateParts();
+    db.prepare(`
+      INSERT INTO lead_mentoring_status
+        (assignment_date, student_id, week_id, mentor_name, status, reason, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, 'completed', NULL, ?, datetime('now'))
+      ON CONFLICT(assignment_date, student_id, week_id, mentor_name) DO UPDATE SET
+        status='completed', reason=NULL, updated_by=excluded.updated_by, updated_at=datetime('now')
+    `).run(now.date, studentId, weekId, mentorName, req.user.id);
+    writeAudit(db, { user_id: req.user.id, action: 'workflow', entity: 'lead_mentoring_completed', details: { student_id: studentId, week_id: weekId, mentor_name: mentorName, assignment_date: now.date } });
+    return res.json({ ok: true });
+  });
 
   router.get('/', requireRole('director', 'admin'), (req, res) => {
     const data = loadAssignments(db);

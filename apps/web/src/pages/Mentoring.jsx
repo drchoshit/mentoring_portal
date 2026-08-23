@@ -957,13 +957,13 @@ function confirmOrThrow(message) {
 
 function PageBackground() {
   return (
-    <div className="fixed inset-0 -z-10 bg-gradient-to-b from-stone-50 to-stone-200" />
+    <div className="pointer-events-none fixed inset-0 -z-10 bg-gradient-to-b from-zinc-50 via-violet-50/30 to-zinc-100" />
   );
 }
 
 function GoldCard({ className = '', children }) {
   return (
-    <div className={['card border-2 border-[#b58a2a] bg-white/70 shadow-sm', className].join(' ')}>
+    <div className={['card border border-slate-200 bg-white/90 shadow-sm', className].join(' ')}>
       {children}
     </div>
   );
@@ -1812,13 +1812,15 @@ export default function Mentoring() {
   async function submitToDirector() {
     setBusy(true);
     try {
-      confirmOrThrow('원장께 제출할까요?');
+      confirmOrThrow('작성한 내용을 모두 저장하고 멘토링을 완료할까요?');
+      await persistAllDrafts();
       await api('/api/mentoring/workflow/submit-to-director', {
         method: 'POST',
         body: { student_id: Number(studentId), week_id: Number(weekId), reason: leadReason }
       });
       setLeadReason('');
       await loadAll();
+      window.alert('멘토링이 완료 처리되었습니다. 오늘 목록에 체크 표시됩니다.');
     } catch (e) {
       if (e?.message !== '__CANCEL__') setError(e.message);
     } finally {
@@ -2027,40 +2029,36 @@ export default function Mentoring() {
     setBusy(true);
     try {
       confirmOrThrow('전체 저장할까요?');
-      const patch = {};
-      if (!mentorMode && canEditA('b_daily_tasks')) patch.b_daily_tasks = dailyTasksLastWeekDraft;
-      if (!mentorMode && useNewDailyTaskLayout) {
-        if (canEditA('b_daily_tasks_this_week')) patch.b_daily_tasks_this_week = dailyTasksThisWeekDraft;
-      } else {
-        if (!mentorMode && canEditA('b_lead_daily_feedback')) patch.b_lead_daily_feedback = dailyFeedbackDraft;
-      }
-      if (!mentorMode && canEditA('c_lead_weekly_feedback')) patch.c_lead_weekly_feedback = leadWeeklyDraft;
-      if (!mentorMode && canEditA('c_director_commentary')) patch.c_director_commentary = directorCommentDraft;
-      if (showClinicSection && canEditA('d_clinic_records')) patch.d_clinic_records = clinicEntriesDraft;
-      if (!mentorMode && canEditA('e_wrong_answer_distribution')) {
-        patch.e_wrong_answer_distribution = normalizeWrongAnswerDraftWithSummary(wrongAnswerDistributionDraft);
-      }
-
-      if (Object.keys(patch).length) {
-        await api(`/api/mentoring/week-record/${weekRecordId}`, {
-          method: 'PUT',
-          body: patch
-        });
-      }
-
-      if (!mentorMode) {
-        await saveAllSubjectsCore({ confirm: false });
-      }
-
-      if (profileRef.current?.saveProfile && user?.role !== 'parent' && user?.role !== 'mentor') {
-        await profileRef.current.saveProfile({ confirm: false, manageBusy: false });
-      }
-
+      await persistAllDrafts();
       await loadAll();
     } catch (e) {
       if (e?.message !== '__CANCEL__') setError(e?.message || '전체 저장에 실패했습니다.');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function persistAllDrafts() {
+    if (!weekRecordId) throw new Error('회차를 먼저 선택해 주세요.');
+    const patch = {};
+    if (!mentorMode && canEditA('b_daily_tasks')) patch.b_daily_tasks = dailyTasksLastWeekDraft;
+    if (!mentorMode && useNewDailyTaskLayout) {
+      if (canEditA('b_daily_tasks_this_week')) patch.b_daily_tasks_this_week = dailyTasksThisWeekDraft;
+    } else if (!mentorMode && canEditA('b_lead_daily_feedback')) {
+      patch.b_lead_daily_feedback = dailyFeedbackDraft;
+    }
+    if (!mentorMode && canEditA('c_lead_weekly_feedback')) patch.c_lead_weekly_feedback = leadWeeklyDraft;
+    if (!mentorMode && canEditA('c_director_commentary')) patch.c_director_commentary = directorCommentDraft;
+    if (showClinicSection && canEditA('d_clinic_records')) patch.d_clinic_records = clinicEntriesDraft;
+    if (!mentorMode && canEditA('e_wrong_answer_distribution')) {
+      patch.e_wrong_answer_distribution = normalizeWrongAnswerDraftWithSummary(wrongAnswerDistributionDraft);
+    }
+    if (Object.keys(patch).length) {
+      await api(`/api/mentoring/week-record/${weekRecordId}`, { method: 'PUT', body: patch });
+    }
+    if (!mentorMode) await saveAllSubjectsCore({ confirm: false });
+    if (profileRef.current?.saveProfile && user?.role !== 'parent' && user?.role !== 'mentor') {
+      await profileRef.current.saveProfile({ confirm: false, manageBusy: false });
     }
   }
 
@@ -2750,48 +2748,37 @@ export default function Mentoring() {
           </div>
         </GoldCard>
 
-        {/* 주간 과제/피드백 */}
-        <GoldCard className="p-5">
-          <div className="text-sm font-semibold text-brand-900">주간 과제/피드백</div>
-          <div className="mt-1 text-xs text-slate-700">
-            {useNewDailyTaskLayout
-              ? '지난주/이번주 일일 학습 과제 및 주간 총평, 원장 코멘터리'
-              : '일일 학습 과제 및 요일별 총괄멘토 피드백, 주간 총평, 원장 코멘터리'}
-          </div>
+        {/* 주간 과제 */}
+        <GoldCard className="relative overflow-hidden border-violet-200 bg-violet-50/25 p-5">
+          <div className="absolute inset-x-0 top-0 h-1 bg-violet-500" />
+          <div className="flex items-center gap-2 text-sm font-semibold text-violet-900"><span className="h-2 w-2 rounded-full bg-violet-500" />주간 과제</div>
+          <div className="mt-1 text-xs text-slate-600">이번 주 학습 과제를 요일 구분 없이 한 번에 관리합니다.</div>
 
-          <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <DailyTasksCard
-              title={useNewDailyTaskLayout ? '일일 학습 과제(지난주)' : '일일 학습 과제'}
-              fieldKey="b_daily_tasks"
+          <div className="mt-4">
+            <WeeklyTaskListCard
               value={dailyTasksLastWeekDraft}
+              currentValue={useNewDailyTaskLayout ? dailyTasksThisWeekDraft : null}
               perms={perms}
               currentRole={user?.role}
-              visible={canViewA('b_daily_tasks')}
-              editable={canEditA('b_daily_tasks')}
-              onSave={(v) => saveWeekRecord({ b_daily_tasks: v })}
-              onAutoSave={(v) => autoSaveWeekRecord({ b_daily_tasks: v })}
-              onChangeValue={setDailyTasksLastWeekDraft}
+              visible={canViewA('b_daily_tasks') || (useNewDailyTaskLayout && canViewA('b_daily_tasks_this_week'))}
+              editable={useNewDailyTaskLayout ? canEditA('b_daily_tasks_this_week') : canEditA('b_daily_tasks')}
+              onSave={(v) => saveWeekRecord(useNewDailyTaskLayout ? { b_daily_tasks_this_week: v } : { b_daily_tasks: v })}
+              onAutoSave={(v) => autoSaveWeekRecord(useNewDailyTaskLayout ? { b_daily_tasks_this_week: v } : { b_daily_tasks: v })}
+              onChangeValue={useNewDailyTaskLayout ? setDailyTasksThisWeekDraft : setDailyTasksLastWeekDraft}
               busy={busy}
-              textareaMinHClass="min-h-[48px]"
               parentMode={parentMode}
             />
-            {useNewDailyTaskLayout ? (
-              <DailyTasksCard
-                title="일일 학습 과제(이번주)"
-                fieldKey="b_daily_tasks_this_week"
-                value={dailyTasksThisWeekDraft}
-                perms={perms}
-                currentRole={user?.role}
-                visible={canViewA('b_daily_tasks_this_week')}
-                editable={canEditA('b_daily_tasks_this_week')}
-                onSave={(v) => saveWeekRecord({ b_daily_tasks_this_week: v })}
-                onAutoSave={(v) => autoSaveWeekRecord({ b_daily_tasks_this_week: v })}
-                onChangeValue={setDailyTasksThisWeekDraft}
-                busy={busy}
-                textareaMinHClass="min-h-[48px]"
-                parentMode={parentMode}
-              />
-            ) : (
+          </div>
+        </GoldCard>
+
+        {/* 주간 피드백 */}
+        <GoldCard className="relative overflow-hidden border-amber-200 bg-amber-50/20 p-5">
+          <div className="absolute inset-x-0 top-0 h-1 bg-amber-400" />
+          <div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><span className="h-2 w-2 rounded-full bg-amber-400" />주간 피드백</div>
+          <div className="mt-1 text-xs text-slate-600">총괄멘토 총평과 원장 코멘터리를 기록합니다.</div>
+
+          {!useNewDailyTaskLayout ? (
+            <div className="mt-4">
               <DailyTasksCard
                 title="요일 별 총괄멘토 피드백"
                 fieldKey="b_lead_daily_feedback"
@@ -2807,10 +2794,10 @@ export default function Mentoring() {
                 textareaMinHClass="min-h-[48px]"
                 parentMode={parentMode}
               />
-            )}
-          </div>
+            </div>
+          ) : null}
 
-          <div className="mt-6 space-y-6">
+          <div className="mt-4 space-y-6">
             <TextFieldCard
               title="주간 총괄멘토 피드백"
               fieldKey="c_lead_weekly_feedback"
@@ -3847,6 +3834,78 @@ function SubjectWideEditor({ record, perms, role, busy, parentMode, draft, onCha
 }
 
 /* 일일 카드 */
+function taskListText(...values) {
+  const preferred = values.length > 1 ? values[1] : null;
+  if (preferred && typeof preferred === 'object' && preferred.Weekly != null) {
+    return String(preferred.Weekly || '');
+  }
+  const lines = [];
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue;
+    const entries = value.Weekly != null
+      ? [value.Weekly]
+      : DAYS.map((day) => value?.[day]);
+    for (const entry of entries) {
+      for (const line of String(entry || '').split(/\r?\n/)) {
+        const text = line.trim();
+        if (text && !lines.includes(text)) lines.push(text);
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+function WeeklyTaskListCard({ value, currentValue, visible, editable, onSave, onAutoSave, onChangeValue, busy, perms, currentRole, parentMode }) {
+  const merged = useMemo(() => taskListText(value, currentValue), [value, currentValue]);
+  const [text, setText] = useState(merged);
+  const lastSavedRef = useRef(merged);
+  const timerRef = useRef(null);
+  const skipSyncRef = useRef(false);
+  useEffect(() => {
+    if (skipSyncRef.current) {
+      skipSyncRef.current = false;
+      return;
+    }
+    setText(merged);
+    lastSavedRef.current = merged;
+  }, [merged]);
+  useEffect(() => {
+    if (!editable || parentMode || text === lastSavedRef.current) return;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      lastSavedRef.current = text;
+      onAutoSave?.({ Weekly: text });
+    }, 800);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [text, editable, parentMode, onAutoSave]);
+
+  if (!visible && parentMode) return null;
+  const permission = getPerm(perms, currentValue ? 'b_daily_tasks_this_week' : 'b_daily_tasks');
+  return (
+    <FieldShell
+      title="주간 과제 리스트"
+      subtitle="요일 구분 없이 한 번에 입력"
+      editRoles={permission.roles_edit || []}
+      currentRole={currentRole}
+      right={<button className="btn-primary" disabled={busy || !editable || parentMode} onClick={() => onSave({ Weekly: text })}>저장</button>}
+    >
+      <textarea
+        className="textarea min-h-[96px]"
+        value={text}
+        onChange={(event) => {
+          const next = event.target.value;
+          setText(next);
+          skipSyncRef.current = true;
+          onChangeValue?.({ Weekly: next });
+        }}
+        placeholder="이번 주 과제를 한 줄에 하나씩 입력해 주세요."
+        disabled={!editable || parentMode}
+      />
+      {!editable || parentMode ? <div className="mt-2 text-xs text-slate-700">읽기 전용</div> : null}
+    </FieldShell>
+  );
+}
+
 function DailyTasksCard({
   title,
   fieldKey,

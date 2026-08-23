@@ -1,4 +1,5 @@
 ﻿import express from 'express';
+import { requireRole } from '../lib/auth.js';
 import { canViewField, safeJson } from '../lib/permissions.js';
 import { sanitizeStudentForRole } from '../lib/studentProfile.js';
 
@@ -692,6 +693,17 @@ export default function printRoutes(db) {
   router.get('/config', (req, res) => {
     const rows = db.prepare('SELECT * FROM print_config ORDER BY id').all();
     res.json({ config: rows });
+  });
+
+  // The settings screen has historically submitted this form to POST /config.
+  // Keep that contract while retaining the field-specific PUT endpoint below.
+  router.post('/config', requireRole('director'), (req, res) => {
+    const fieldKey = String(req.body?.field_key || '').trim();
+    if (!fieldKey) return res.status(400).json({ error: 'field_key is required' });
+    const enabled = Number(req.body?.enabled ?? 1) ? 1 : 0;
+    db.prepare('INSERT OR IGNORE INTO print_config (field_key, enabled) VALUES (?,?)').run(fieldKey, enabled);
+    db.prepare('UPDATE print_config SET enabled=? WHERE field_key=?').run(enabled, fieldKey);
+    return res.json({ ok: true });
   });
 
   router.put('/config/:field_key', (req, res) => {

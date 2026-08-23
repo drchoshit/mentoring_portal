@@ -6,6 +6,7 @@ import fs from 'fs';
 
 import db, { initDb, dbFilePath } from './lib/db.js';
 import { requireAuth, requireStudentSyncAuth } from './lib/auth.js';
+import { createAtomicSqliteBackup } from './lib/safeBackup.js';
 
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
@@ -114,7 +115,7 @@ function formatBytes(bytes) {
 }
 
 function resolveBackupSourceCandidates() {
-  const candidates = Array.from(new Set([PRIMARY_DB_PATH, DB_PATH].filter(Boolean))).filter((p) => {
+  const candidates = Array.from(new Set([DB_PATH, PRIMARY_DB_PATH].filter(Boolean))).filter((p) => {
     try {
       return fs.existsSync(p) && fs.statSync(p).isFile();
     } catch {
@@ -214,7 +215,7 @@ app.use('/api/settings', requireAuth(db), settingsRoutes(db));
 app.use('/api/mentor-assignments', requireAuth(db), mentorAssignmentsRoutes(db));
 
 // ---- Backups (best-effort) ----
-function backupNow(reason = 'interval') {
+async function backupNow(reason = 'interval') {
   try {
     const sources = resolveBackupSourceCandidates();
     if (!sources.length) {
@@ -227,11 +228,9 @@ function backupNow(reason = 'interval') {
       return null;
     }
     ensureBackupSpaceForSource(source);
-    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch {}
-
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const out = path.join(BACKUP_DIR, `db-${stamp}-${reason}.sqlite`);
-    fs.copyFileSync(source, out);
+    await createAtomicSqliteBackup(db, out);
     pruneBackupFilesByCount(BACKUP_KEEP_MAX);
     return out;
   } catch (e) {
@@ -240,15 +239,32 @@ function backupNow(reason = 'interval') {
   }
 }
 
-setInterval(() => backupNow('interval'), 30 * 60 * 1000);
-process.on('SIGINT', () => {
-  backupNow('sigint');
-  process.exit(0);
-});
-process.on('SIGTERM', () => {
-  backupNow('sigterm');
-  process.exit(0);
-});
+setInterval(() => {
+  backupNow('interval').catch((error) => console.error(`[backup] interval crashed: ${String(error?.message || error)}`));
+}, 30 * 60 * 1000);
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const forceExit = setTimeout(() => process.exit(1), 50000);
+  forceExit.unref?.();
+  try {
+    // Render's persistent disk already contains every committed SQLite page.
+    // A multi-GB shutdown copy can exceed the platform termination window, so
+    // rely on the non-blocking interval/manual backups there. Preserve the
+    // previous shutdown-backup convenience for local installations.
+    if (String(process.env.RENDER || '').toLowerCase() !== 'true') {
+      await backupNow(signal.toLowerCase());
+    }
+    try { db.close(); } catch {}
+  } finally {
+    clearTimeout(forceExit);
+    process.exit(0);
+  }
+}
+process.once('SIGINT', () => { void shutdown('SIGINT'); });
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
 
 const port = Number(process.env.PORT || 3001);
 app.listen(port, () => {

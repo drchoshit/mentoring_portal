@@ -175,6 +175,22 @@ CREATE TABLE IF NOT EXISTS app_settings (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS lead_mentoring_status (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  assignment_date TEXT NOT NULL,
+  student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  week_id INTEGER NOT NULL REFERENCES weeks(id) ON DELETE CASCADE,
+  mentor_name TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('completed','missed')),
+  reason TEXT,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(assignment_date, student_id, week_id, mentor_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lead_mentoring_status_date_mentor
+  ON lead_mentoring_status(assignment_date, mentor_name, status);
+
 CREATE TABLE IF NOT EXISTS wrong_answer_images (
   id TEXT PRIMARY KEY,
   student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,

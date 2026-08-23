@@ -12,6 +12,7 @@ import AssignmentStatus from './pages/AssignmentStatus.jsx';
 import LeadAssignmentBoard from './pages/LeadAssignmentBoard.jsx';
 import Settings from './pages/Settings.jsx';
 import Parent from './pages/Parent.jsx';
+import LeadToday from './pages/LeadToday.jsx';
 
 function Shell({ children }) {
   return <AppShell>{children}</AppShell>;
@@ -55,6 +56,7 @@ function HomeEntry({ user }) {
 
   if (user?.role === 'parent') return <Navigate to="/parent" replace />;
   if (openPage === 'assignment-status' && canOpenAssignmentStatus) return <AssignmentStatus />;
+  if (user?.role === 'lead') return <LeadToday />;
   return <Feeds />;
 }
 

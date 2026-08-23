@@ -543,7 +543,7 @@ export default function LeadAssignmentBoard() {
                 <option key={`lead-board-week-${week.id}`} value={week.id}>{toRoundLabel(week.label)}</option>
               ))}
             </select>
-            <button className="btn-ghost" type="button" onClick={loadAll} disabled={busy}>새로고침</button>
+            <button className="btn-refresh min-w-[88px] shrink-0" type="button" onClick={loadAll} disabled={busy}>새로고침</button>
           </div>
         </div>
         <div className="mt-2 text-xs text-slate-500">
