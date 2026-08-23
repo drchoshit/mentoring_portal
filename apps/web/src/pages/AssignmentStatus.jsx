@@ -1130,6 +1130,7 @@ export default function AssignmentStatus() {
   const [rows, setRows] = useState([]);
   const [statusMentorInfo, setStatusMentorInfo] = useState({ mentors: [] });
   const [viewer, setViewer] = useState(null);
+  const [selectedClinicMentor, setSelectedClinicMentor] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [editingKey, setEditingKey] = useState('');
@@ -1218,9 +1219,12 @@ export default function AssignmentStatus() {
     setBriefingError('');
     try {
       const data = await api(`/api/mentoring/assignment-status?weekId=${encodeURIComponent(targetWeekId)}`);
-      setRows(Array.isArray(data?.assignments) ? data.assignments : []);
+      const returnedRows = Array.isArray(data?.assignments) ? data.assignments : [];
+      const returnedViewer = data?.viewer || null;
+      setRows(returnedRows);
       setStatusMentorInfo(normalizeMentorInfo(data?.mentor_info));
-      setViewer(data?.viewer || null);
+      setViewer(returnedViewer);
+      if (String(returnedViewer?.role || '').trim() !== 'mentor') setSelectedClinicMentor('');
       setEditingKey('');
       setSavingKey('');
       setStateSavingKey('');
@@ -1750,6 +1754,9 @@ export default function AssignmentStatus() {
         method: 'PUT',
         body: {
           problem_index: Number(item.problem_index || 0),
+          acting_mentor_name: String(viewer?.role || '').trim() === 'mentor'
+            ? String(selectedClinicMentor || item?.mentor_name || '').trim()
+            : '',
           ...payload
         }
       });
@@ -1809,6 +1816,15 @@ export default function AssignmentStatus() {
   }, [rows, selectedWeek]);
   const mentorOptions = useMemo(() => {
     const byMentor = new Map();
+    for (const mentor of Array.isArray(statusMentorInfo?.mentors) ? statusMentorInfo.mentors : []) {
+      if (String(mentor?.role || '').trim() !== 'mentor') continue;
+      const mentorName = String(mentor?.name || mentor?.mentor_id || '').trim();
+      if (!mentorName) continue;
+      byMentor.set(normalizeMentorNameKey(mentorName), {
+        mentor_name: mentorName,
+        mentor_role: 'mentor'
+      });
+    }
     for (const row of sortedRows) {
       const mentorName = String(row?.mentor_name || '').trim();
       if (!mentorName) continue;
@@ -1820,7 +1836,7 @@ export default function AssignmentStatus() {
       });
     }
     return Array.from(byMentor.values());
-  }, [sortedRows]);
+  }, [sortedRows, statusMentorInfo]);
   const grouped = useMemo(() => {
     const byMentor = new Map();
     for (const row of sortedRows) {
@@ -1838,6 +1854,18 @@ export default function AssignmentStatus() {
     }
     return Array.from(byMentor.values());
   }, [sortedRows]);
+  const isClinicViewer = String(viewer?.role || '').trim() === 'mentor';
+  const visibleGrouped = useMemo(() => {
+    if (!isClinicViewer) return grouped;
+    const selectedKey = normalizeMentorNameKey(selectedClinicMentor);
+    if (!selectedKey) return [];
+    return grouped.filter((group) => normalizeMentorNameKey(group.mentor_name) === selectedKey);
+  }, [grouped, isClinicViewer, selectedClinicMentor]);
+  const clinicAssignmentCounts = useMemo(() => {
+    const counts = new Map();
+    for (const group of grouped) counts.set(normalizeMentorNameKey(group.mentor_name), group.items.length);
+    return counts;
+  }, [grouped]);
   const mentorOptionKeySet = useMemo(
     () => new Set(mentorOptions.map((opt) => normalizeMentorNameKey(opt.mentor_name))),
     [mentorOptions]
@@ -2138,7 +2166,34 @@ export default function AssignmentStatus() {
 
   return (
     <div className="space-y-6">
-      {renderDesktopMentorRemotePanel()}
+      {isClinicViewer ? (
+        <section className="rounded-3xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-white to-cyan-50 p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-black uppercase tracking-[0.16em] text-emerald-600">Clinic mentoring queue</div>
+              <h1 className="mt-1 text-2xl font-black text-slate-950">클리닉 멘토 선택</h1>
+              <p className="mt-1 text-sm text-slate-600">내 이름을 선택하면 이번 회차에 배정된 질문과 문제 이미지를 확인할 수 있습니다.</p>
+            </div>
+            <span className="rounded-full bg-white px-3 py-1.5 text-xs font-black text-emerald-700 shadow-sm">클리닉 멘토 {mentorOptions.length}명</span>
+          </div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {mentorOptions.map((mentor) => {
+              const active = normalizeMentorNameKey(selectedClinicMentor) === normalizeMentorNameKey(mentor.mentor_name);
+              const count = Number(clinicAssignmentCounts.get(normalizeMentorNameKey(mentor.mentor_name)) || 0);
+              return (
+                <button
+                  key={`clinic-select-${mentor.mentor_name}`}
+                  type="button"
+                  className={`rounded-2xl border px-4 py-3 text-left transition ${active ? 'border-emerald-500 bg-emerald-600 text-white shadow-md' : 'border-slate-200 bg-white text-slate-800 hover:border-emerald-300 hover:bg-emerald-50'}`}
+                  onClick={() => setSelectedClinicMentor(mentor.mentor_name)}
+                >
+                  <span className="flex items-center justify-between gap-2"><b>{mentor.mentor_name}</b><span className={`rounded-full px-2 py-0.5 text-[11px] font-black ${active ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'}`}>질문 {count}건</span></span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ) : renderDesktopMentorRemotePanel()}
       {false && canUseQuickWrongAnswer ? (
         <div className="card p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -2531,7 +2586,7 @@ export default function AssignmentStatus() {
             </div>
             {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
 
-            <div className="mt-4 xl:hidden rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 via-blue-50 to-cyan-50 p-5">
+            {!isClinicViewer ? <div className="mt-4 xl:hidden rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 via-blue-50 to-cyan-50 p-5">
               <div className="text-lg font-semibold text-sky-950">멘토 리모컨</div>
               <div className="mt-2 text-sm font-medium text-sky-800">
                 오늘 출근 {todayClinicMentorOptions.length}명 · 배정 질문 있음 {todayClinicMentorWithAssignments.length}명
@@ -2581,7 +2636,7 @@ export default function AssignmentStatus() {
                   ))}
                 </div>
               </div>
-            </div>
+            </div> : null}
 
             {isDirector && mentorDaySummaryRows.length ? (
               <div className="mt-4 rounded-xl border border-slate-200 bg-white/80 p-3">
@@ -2751,8 +2806,8 @@ export default function AssignmentStatus() {
 
           {busy ? (
             <div className="card p-5 text-sm text-slate-600">불러오는 중...</div>
-          ) : grouped.length ? (
-            grouped.map((mentorGroup, groupIndex) => (
+          ) : visibleGrouped.length ? (
+            visibleGrouped.map((mentorGroup, groupIndex) => (
               <div
                 key={`${mentorGroup.mentor_name}-${groupIndex}`}
                 ref={(node) => setMentorSectionRef(mentorGroup.mentor_name, node)}
@@ -3064,7 +3119,7 @@ export default function AssignmentStatus() {
               </div>
             ))
           ) : (
-            <div className="card p-5 text-sm text-slate-600">해당 회차에 배정된 학생이 없습니다.</div>
+            <div className="card p-5 text-sm text-slate-600">{isClinicViewer && !selectedClinicMentor ? '위에서 내 이름을 선택해 주세요.' : '선택한 멘토에게 해당 회차에 배정된 질문이 없습니다.'}</div>
           )}
         </div>
 

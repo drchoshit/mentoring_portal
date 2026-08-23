@@ -15,6 +15,27 @@ function statusView(status) {
   return { label: '진행 전', tone: 'bg-slate-50 text-slate-600 border-slate-200' };
 }
 
+function LeadStatusButtons({ value, onChange }) {
+  const options = [
+    ['pending', '진행 전', 'slate'],
+    ['completed', '완료', 'emerald'],
+    ['missed', '미진행', 'rose']
+  ];
+  const activeTone = {
+    slate: 'border-slate-600 bg-slate-700 text-white shadow-slate-100',
+    emerald: 'border-emerald-600 bg-emerald-600 text-white shadow-emerald-100',
+    rose: 'border-rose-500 bg-rose-500 text-white shadow-rose-100'
+  };
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map(([key, label, tone]) => {
+        const active = value === key;
+        return <button key={key} type="button" onClick={() => onChange(key)} className={`rounded-xl border px-3 py-2 text-xs font-black shadow-sm transition ${active ? activeTone[tone] : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'}`}>{label}</button>;
+      })}
+    </div>
+  );
+}
+
 function rowKey(row) {
   return `${row.assignment_date}-${row.student_id}-${row.mentor_name}`;
 }
@@ -231,7 +252,33 @@ export default function LeadMentoringStatus() {
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
-        {filteredDays.map((day) => <div key={day.date} className="card p-5"><div className="flex items-center justify-between"><div><h3 className="font-black text-slate-900">{day.day_label}요일</h3><div className="text-xs text-slate-500">{day.date}</div></div><span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{day.assignments.length}건</span></div><div className="mt-4 space-y-2.5">{day.assignments.map((row) => { const key = rowKey(row); const status = String(row?.status?.status || 'pending'); const view = statusView(status); const draft = drafts[key]; const statusDraft = statusDrafts[key] || { status, reason: String(row?.status?.reason || '') }; return <article key={key} className="rounded-2xl border border-slate-200 bg-white p-3.5"><div className="flex flex-wrap items-start justify-between gap-2"><div><div className="font-black text-slate-900">{row.student_name} <span className="text-xs font-medium text-slate-400">{row.external_id}</span></div><div className="mt-1 text-xs text-slate-500">담당 {row.mentor_name}{row.reassigned ? ' · 재배정' : ''} · 질문 {Number(row.question_count || 0)}개</div></div><span className={`rounded-full border px-2.5 py-1 text-xs font-bold ${view.tone}`}>{view.label}</span></div>{status === 'missed' && row.status?.reason ? <div className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{row.status.reason}</div> : null}<div className="mt-3 grid gap-2 sm:grid-cols-[8rem_1fr_auto]"><select className="input" value={statusDraft.status} onChange={(event) => patchStatusDraft(row, { status: event.target.value })}><option value="pending">진행 전</option><option value="completed">완료</option><option value="missed">미진행</option></select>{statusDraft.status === 'missed' ? <input className="input" value={statusDraft.reason} onChange={(event) => patchStatusDraft(row, { reason: event.target.value })} placeholder="미진행 사유" /> : <div />}<button className="btn-ghost" type="button" disabled={savingStatusKey === key} onClick={() => saveStatus(row)}>{savingStatusKey === key ? '저장 중...' : '상태 저장'}</button></div>{status === 'missed' ? <div className="mt-3"><button className="text-xs font-bold text-violet-700" type="button" onClick={() => toggleDraft(row)}>{draft ? '재배정 닫기' : '다른 총괄멘토에게 재배정'}</button>{draft ? <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]"><select className="input" value={draft.target_mentor_name} onChange={(event) => patchDraft(row, { target_mentor_name: event.target.value })}>{(data?.lead_mentors || []).map((name) => <option key={name}>{name}</option>)}</select><select className="input" value={draft.target_assignment_date} onChange={(event) => patchDraft(row, { target_assignment_date: event.target.value })}>{dateOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><button className="btn-primary" type="button" disabled={savingKey === key} onClick={() => reassign(row)}>{savingKey === key ? '처리 중...' : '재배정'}</button></div> : null}</div> : null}</article>;})}{!day.assignments.length ? <div className="rounded-xl border border-dashed border-slate-200 p-5 text-center text-sm text-slate-400">조건에 맞는 배정이 없습니다.</div> : null}</div></div>)}
+        {filteredDays.map((day) => (
+          <div key={day.date} className="card p-5">
+            <div className="flex items-center justify-between"><div><h3 className="font-black text-slate-900">{day.day_label}요일</h3><div className="text-xs text-slate-500">{day.date}</div></div><span className="rounded-xl border-2 border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 shadow-sm">{day.assignments.length}건</span></div>
+            <div className="mt-4 space-y-2.5">
+              {day.assignments.map((row) => {
+                const key = rowKey(row);
+                const status = String(row?.status?.status || 'pending');
+                const view = statusView(status);
+                const draft = drafts[key];
+                const statusDraft = statusDrafts[key] || { status, reason: String(row?.status?.reason || '') };
+                return (
+                  <article key={key} className="rounded-2xl border border-slate-200 bg-white p-3.5">
+                    <div className="flex flex-wrap items-start justify-between gap-2"><div><div className="font-black text-slate-900">{row.student_name} <span className="text-xs font-medium text-slate-400">{row.external_id}</span></div><div className="mt-1 text-xs text-slate-500">담당 {row.mentor_name}{row.reassigned ? ' · 재배정' : ''} · 질문 {Number(row.question_count || 0)}개</div></div><span className={`rounded-xl border-2 px-3 py-1.5 text-xs font-black shadow-sm ${view.tone}`}>{view.label}</span></div>
+                    {status === 'missed' && row.status?.reason ? <div className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{row.status.reason}</div> : null}
+                    <div className="mt-3 grid gap-2 sm:grid-cols-[auto_1fr_auto]">
+                      <LeadStatusButtons value={statusDraft.status} onChange={(value) => patchStatusDraft(row, { status: value })} />
+                      {statusDraft.status === 'missed' ? <input className="input" value={statusDraft.reason} onChange={(event) => patchStatusDraft(row, { reason: event.target.value })} placeholder="미진행 사유" /> : <div />}
+                      <button className="btn-primary min-w-24" type="button" disabled={savingStatusKey === key} onClick={() => saveStatus(row)}>{savingStatusKey === key ? '저장 중...' : '상태 저장'}</button>
+                    </div>
+                    {status === 'missed' ? <div className="mt-3"><button className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700" type="button" onClick={() => toggleDraft(row)}>{draft ? '재배정 닫기' : '다른 총괄멘토에게 재배정'}</button>{draft ? <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]"><select className="input" value={draft.target_mentor_name} onChange={(event) => patchDraft(row, { target_mentor_name: event.target.value })}>{(data?.lead_mentors || []).map((name) => <option key={name}>{name}</option>)}</select><select className="input" value={draft.target_assignment_date} onChange={(event) => patchDraft(row, { target_assignment_date: event.target.value })}>{dateOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><button className="btn-primary" type="button" disabled={savingKey === key} onClick={() => reassign(row)}>{savingKey === key ? '처리 중...' : '재배정'}</button></div> : null}</div> : null}
+                  </article>
+                );
+              })}
+              {!day.assignments.length ? <div className="rounded-xl border border-dashed border-slate-200 p-5 text-center text-sm text-slate-400">조건에 맞는 배정이 없습니다.</div> : null}
+            </div>
+          </div>
+        ))}
       </section>
     </div>
   );

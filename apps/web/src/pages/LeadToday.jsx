@@ -111,8 +111,8 @@ function MentorPicker({ names, selected, onSelect, showAll, counts, weekCounts, 
               <span className="truncate text-sm font-bold">{name}{active && name !== '전체' ? ' (나)' : ''}</span>
               <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${active ? 'bg-[#5b8def] text-white' : 'bg-[#eef3f9] text-zinc-500'}`}>
                 {viewScope === 'week'
-                  ? `회차 ${name === '전체' ? (weekCounts?.all || 0) : (weekCounts?.[name] || 0)}`
-                  : `오늘 ${name === '전체' ? counts.all : (counts[name] || 0)} · 회차 ${name === '전체' ? (weekCounts?.all || 0) : (weekCounts?.[name] || 0)}`}
+                  ? `배정 ${name === '전체' ? (weekCounts?.all || 0) : (weekCounts?.[name] || 0)}명`
+                  : `오늘 ${name === '전체' ? counts.all : (counts[name] || 0)}명 · 회차 배정 ${name === '전체' ? (weekCounts?.all || 0) : (weekCounts?.[name] || 0)}명`}
               </span>
             </div>
             {name !== '전체' ? <div className={`mt-1.5 truncate text-[10px] ${active ? 'text-[#3970c9]' : workDates.length ? 'text-[#5b8def]' : 'text-zinc-400'}`}>{workDates.length ? `출근 ${workDates.join(' · ')}` : '출근일 미등록'}</div> : null}
@@ -223,13 +223,13 @@ function StudentCard({ row, dayLabel, weekId, week, assignmentDate, leadMentors,
         </div>
 
         <div className="min-w-0">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">선택 요일 일정</div>
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">{row.schedule_missing ? '배정 요일' : '선택 요일 일정'}</div>
           <div className="flex min-w-0 flex-wrap gap-1.5">
             {todayItems.length ? todayItems.map((item, index) => (
               <span key={index} className={`max-w-full truncate rounded-md px-2 py-1 text-[11px] font-medium ${isCenterItem(item) ? 'bg-[#e3efff] text-[#3970c9]' : 'bg-slate-50 text-slate-600'}`}>
                 {item?.time || '시간 미정'} · {item?.title || item?.type || '일정'}
               </span>
-            )) : <span className="text-xs text-slate-400">등록 일정 없음</span>}
+            )) : <span className="text-xs text-slate-400">{row.schedule_missing ? '배정 요일 미등록' : '등록 일정 없음'}</span>}
           </div>
         </div>
 
