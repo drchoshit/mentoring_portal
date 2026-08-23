@@ -1443,8 +1443,15 @@ export default function mentoringRoutes(db) {
 
     const mentorInfo = getMentorInfoSetting(db);
 
-    const visibleAssignments = req.user.role === 'mentor'
-      ? assignments.filter((item) => isAssignedMentor(req.user, item.mentor_name))
+    const visibleAssignments = req.user.role === 'lead'
+      ? assignments.map((item) => ({
+          ...item,
+          completion_status: 'pending',
+          completion_feedback: '',
+          incomplete_reason: '',
+          status_updated_at: '',
+          status_updated_by: ''
+        }))
       : assignments;
 
     return res.json({
@@ -1495,11 +1502,16 @@ export default function mentoringRoutes(db) {
     );
     const actorRole = String(req.user.role || '').trim();
     const canManageAll = actorRole === 'director' || actorRole === 'admin';
-    if (!canManageAll && (actorRole !== 'mentor' || !isAssignedMentor(req.user, currentAssignment?.mentor_name))) {
+    const actingMentorName = String(req.body?.acting_mentor_name || '').trim();
+    const isSharedClinicAccountAction = actorRole === 'mentor'
+      && actingMentorName
+      && normalizeMentorIdentity(actingMentorName) === normalizeMentorIdentity(currentAssignment?.mentor_name);
+    if (!canManageAll && !isSharedClinicAccountAction) {
       return res.status(403).json({ error: '배정된 클리닉 멘토 또는 관리자만 처리 상태를 수정할 수 있습니다.' });
     }
     const nowIso = new Date().toISOString();
     const updaterRole = String(req.user.role || '').trim();
+    const updaterName = actorRole === 'mentor' ? actingMentorName : updaterRole;
 
     let nextProblem;
     if (action === 'delete') {
@@ -1508,7 +1520,7 @@ export default function mentoringRoutes(db) {
         deleted_at: nowIso,
         deleted_by: updaterRole,
         status_updated_at: nowIso,
-        status_updated_by: updaterRole
+        status_updated_by: updaterName
       };
     } else {
       const statusRaw = String(req.body?.completion_status || '').trim();
@@ -1523,7 +1535,7 @@ export default function mentoringRoutes(db) {
         completion_feedback: completionFeedback,
         incomplete_reason: incompleteReason,
         status_updated_at: nowIso,
-        status_updated_by: updaterRole,
+        status_updated_by: updaterName,
         deleted_at: '',
         deleted_by: ''
       };
@@ -1552,6 +1564,7 @@ export default function mentoringRoutes(db) {
         week_id: weekRecord.week_id,
         problem_index: problemIndex,
         completion_status: nextProblem.completion_status || 'pending',
+        acting_mentor_name: actorRole === 'mentor' ? actingMentorName : '',
         deleted_at: nextProblem.deleted_at || ''
       }
     });

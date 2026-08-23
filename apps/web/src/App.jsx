@@ -60,6 +60,7 @@ function HomeEntry({ user }) {
   if (user?.role === 'parent') return <Navigate to="/parent" replace />;
   if (openPage === 'assignment-status' && canOpenAssignmentStatus) return <AssignmentStatus />;
   if (user?.role === 'lead') return <LeadToday />;
+  if (user?.role === 'mentor') return <AssignmentStatus />;
   return <Feeds />;
 }
 
@@ -125,7 +126,7 @@ export default function App() {
       <Route
         path="/lead-today"
         element={
-          <Guard roles={['director','lead','admin']}>
+          <Guard roles={['director','lead']}>
             <Shell><LeadToday /></Shell>
           </Guard>
         }

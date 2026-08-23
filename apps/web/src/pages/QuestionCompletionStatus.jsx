@@ -19,6 +19,27 @@ function statusView(status) {
   return { label: '확인 대기', tone: 'border-amber-200 bg-amber-50 text-amber-700' };
 }
 
+function QuestionStatusButtons({ value, onChange }) {
+  const options = [
+    ['pending', '확인 대기', 'amber'],
+    ['done', '해결 완료', 'emerald'],
+    ['incomplete', '미해결', 'rose']
+  ];
+  const activeTone = {
+    amber: 'border-amber-500 bg-amber-500 text-white shadow-amber-100',
+    emerald: 'border-emerald-600 bg-emerald-600 text-white shadow-emerald-100',
+    rose: 'border-rose-500 bg-rose-500 text-white shadow-rose-100'
+  };
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map(([key, label, tone]) => {
+        const active = value === key;
+        return <button key={key} type="button" onClick={() => onChange(key)} className={`rounded-xl border px-3 py-2 text-xs font-black shadow-sm transition ${active ? activeTone[tone] : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'}`}>{label}</button>;
+      })}
+    </div>
+  );
+}
+
 export default function QuestionCompletionStatus() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [weeks, setWeeks] = useState([]);
@@ -182,7 +203,40 @@ export default function QuestionCompletionStatus() {
       ].map(([label, value, tone]) => <div key={label} className={`rounded-2xl p-4 ${tone}`}><div className="text-xs font-bold opacity-75">{label}</div><div className="mt-1 text-2xl font-black">{value}<span className="ml-1 text-xs">개</span></div></div>)}</section>
 
       <section className="card p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black text-slate-900">질문별 처리 현황</h2><p className="text-xs text-slate-500">문제 이미지는 제외하고 배정과 해결 상태만 간단히 표시합니다.</p></div><div className="flex flex-wrap gap-2"><select className="input" value={mentorFilter} onChange={(event) => setMentorFilter(event.target.value)}><option>전체</option>{clinicMentors.map((name) => <option key={name}>{name}</option>)}</select><select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">전체 상태</option><option value="done">해결 완료</option><option value="pending">확인 대기</option><option value="incomplete">미해결</option></select></div></div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-2">{filtered.map((item) => { const key = itemKey(item); const problem = item?.problem_items?.[0] || {}; const view = statusView(item.completion_status); const editing = reassignKey === key; const statusDraft = statusDrafts[key] || { completion_status: String(item.completion_status || 'pending'), completion_feedback: String(item.completion_feedback || ''), incomplete_reason: String(item.incomplete_reason || '') }; return <article key={key} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><div className="font-black text-slate-900">{item.student_name} <span className="text-xs font-medium text-slate-400">{item.external_id}</span></div><div className="mt-1 text-xs text-slate-500">{problem.subject || '과목 미입력'} · {problem.material || '교재 미입력'} · {problem.problem_name || `질문 ${Number(item.problem_order || 1)}`}</div></div><span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-bold ${view.tone}`}>{view.label}</span></div><div className="mt-3 flex flex-wrap items-center gap-2 text-xs"><span className="rounded-lg bg-blue-50 px-2.5 py-1.5 font-bold text-blue-700">담당 {item.mentor_name}</span><span className="text-slate-500">배정 {item.session_date_label} {item.session_range_text}</span><span className="text-slate-400">배정자 {item.assigned_by || '-'}</span></div>{item.completion_status === 'done' && item.completion_feedback ? <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-800">{item.completion_feedback}</div> : null}{item.completion_status === 'incomplete' && item.incomplete_reason ? <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{item.incomplete_reason}</div> : null}<div className="mt-3 grid gap-2 sm:grid-cols-[8rem_1fr_auto]"><select className="input" value={statusDraft.completion_status} onChange={(event) => patchStatusDraft(item, { completion_status: event.target.value })}><option value="pending">확인 대기</option><option value="done">해결 완료</option><option value="incomplete">미해결</option></select>{statusDraft.completion_status === 'done' ? <input className="input" value={statusDraft.completion_feedback} onChange={(event) => patchStatusDraft(item, { completion_feedback: event.target.value })} placeholder="처리 내용" /> : statusDraft.completion_status === 'incomplete' ? <input className="input" value={statusDraft.incomplete_reason} onChange={(event) => patchStatusDraft(item, { incomplete_reason: event.target.value })} placeholder="미해결 사유" /> : <div />}<button className="btn-ghost" type="button" disabled={savingStateKey === key} onClick={() => saveStatus(item)}>{savingStateKey === key ? '저장 중...' : '상태 저장'}</button></div><div className="mt-3"><button type="button" className="text-xs font-bold text-violet-700" onClick={() => { if (editing) { setReassignKey(''); setTargetMentor(''); } else { setReassignKey(key); setTargetMentor(item.mentor_name || clinicMentors[0] || ''); } }}>{editing ? '재배정 닫기' : '다른 클리닉 멘토로 재배정'}</button>{editing ? <div className="mt-2 flex gap-2"><select className="input flex-1" value={targetMentor} onChange={(event) => setTargetMentor(event.target.value)}>{clinicMentors.map((name) => <option key={name}>{name}</option>)}</select><button className="btn-primary" type="button" disabled={!targetMentor || savingKey === key} onClick={() => reassign(item)}>{savingKey === key ? '저장 중...' : '재배정'}</button></div> : null}</div></article>;})}{!filtered.length ? <div className="rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400 lg:col-span-2">조건에 맞는 질문이 없습니다.</div> : null}</div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {filtered.map((item) => {
+            const key = itemKey(item);
+            const problem = item?.problem_items?.[0] || {};
+            const view = statusView(item.completion_status);
+            const editing = reassignKey === key;
+            const statusDraft = statusDrafts[key] || {
+              completion_status: String(item.completion_status || 'pending'),
+              completion_feedback: String(item.completion_feedback || ''),
+              incomplete_reason: String(item.incomplete_reason || '')
+            };
+            return (
+              <article key={key} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div><div className="font-black text-slate-900">{item.student_name} <span className="text-xs font-medium text-slate-400">{item.external_id}</span></div><div className="mt-1 text-xs text-slate-500">{problem.subject || '과목 미입력'} · {problem.material || '교재 미입력'} · {problem.problem_name || `질문 ${Number(item.problem_order || 1)}`}</div></div>
+                  <span className={`shrink-0 rounded-xl border-2 px-3 py-1.5 text-xs font-black shadow-sm ${view.tone}`}>{view.label}</span>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs"><span className="rounded-lg bg-blue-50 px-2.5 py-1.5 font-bold text-blue-700">담당 {item.mentor_name}</span><span className="text-slate-500">배정 {item.session_date_label} {item.session_range_text}</span><span className="text-slate-400">배정자 {item.assigned_by || '-'}</span></div>
+                {item.completion_status === 'done' && item.completion_feedback ? <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-800">{item.completion_feedback}</div> : null}
+                {item.completion_status === 'incomplete' && item.incomplete_reason ? <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{item.incomplete_reason}</div> : null}
+                <div className="mt-3 grid gap-2 sm:grid-cols-[auto_1fr_auto]">
+                  <QuestionStatusButtons value={statusDraft.completion_status} onChange={(value) => patchStatusDraft(item, { completion_status: value })} />
+                  {statusDraft.completion_status === 'done' ? <input className="input" value={statusDraft.completion_feedback} onChange={(event) => patchStatusDraft(item, { completion_feedback: event.target.value })} placeholder="처리 내용" /> : statusDraft.completion_status === 'incomplete' ? <input className="input" value={statusDraft.incomplete_reason} onChange={(event) => patchStatusDraft(item, { incomplete_reason: event.target.value })} placeholder="미해결 사유" /> : <div />}
+                  <button className="btn-primary min-w-24" type="button" disabled={savingStateKey === key} onClick={() => saveStatus(item)}>{savingStateKey === key ? '저장 중...' : '상태 저장'}</button>
+                </div>
+                <div className="mt-3">
+                  <button type="button" className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700" onClick={() => { if (editing) { setReassignKey(''); setTargetMentor(''); } else { setReassignKey(key); setTargetMentor(item.mentor_name || clinicMentors[0] || ''); } }}>{editing ? '재배정 닫기' : '다른 클리닉 멘토로 재배정'}</button>
+                  {editing ? <div className="mt-2 flex gap-2"><select className="input flex-1" value={targetMentor} onChange={(event) => setTargetMentor(event.target.value)}>{clinicMentors.map((name) => <option key={name}>{name}</option>)}</select><button className="btn-primary" type="button" disabled={!targetMentor || savingKey === key} onClick={() => reassign(item)}>{savingKey === key ? '저장 중...' : '재배정'}</button></div> : null}
+                </div>
+              </article>
+            );
+          })}
+          {!filtered.length ? <div className="rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400 lg:col-span-2">조건에 맞는 질문이 없습니다.</div> : null}
+        </div>
       </section>
     </div>
   );

@@ -1032,7 +1032,6 @@ export default function mentorAssignmentsRoutes(db) {
     }
     const questionCounts = loadWrongAnswerQuestionCounts(db, week.id);
     const weekRows = [];
-    const weeklyAssignmentCounts = { all: 0 };
     for (const entry of weekDateEntries(week)) {
       const dayRows = buildLeadRowsForDay(db, {
         week,
@@ -1047,10 +1046,71 @@ export default function mentorAssignmentsRoutes(db) {
         if (isDirectorMentorName(row.mentor_name, directorNames)) continue;
         const scopedRow = { ...row, assignment_date: entry.date, day_label: entry.day_label };
         weekRows.push(scopedRow);
-        weeklyAssignmentCounts.all += 1;
-        weeklyAssignmentCounts[row.mentor_name] = (weeklyAssignmentCounts[row.mentor_name] || 0) + 1;
         leads.add(row.mentor_name);
       }
+    }
+
+    // 회차 전체 화면에서는 여러 출근 요일 때문에 같은 배정 학생을 중복 집계하지 않는다.
+    const uniqueWeekRows = [];
+    const uniqueAssignmentKeys = new Set();
+    for (const row of weekRows) {
+      const assignmentKey = `${row.student_id}:${mentorNameKey(row.mentor_name)}`;
+      if (uniqueAssignmentKeys.has(assignmentKey)) continue;
+      uniqueAssignmentKeys.add(assignmentKey);
+      uniqueWeekRows.push(row);
+    }
+    weekRows.length = 0;
+    weekRows.push(...uniqueWeekRows);
+
+    // 배정 요일이 비어 있어도 배정된 학생을 누락하지 않는다.
+    // 날짜별 빌더에서 이미 만들어진 학생은 유지하고, 빠진 원본 배정만 한 번 보충한다.
+    const representedAssignments = new Set(
+      weekRows.map((row) => `${row.student_id}:${mentorNameKey(row.mentor_name)}`)
+    );
+    const statusForAssignment = db.prepare(`
+      SELECT assignment_date, status, reason, updated_at
+      FROM lead_mentoring_status
+      WHERE week_id=? AND student_id=? AND mentor_name=?
+      ORDER BY updated_at DESC, assignment_date DESC
+      LIMIT 1
+    `);
+    for (const raw of weekAssignments) {
+      const mentorName = firstNonEmptyText(raw?.lead_mentor, raw?.leadMentor, raw?.mentor);
+      if (!mentorName || isDirectorMentorName(mentorName, directorNames)) continue;
+      const studentId = parsePositiveInt(raw?.student_id);
+      const student = students.get(studentId);
+      if (!student) continue;
+      const assignmentKey = `${studentId}:${mentorNameKey(mentorName)}`;
+      if (representedAssignments.has(assignmentKey)) continue;
+      const scheduledDay = normalizeDays(raw?.scheduledDays).map(normalizeDayLabel).find(Boolean) || '';
+      const savedStatus = statusForAssignment.get(week.id, studentId, mentorName) || null;
+      const fallbackDate = savedStatus?.assignment_date
+        || (scheduledDay ? dateForWeekDay(week, scheduledDay, week.start_date) : week.start_date);
+      weekRows.push({
+        student_id: studentId,
+        external_id: student.external_id || '',
+        student_name: student.name || raw?.name || '',
+        grade: student.grade || '',
+        mentor_name: mentorName,
+        schedule: safeJson(student.schedule_json, {}),
+        schedule_updated_at: student.updated_at || '',
+        question_count: Number(questionCounts.get(studentId) || 0),
+        forced: false,
+        reassigned: false,
+        assignment_date: fallbackDate,
+        day_label: scheduledDay,
+        schedule_missing: !scheduledDay,
+        status: savedStatus
+      });
+      representedAssignments.add(assignmentKey);
+      leads.add(mentorName);
+    }
+    weekRows.sort((a, b) => String(a.assignment_date || '').localeCompare(String(b.assignment_date || ''))
+      || String(a.mentor_name || '').localeCompare(String(b.mentor_name || ''), 'ko')
+      || String(a.student_name || '').localeCompare(String(b.student_name || ''), 'ko'));
+    const weeklyAssignmentCounts = { all: weekRows.length };
+    for (const row of weekRows) {
+      weeklyAssignmentCounts[row.mentor_name] = (weeklyAssignmentCounts[row.mentor_name] || 0) + 1;
     }
     const assignments = weekRows;
     const directorConsultingAssignments = req.user.role === 'director'
