@@ -91,7 +91,7 @@ function statusMeta(status) {
   };
 }
 
-function MentorPicker({ names, selected, onSelect, showAll, counts, details, week }) {
+function MentorPicker({ names, selected, onSelect, showAll, counts, weekCounts, details, week }) {
   const options = showAll ? ['전체', ...names] : names;
   return (
     <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
@@ -109,7 +109,9 @@ function MentorPicker({ names, selected, onSelect, showAll, counts, details, wee
           >
             <div className="flex items-center justify-between gap-2">
               <span className="truncate text-sm font-bold">{name}{active && name !== '전체' ? ' (나)' : ''}</span>
-              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${active ? 'bg-[#5b8def] text-white' : 'bg-[#eef3f9] text-zinc-500'}`}>{name === '전체' ? counts.all : (counts[name] || 0)}명</span>
+              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${active ? 'bg-[#5b8def] text-white' : 'bg-[#eef3f9] text-zinc-500'}`}>
+                오늘 {name === '전체' ? counts.all : (counts[name] || 0)} · 회차 {name === '전체' ? (weekCounts?.all || 0) : (weekCounts?.[name] || 0)}
+              </span>
             </div>
             {name !== '전체' ? <div className={`mt-1.5 truncate text-[10px] ${active ? 'text-[#3970c9]' : workDates.length ? 'text-[#5b8def]' : 'text-zinc-400'}`}>{workDates.length ? `출근 ${workDates.join(' · ')}` : '출근일 미등록'}</div> : null}
           </button>
@@ -391,7 +393,7 @@ export default function LeadToday() {
           {data?.source_updated_at ? <div className="text-right text-xs text-slate-400"><div>{data?.source === 'medi-weekly-live' ? '메디위클리 실시간 연동' : '포털 배정 데이터'}</div><div>{new Date(data.source_updated_at).toLocaleString('ko-KR')}</div></div> : null}
         </div>
         {loading ? <div className="card p-8 text-center text-sm text-slate-500">배정 정보를 불러오는 중입니다.</div> : (
-          <MentorPicker names={data?.lead_mentors || []} selected={selected} onSelect={setSelected} showAll={isAdmin} counts={assignmentCounts} details={data?.lead_mentor_details || []} week={data?.week} />
+          <MentorPicker names={data?.lead_mentors || []} selected={selected} onSelect={setSelected} showAll={isAdmin} counts={assignmentCounts} weekCounts={data?.weekly_assignment_counts || {}} details={data?.lead_mentor_details || []} week={data?.week} />
         )}
       </section>
 

@@ -29,7 +29,9 @@ export default function QuestionCompletionStatus() {
   const [mentorFilter, setMentorFilter] = useState('전체');
   const [reassignKey, setReassignKey] = useState('');
   const [targetMentor, setTargetMentor] = useState('');
+  const [statusDrafts, setStatusDrafts] = useState({});
   const [savingKey, setSavingKey] = useState('');
+  const [savingStateKey, setSavingStateKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -119,6 +121,54 @@ export default function QuestionCompletionStatus() {
     }
   }
 
+  function patchStatusDraft(item, patch) {
+    const key = itemKey(item);
+    setStatusDrafts((prev) => ({
+      ...prev,
+      [key]: {
+        completion_status: String(item?.completion_status || 'pending'),
+        completion_feedback: String(item?.completion_feedback || ''),
+        incomplete_reason: String(item?.incomplete_reason || ''),
+        ...(prev[key] || {}),
+        ...patch
+      }
+    }));
+  }
+
+  async function saveStatus(item) {
+    const key = itemKey(item);
+    const draft = statusDrafts[key] || {
+      completion_status: String(item?.completion_status || 'pending'),
+      completion_feedback: String(item?.completion_feedback || ''),
+      incomplete_reason: String(item?.incomplete_reason || '')
+    };
+    if (draft.completion_status === 'incomplete' && !String(draft.incomplete_reason || '').trim()) {
+      setError('미해결 상태는 사유를 입력해야 저장할 수 있습니다.');
+      return;
+    }
+    setSavingStateKey(key);
+    setError('');
+    setMessage('');
+    try {
+      await api(`/api/mentoring/assignment-status/${encodeURIComponent(item.week_record_id)}/problem-state`, {
+        method: 'PUT',
+        body: {
+          problem_index: Number(item.problem_index || 0),
+          completion_status: draft.completion_status,
+          completion_feedback: draft.completion_status === 'done' ? String(draft.completion_feedback || '').trim() : '',
+          incomplete_reason: draft.completion_status === 'incomplete' ? String(draft.incomplete_reason || '').trim() : ''
+        }
+      });
+      setStatusDrafts((prev) => { const next = { ...prev }; delete next[key]; return next; });
+      setMessage(`${item.student_name} 학생의 질문 처리 상태를 수정했습니다.`);
+      await load(weekId, { quiet: true });
+    } catch (err) {
+      setError(err?.message || '질문 처리 상태 수정에 실패했습니다.');
+    } finally {
+      setSavingStateKey('');
+    }
+  }
+
   return (
     <div className="space-y-6">
       <section className="card overflow-hidden"><div className="bg-gradient-to-r from-violet-50 via-white to-blue-50 p-5 md:p-6"><div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><div className="text-xs font-black uppercase tracking-[0.18em] text-violet-600">Question completion status</div><h1 className="mt-1 text-2xl font-black text-slate-900">질답 완료 현황</h1><p className="mt-1 text-sm text-slate-600">회차별 질문 해결 상태를 확인하고 필요하면 다른 클리닉 멘토에게 재배정합니다.</p></div><div className="flex flex-wrap gap-2"><select className="input min-w-64" value={weekId} onChange={(event) => { const value = event.target.value; setWeekId(value); setSearchParams({ week: value }, { replace: true }); }}>{weeks.map((week) => <option key={week.id} value={week.id}>{weekLabel(week)}</option>)}</select><button className="btn-refresh" type="button" disabled={loading} onClick={() => load(weekId)}>{loading ? '불러오는 중...' : '새로고침'}</button></div></div></div></section>
@@ -132,7 +182,7 @@ export default function QuestionCompletionStatus() {
       ].map(([label, value, tone]) => <div key={label} className={`rounded-2xl p-4 ${tone}`}><div className="text-xs font-bold opacity-75">{label}</div><div className="mt-1 text-2xl font-black">{value}<span className="ml-1 text-xs">개</span></div></div>)}</section>
 
       <section className="card p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black text-slate-900">질문별 처리 현황</h2><p className="text-xs text-slate-500">문제 이미지는 제외하고 배정과 해결 상태만 간단히 표시합니다.</p></div><div className="flex flex-wrap gap-2"><select className="input" value={mentorFilter} onChange={(event) => setMentorFilter(event.target.value)}><option>전체</option>{clinicMentors.map((name) => <option key={name}>{name}</option>)}</select><select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">전체 상태</option><option value="done">해결 완료</option><option value="pending">확인 대기</option><option value="incomplete">미해결</option></select></div></div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-2">{filtered.map((item) => { const key = itemKey(item); const problem = item?.problem_items?.[0] || {}; const view = statusView(item.completion_status); const editing = reassignKey === key; return <article key={key} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><div className="font-black text-slate-900">{item.student_name} <span className="text-xs font-medium text-slate-400">{item.external_id}</span></div><div className="mt-1 text-xs text-slate-500">{problem.subject || '과목 미입력'} · {problem.material || '교재 미입력'} · {problem.problem_name || `질문 ${Number(item.problem_order || 1)}`}</div></div><span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-bold ${view.tone}`}>{view.label}</span></div><div className="mt-3 flex flex-wrap items-center gap-2 text-xs"><span className="rounded-lg bg-blue-50 px-2.5 py-1.5 font-bold text-blue-700">담당 {item.mentor_name}</span><span className="text-slate-500">배정 {item.session_date_label} {item.session_range_text}</span><span className="text-slate-400">배정자 {item.assigned_by || '-'}</span></div>{item.completion_status === 'done' && item.completion_feedback ? <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-800">{item.completion_feedback}</div> : null}{item.completion_status === 'incomplete' && item.incomplete_reason ? <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{item.incomplete_reason}</div> : null}<div className="mt-3"><button type="button" className="text-xs font-bold text-violet-700" onClick={() => { if (editing) { setReassignKey(''); setTargetMentor(''); } else { setReassignKey(key); setTargetMentor(item.mentor_name || clinicMentors[0] || ''); } }}>{editing ? '재배정 닫기' : '다른 클리닉 멘토로 재배정'}</button>{editing ? <div className="mt-2 flex gap-2"><select className="input flex-1" value={targetMentor} onChange={(event) => setTargetMentor(event.target.value)}>{clinicMentors.map((name) => <option key={name}>{name}</option>)}</select><button className="btn-primary" type="button" disabled={!targetMentor || savingKey === key} onClick={() => reassign(item)}>{savingKey === key ? '저장 중...' : '재배정'}</button></div> : null}</div></article>;})}{!filtered.length ? <div className="rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400 lg:col-span-2">조건에 맞는 질문이 없습니다.</div> : null}</div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">{filtered.map((item) => { const key = itemKey(item); const problem = item?.problem_items?.[0] || {}; const view = statusView(item.completion_status); const editing = reassignKey === key; const statusDraft = statusDrafts[key] || { completion_status: String(item.completion_status || 'pending'), completion_feedback: String(item.completion_feedback || ''), incomplete_reason: String(item.incomplete_reason || '') }; return <article key={key} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><div className="font-black text-slate-900">{item.student_name} <span className="text-xs font-medium text-slate-400">{item.external_id}</span></div><div className="mt-1 text-xs text-slate-500">{problem.subject || '과목 미입력'} · {problem.material || '교재 미입력'} · {problem.problem_name || `질문 ${Number(item.problem_order || 1)}`}</div></div><span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-bold ${view.tone}`}>{view.label}</span></div><div className="mt-3 flex flex-wrap items-center gap-2 text-xs"><span className="rounded-lg bg-blue-50 px-2.5 py-1.5 font-bold text-blue-700">담당 {item.mentor_name}</span><span className="text-slate-500">배정 {item.session_date_label} {item.session_range_text}</span><span className="text-slate-400">배정자 {item.assigned_by || '-'}</span></div>{item.completion_status === 'done' && item.completion_feedback ? <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-800">{item.completion_feedback}</div> : null}{item.completion_status === 'incomplete' && item.incomplete_reason ? <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{item.incomplete_reason}</div> : null}<div className="mt-3 grid gap-2 sm:grid-cols-[8rem_1fr_auto]"><select className="input" value={statusDraft.completion_status} onChange={(event) => patchStatusDraft(item, { completion_status: event.target.value })}><option value="pending">확인 대기</option><option value="done">해결 완료</option><option value="incomplete">미해결</option></select>{statusDraft.completion_status === 'done' ? <input className="input" value={statusDraft.completion_feedback} onChange={(event) => patchStatusDraft(item, { completion_feedback: event.target.value })} placeholder="처리 내용" /> : statusDraft.completion_status === 'incomplete' ? <input className="input" value={statusDraft.incomplete_reason} onChange={(event) => patchStatusDraft(item, { incomplete_reason: event.target.value })} placeholder="미해결 사유" /> : <div />}<button className="btn-ghost" type="button" disabled={savingStateKey === key} onClick={() => saveStatus(item)}>{savingStateKey === key ? '저장 중...' : '상태 저장'}</button></div><div className="mt-3"><button type="button" className="text-xs font-bold text-violet-700" onClick={() => { if (editing) { setReassignKey(''); setTargetMentor(''); } else { setReassignKey(key); setTargetMentor(item.mentor_name || clinicMentors[0] || ''); } }}>{editing ? '재배정 닫기' : '다른 클리닉 멘토로 재배정'}</button>{editing ? <div className="mt-2 flex gap-2"><select className="input flex-1" value={targetMentor} onChange={(event) => setTargetMentor(event.target.value)}>{clinicMentors.map((name) => <option key={name}>{name}</option>)}</select><button className="btn-primary" type="button" disabled={!targetMentor || savingKey === key} onClick={() => reassign(item)}>{savingKey === key ? '저장 중...' : '재배정'}</button></div> : null}</div></article>;})}{!filtered.length ? <div className="rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400 lg:col-span-2">조건에 맞는 질문이 없습니다.</div> : null}</div>
       </section>
     </div>
   );
