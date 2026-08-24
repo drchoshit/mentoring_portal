@@ -1303,7 +1303,9 @@ export default function mentoringRoutes(db) {
 
     const rows = db
       .prepare(
-        `SELECT wr.id AS week_record_id, wr.week_id AS source_week_id, wr.student_id, wr.e_wrong_answer_distribution, s.external_id, s.name AS student_name
+        `SELECT wr.id AS week_record_id, wr.week_id AS source_week_id, wr.student_id, wr.e_wrong_answer_distribution,
+                s.external_id, s.name AS student_name, s.grade AS student_grade,
+                s.schedule_json AS student_schedule_json, s.updated_at AS student_schedule_updated_at
          FROM week_records wr
          JOIN students s ON s.id = wr.student_id
          WHERE wr.e_wrong_answer_distribution IS NOT NULL
@@ -1372,7 +1374,10 @@ export default function mentoringRoutes(db) {
           week_record_id: row.week_record_id,
           student_id: row.student_id,
           student_name: String(row.student_name || '').trim(),
+          student_grade: String(row.student_grade || '').trim(),
           external_id: String(row.external_id || '').trim(),
+          student_schedule: safeJson(row.student_schedule_json, {}),
+          student_schedule_updated_at: String(row.student_schedule_updated_at || '').trim(),
           problem_index: problemIndex,
           problem_order: problemIndex + 1,
           mentor_name: mentorName,

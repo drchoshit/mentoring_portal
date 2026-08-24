@@ -354,6 +354,35 @@ function getKstCalendarDay() {
   }).format(new Date());
   return EN_WEEKDAY_TO_CALENDAR_DAY[weekday] || '';
 }
+
+function getKstMinutesNow() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: KST_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0) % 24;
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
+  return hour * 60 + minute;
+}
+
+function getStudentCenterPresence(schedule) {
+  const day = getKstCalendarDay();
+  const normalized = normalizeMentorScheduleMap(schedule);
+  const centerItems = (normalized?.[day] || []).filter((item) => classifySchedule(item) === 'center');
+  const currentMinutes = getKstMinutesNow();
+  const isInCenter = centerItems.some((item) => {
+    const range = parseTimeRange(item?.time);
+    return range ? currentMinutes >= range.start && currentMinutes <= range.end : false;
+  });
+  return {
+    dayLabel: CALENDAR_DAY_LABELS[day] || '-',
+    centerItems,
+    isInCenter,
+    scheduleText: centerItems.map((item) => String(item?.time || '시간 미등록').trim()).filter(Boolean).join(' · ')
+  };
+}
 const WRONG_ANSWER_TONES = [
   {
     card: 'border-emerald-300/90 bg-emerald-50/35',
@@ -2836,6 +2865,7 @@ export default function AssignmentStatus() {
                 const status = normalizeCompletionStatus(item?.completion_status);
                 const completionFeedback = String(item?.completion_feedback || '').trim();
                 const isOverdue = isAssignmentOverdue(item, selectedWeek);
+                const centerPresence = getStudentCenterPresence(item?.student_schedule);
                 const problemOrder = Math.max(
                   1,
                   Number(item.problem_order || (Number(item.problem_index || 0) + 1) || 1)
@@ -2849,9 +2879,23 @@ export default function AssignmentStatus() {
                       <div>
                         <div className="text-sm font-medium text-slate-900">
                           {item.external_id ? `${item.external_id} · ` : ''}
-                          {item.student_name || '-'} · 오답 기록 {problemOrder}
+                          {item.student_name || '-'}{item.student_grade ? ` · ${item.student_grade}` : ''} · 오답 기록 {problemOrder}
                         </div>
                         <div className="text-xs text-slate-600 mt-0.5">예정: {scheduleLabel(item)}</div>
+                        {isClinicViewer ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                            {centerPresence.isInCenter ? (
+                              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-2.5 py-1 font-black text-white shadow-sm">
+                                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />지금 재원 중
+                              </span>
+                            ) : centerPresence.centerItems.length ? (
+                              <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-bold text-amber-700">현재 재원 시간 아님</span>
+                            ) : (
+                              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-bold text-slate-500">오늘 센터 일정 없음</span>
+                            )}
+                            {centerPresence.centerItems.length ? <span className="rounded-lg bg-blue-50 px-2.5 py-1 font-bold text-blue-700">{centerPresence.dayLabel}요일 센터 {centerPresence.scheduleText}</span> : null}
+                          </div>
+                        ) : null}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap justify-end">
                         <span className={['inline-flex items-center rounded-full border px-2 py-0.5 text-[11px]', completionStatusTone(status)].join(' ')}>
