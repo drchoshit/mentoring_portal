@@ -2129,15 +2129,6 @@ export default function Mentoring() {
               <button className="btn-primary" onClick={saveAll} disabled={busy}>
                 전체 저장
               </button>
-              {user?.role !== 'mentor' && canViewA('e_wrong_answer_distribution') ? (
-                <button
-                  className="btn text-white border border-blue-700 bg-gradient-to-b from-blue-500 to-blue-600 shadow-sm hover:from-blue-600 hover:to-blue-700"
-                  type="button"
-                  onClick={toggleWrongAnswerSection}
-                >
-                  {showWrongAnswerSection ? '오답 배분 닫기' : '오답 배분하기'}
-                </button>
-              ) : null}
             </div>
           </div>
           <div className="mt-2 text-xs text-rose-600">
