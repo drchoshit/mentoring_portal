@@ -1861,11 +1861,6 @@ export default function AssignmentStatus() {
     if (!selectedKey) return [];
     return grouped.filter((group) => normalizeMentorNameKey(group.mentor_name) === selectedKey);
   }, [grouped, isClinicViewer, selectedClinicMentor]);
-  const clinicAssignmentCounts = useMemo(() => {
-    const counts = new Map();
-    for (const group of grouped) counts.set(normalizeMentorNameKey(group.mentor_name), group.items.length);
-    return counts;
-  }, [grouped]);
   const mentorOptionKeySet = useMemo(
     () => new Set(mentorOptions.map((opt) => normalizeMentorNameKey(opt.mentor_name))),
     [mentorOptions]
@@ -2179,7 +2174,6 @@ export default function AssignmentStatus() {
           <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {mentorOptions.map((mentor) => {
               const active = normalizeMentorNameKey(selectedClinicMentor) === normalizeMentorNameKey(mentor.mentor_name);
-              const count = Number(clinicAssignmentCounts.get(normalizeMentorNameKey(mentor.mentor_name)) || 0);
               return (
                 <button
                   key={`clinic-select-${mentor.mentor_name}`}
@@ -2187,7 +2181,7 @@ export default function AssignmentStatus() {
                   className={`rounded-2xl border px-4 py-3 text-left transition ${active ? 'border-emerald-500 bg-emerald-600 text-white shadow-md' : 'border-slate-200 bg-white text-slate-800 hover:border-emerald-300 hover:bg-emerald-50'}`}
                   onClick={() => setSelectedClinicMentor(mentor.mentor_name)}
                 >
-                  <span className="flex items-center justify-between gap-2"><b>{mentor.mentor_name}</b><span className={`rounded-full px-2 py-0.5 text-[11px] font-black ${active ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'}`}>질문 {count}건</span></span>
+                  <b>{mentor.mentor_name}</b>
                 </button>
               );
             })}
