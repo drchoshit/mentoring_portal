@@ -194,6 +194,136 @@ function compatibilityTone(mentor) {
   return { label: '겹치는 센터 시간 없음', cls: 'border-rose-200 bg-rose-50 text-rose-700' };
 }
 
+function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, onClose, onRefresh }) {
+  const qrImageUrl = uploadUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=420x420&data=${encodeURIComponent(uploadUrl)}`
+    : '';
+  const [refreshing, setRefreshing] = useState(false);
+  const [pcUploading, setPcUploading] = useState(false);
+  const fileInputRef = useRef(null);
+
+  function extractUploadToken(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      return String(parsed.searchParams.get('token') || '').trim();
+    } catch {
+      const match = raw.match(/[?&]token=([^&]+)/);
+      return match?.[1] ? decodeURIComponent(match[1]) : '';
+    }
+  }
+
+  function resolveUploadSubmitUrl(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return `${String(API_BASE || '').trim().replace(/\/+$/, '')}/api/problem-upload/mobile/submit`;
+    try {
+      const parsed = new URL(raw, window.location.origin);
+      parsed.pathname = parsed.pathname.replace(/\/mobile\/?$/, '/mobile/submit');
+      parsed.search = '';
+      return parsed.toString();
+    } catch {
+      const base = String(API_BASE || '').trim().replace(/\/+$/, '');
+      return base ? `${base}/api/problem-upload/mobile/submit` : '/api/problem-upload/mobile/submit';
+    }
+  }
+
+  async function copyUploadUrl() {
+    if (!uploadUrl) return;
+    try {
+      await navigator.clipboard.writeText(uploadUrl);
+      window.alert('링크를 복사했습니다.');
+    } catch {
+      window.alert('링크 복사에 실패했습니다.');
+    }
+  }
+
+  async function refreshUploadedImages() {
+    if (typeof onRefresh !== 'function' || refreshing) return;
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function uploadPcImages(event) {
+    const files = Array.from(event?.target?.files || []);
+    if (!files.length || pcUploading) return;
+    const token = extractUploadToken(uploadUrl);
+    if (!token) {
+      window.alert('업로드 토큰을 찾지 못했습니다. 링크를 다시 생성해 주세요.');
+      if (event?.target) event.target.value = '';
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('token', token);
+    for (const file of files) formData.append('images', file, String(file?.name || 'upload.jpg'));
+
+    setPcUploading(true);
+    try {
+      const response = await fetch(resolveUploadSubmitUrl(uploadUrl), { method: 'POST', body: formData });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      await refreshUploadedImages();
+      window.alert(`PC 이미지 업로드 완료: ${Number(data?.uploaded_count || files.length)}장`);
+    } catch (e) {
+      window.alert(e?.message || 'PC 이미지 업로드에 실패했습니다.');
+    } finally {
+      setPcUploading(false);
+      if (event?.target) event.target.value = '';
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 p-4">
+      <div className="card w-full max-w-xl border border-blue-200 bg-white p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-base font-semibold text-slate-900">문제 이미지 업로드 QR</div>
+            <div className="text-xs text-slate-600">오답 기록 {Number(problemIndex) + 1}에 이미지가 저장됩니다.</div>
+          </div>
+          <button className="btn-ghost" type="button" onClick={onClose}>닫기</button>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+          {loading ? (
+            <div className="text-sm text-slate-700">QR 링크를 생성하는 중입니다...</div>
+          ) : error ? (
+            <div className="text-sm text-red-600">{error}</div>
+          ) : uploadUrl ? (
+            <div className="space-y-3">
+              <div className="mx-auto w-fit rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+                <img src={qrImageUrl} alt="문제 이미지 업로드 QR" className="h-72 w-72" />
+              </div>
+              <div className="text-xs leading-5 text-slate-700">
+                1) 휴대폰으로 QR을 스캔합니다.<br />
+                2) 열린 페이지에서 새 촬영/앨범 선택 후 여러 장 전송합니다.<br />
+                3) 업로드 뒤 이 화면에서 새로고침을 누르면 목록에 반영됩니다.
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 break-all">{uploadUrl}</div>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn-ghost" type="button" onClick={copyUploadUrl}>링크 복사</button>
+                <button className="btn-primary" type="button" disabled={refreshing} onClick={() => void refreshUploadedImages()}>
+                  {refreshing ? '반영 중...' : '업로드 반영 새로고침'}
+                </button>
+                <button className="btn-ghost" type="button" disabled={refreshing || pcUploading} onClick={() => fileInputRef.current?.click()}>
+                  {pcUploading ? 'PC 업로드 중...' : 'PC에서 이미지 갖고 오기'}
+                </button>
+                <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => void uploadPcImages(event)} />
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-slate-700">업로드 링크를 불러오지 못했습니다.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function WrongAnswerAssignment() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -216,6 +346,13 @@ export default function WrongAnswerAssignment() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [imageUploadModal, setImageUploadModal] = useState({
+    open: false,
+    loading: false,
+    error: '',
+    uploadUrl: '',
+    problemIndex: 0
+  });
   const studentPickerRef = useRef(null);
 
   const selectedWeek = useMemo(() => weeks.find((week) => String(week.id) === String(weekId)) || null, [weeks, weekId]);
@@ -359,16 +496,34 @@ export default function WrongAnswerAssignment() {
   async function openImageUpload() {
     if (!studentId || !weekId) return;
     setError('');
+    setImageUploadModal({
+      open: true,
+      loading: true,
+      error: '',
+      uploadUrl: '',
+      problemIndex: targetIndex
+    });
     try {
       const result = await api('/api/mentoring/wrong-answer/upload-link', {
         method: 'POST', body: { student_id: Number(studentId), week_id: Number(weekId), problem_index: targetIndex }
       });
       const url = String(result?.upload_url || '').trim();
       if (!url) throw new Error('업로드 링크를 만들지 못했습니다.');
-      window.open(url, '_blank', 'noopener,noreferrer');
-      setMessage('이미지 업로드 후 “업로드 반영” 버튼을 눌러 주세요.');
+      setImageUploadModal({
+        open: true,
+        loading: false,
+        error: '',
+        uploadUrl: url,
+        problemIndex: targetIndex
+      });
     } catch (e) {
-      setError(e?.message || '문제 이미지 업로드 링크 생성에 실패했습니다.');
+      setImageUploadModal({
+        open: true,
+        loading: false,
+        error: e?.message || '문제 이미지 업로드 링크 생성에 실패했습니다.',
+        uploadUrl: '',
+        problemIndex: targetIndex
+      });
     }
   }
 
@@ -623,6 +778,17 @@ export default function WrongAnswerAssignment() {
           )) : <div className="bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">이 회차에 제출된 오답 배정 로그가 없습니다.</div>}
         </div>
       </section>
+
+      {imageUploadModal.open ? (
+        <WrongAnswerImageUploadModal
+          loading={imageUploadModal.loading}
+          error={imageUploadModal.error}
+          uploadUrl={imageUploadModal.uploadUrl}
+          problemIndex={imageUploadModal.problemIndex}
+          onClose={() => setImageUploadModal((prev) => ({ ...prev, open: false }))}
+          onRefresh={() => loadRecord(studentId, weekId, { keepDraft: true })}
+        />
+      ) : null}
     </div>
   );
 }

@@ -1216,7 +1216,7 @@ export default function mentoringRoutes(db) {
     if (!student_id || !week_id || !Number.isInteger(problem_index) || problem_index < 0 || problem_index > 99) {
       return res.status(400).json({ error: 'Missing or invalid student_id/week_id/problem_index' });
     }
-    if (req.user.role === 'parent' || req.user.role === 'mentor') {
+    if (req.user.role === 'parent') {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -1251,7 +1251,7 @@ export default function mentoringRoutes(db) {
     if (!student_id || !week_id || !Number.isInteger(problem_index) || problem_index < 0 || !image_id) {
       return res.status(400).json({ error: 'Missing or invalid student_id/week_id/problem_index/image_id' });
     }
-    if (req.user.role === 'parent' || req.user.role === 'mentor') {
+    if (req.user.role === 'parent') {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
