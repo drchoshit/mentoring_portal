@@ -283,7 +283,7 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-base font-semibold text-slate-900">문제 이미지 업로드 QR</div>
-            <div className="text-xs text-slate-600">오답 기록 {Number(problemIndex) + 1}에 이미지가 저장됩니다.</div>
+            <div className="text-xs text-slate-600">질답 기록 {Number(problemIndex) + 1}에 이미지가 저장됩니다.</div>
           </div>
           <button className="btn-ghost" type="button" onClick={onClose}>닫기</button>
         </div>
@@ -324,13 +324,13 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
   );
 }
 
-export default function WrongAnswerAssignment() {
+export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId = '', embedded = false, onSubmitted = null }) {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [weeks, setWeeks] = useState([]);
   const [students, setStudents] = useState([]);
-  const [weekId, setWeekId] = useState(String(searchParams.get('week') || ''));
-  const [studentId, setStudentId] = useState(String(searchParams.get('student') || ''));
+  const [weekId, setWeekId] = useState(String(fixedWeekId || searchParams.get('week') || ''));
+  const [studentId, setStudentId] = useState(String(fixedStudentId || searchParams.get('student') || ''));
   const [weekRecordId, setWeekRecordId] = useState('');
   const [studentSchedule, setStudentSchedule] = useState({});
   const [mentorInfo, setMentorInfo] = useState({ mentors: [] });
@@ -387,13 +387,15 @@ export default function WrongAnswerAssignment() {
       const studentList = Array.isArray(studentResult?.students) ? studentResult.students : [];
       setWeeks(weekList);
       setStudents(studentList);
-      const nextWeek = weekList.some((week) => String(week.id) === weekId)
-        ? weekId : String(weekList[weekList.length - 1]?.id || '');
-      const nextStudent = studentList.some((student) => String(student.id) === studentId)
-        ? studentId : String(studentList[0]?.id || '');
+      const requestedWeekId = String(fixedWeekId || weekId || '');
+      const requestedStudentId = String(fixedStudentId || studentId || '');
+      const nextWeek = weekList.some((week) => String(week.id) === requestedWeekId)
+        ? requestedWeekId : String(weekList[weekList.length - 1]?.id || '');
+      const nextStudent = studentList.some((student) => String(student.id) === requestedStudentId)
+        ? requestedStudentId : String(studentList[0]?.id || '');
       setWeekId(nextWeek);
       setStudentId(nextStudent);
-      setSearchParams({ week: nextWeek, student: nextStudent }, { replace: true });
+      if (!embedded) setSearchParams({ week: nextWeek, student: nextStudent }, { replace: true });
     } catch (e) {
       setError(e?.message || '학생과 회차 정보를 불러오지 못했습니다.');
     }
@@ -405,7 +407,7 @@ export default function WrongAnswerAssignment() {
       const result = await api(`/api/mentoring/assignment-status?weekId=${encodeURIComponent(targetWeekId)}`);
       setLogs((Array.isArray(result?.assignments) ? result.assignments : []).filter((row) => String(row?.submitted_at || '').trim()));
     } catch (e) {
-      setError(e?.message || '오답 배정 로그를 불러오지 못했습니다.');
+      setError(e?.message || '질답 배정 로그를 불러오지 못했습니다.');
       setLogs([]);
     }
   }
@@ -431,13 +433,17 @@ export default function WrongAnswerAssignment() {
       }
       await loadLogs(targetWeekId);
     } catch (e) {
-      setError(e?.message || '오답 배정 정보를 불러오지 못했습니다.');
+      setError(e?.message || '질답 배정 정보를 불러오지 못했습니다.');
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => { void loadBase(); }, []);
+  useEffect(() => {
+    if (fixedWeekId) setWeekId(String(fixedWeekId));
+    if (fixedStudentId) setStudentId(String(fixedStudentId));
+  }, [fixedStudentId, fixedWeekId]);
   useEffect(() => {
     if (weekId && studentId) void loadRecord(studentId, weekId);
   }, [weekId, studentId]);
@@ -599,8 +605,9 @@ export default function WrongAnswerAssignment() {
       resetDraft(firstAvailableProblemIndex(problems));
       setMessage('제출했습니다. 입력 칸은 초기화되었고 아래 로그와 질답 배정현황에 반영되었습니다.');
       await loadLogs(weekId);
+      if (typeof onSubmitted === 'function') await onSubmitted();
     } catch (e) {
-      setError(e?.message || '오답 기록 제출에 실패했습니다.');
+      setError(e?.message || '질답 기록 제출에 실패했습니다.');
     } finally {
       setSaving(false);
     }
@@ -608,12 +615,12 @@ export default function WrongAnswerAssignment() {
 
   return (
     <div className="space-y-6">
-      <section className="card overflow-hidden">
+      {!embedded ? <section className="card overflow-hidden">
         <div className="bg-gradient-to-r from-blue-50 via-white to-emerald-50 px-5 py-5 md:px-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="text-xs font-bold uppercase tracking-[0.18em] text-blue-600">Wrong answer assignment</div>
-              <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-900">오답 배정</h1>
+              <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-900">질답 배정</h1>
               <p className="mt-1 text-sm text-slate-600">학생의 센터 재원 시간과 멘토 출근 시간을 비교해 바로 배정합니다.</p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -626,16 +633,17 @@ export default function WrongAnswerAssignment() {
             </div>
           </div>
         </div>
-      </section>
+      </section> : null}
 
       <section className="card border-emerald-200 p-5 md:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div><h2 className="text-lg font-black text-slate-900">오답 기록</h2><p className="text-sm text-slate-500">입력 카드는 항상 1개만 표시되며 제출 후 즉시 비워집니다.</p></div>
+          <div><h2 className="text-lg font-black text-slate-900">질답 기록</h2><p className="text-sm text-slate-500">입력 카드는 항상 1개만 표시되며 제출 후 즉시 비워집니다.</p></div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative" ref={studentPickerRef}>
               <button
                 type="button"
-                className="input flex min-w-60 items-center justify-between gap-3 text-left"
+                disabled={Boolean(fixedStudentId)}
+                className="input flex min-w-60 items-center justify-between gap-3 text-left disabled:cursor-default disabled:bg-slate-50"
                 onClick={() => {
                   setStudentQuery('');
                   setStudentPickerOpen((open) => !open);
@@ -649,9 +657,9 @@ export default function WrongAnswerAssignment() {
                     ? `${selectedStudent.external_id ? `${selectedStudent.external_id} · ` : ''}${selectedStudent.name}`
                     : '학생을 선택해 주세요'}
                 </span>
-                <span className="text-xs text-slate-400" aria-hidden="true">▼</span>
+                {!fixedStudentId ? <span className="text-xs text-slate-400" aria-hidden="true">▼</span> : null}
               </button>
-              {studentPickerOpen ? (
+              {studentPickerOpen && !fixedStudentId ? (
                 <div className="absolute right-0 z-30 mt-2 w-[min(22rem,calc(100vw-3rem))] rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
                   <input
                     autoFocus
@@ -759,9 +767,9 @@ export default function WrongAnswerAssignment() {
         {message ? <div className="mt-4 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">{message}</div> : null}
       </section>
 
-      <section className="card p-5 md:p-6">
+      {!embedded ? <section className="card p-5 md:p-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div><h2 className="text-lg font-black text-slate-900">회차별 오답 배정 로그</h2><p className="text-sm text-slate-500">문제 내용은 제외하고 배정 관계만 간단히 표시합니다.</p></div>
+          <div><h2 className="text-lg font-black text-slate-900">회차별 질답 배정 로그</h2><p className="text-sm text-slate-500">문제 내용은 제외하고 배정 관계만 간단히 표시합니다.</p></div>
           <span className="text-xs font-semibold text-slate-500">{toRoundLabel(selectedWeek)} · {logs.length}건</span>
         </div>
         <div className="mt-4 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200">
@@ -775,9 +783,9 @@ export default function WrongAnswerAssignment() {
               </div>
               <div className="text-xs text-slate-500">{row.submitted_at ? new Date(row.submitted_at).toLocaleString('ko-KR') : '-'}</div>
             </div>
-          )) : <div className="bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">이 회차에 제출된 오답 배정 로그가 없습니다.</div>}
+          )) : <div className="bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">이 회차에 제출된 질답 배정 로그가 없습니다.</div>}
         </div>
-      </section>
+      </section> : null}
 
       {imageUploadModal.open ? (
         <WrongAnswerImageUploadModal

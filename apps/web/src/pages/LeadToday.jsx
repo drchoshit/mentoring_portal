@@ -75,18 +75,12 @@ function isHappeningNow(item, now = new Date()) {
 
 function statusMeta(status) {
   if (status?.status === 'completed') return {
-    label: '멘토링 완료', icon: '✓',
-    chip: 'bg-emerald-100 text-emerald-800',
     card: 'bg-emerald-50/55'
   };
   if (status?.status === 'missed') return {
-    label: '미진행', icon: '×',
-    chip: 'bg-rose-50 text-rose-700',
     card: 'bg-rose-50/45'
   };
   return {
-    label: '진행 전', icon: '○',
-    chip: 'bg-zinc-100 text-zinc-600',
     card: 'bg-white'
   };
 }
@@ -191,7 +185,6 @@ function DirectorConsultingList({ rows, weekId, week }) {
 
 function StudentCard({ row, dayLabel, weekId, week, assignmentDate, leadMentors, isCurrentDate, canChangeStatus, onMissed, onCompleted, onReassign }) {
   const navigate = useNavigate();
-  const [expanded, setExpanded] = useState(false);
   const [showReason, setShowReason] = useState(false);
   const [reason, setReason] = useState(row?.status?.reason || '');
   const [showReassign, setShowReassign] = useState(false);
@@ -206,8 +199,8 @@ function StudentCard({ row, dayLabel, weekId, week, assignmentDate, leadMentors,
   const meta = statusMeta(row.status);
 
   return (
-    <article className={`overflow-hidden rounded-2xl px-4 py-3.5 shadow-[0_4px_16px_rgba(51,79,118,0.07)] transition hover:-translate-y-px hover:shadow-[0_9px_26px_rgba(51,79,118,0.11)] ${meta.card}`}>
-      <div className="grid items-center gap-3 lg:grid-cols-[minmax(11rem,0.9fr)_minmax(18rem,1.8fr)_8.5rem_auto]">
+    <article className={`overflow-hidden rounded-2xl px-4 py-3.5 shadow-[0_4px_16px_rgba(51,79,118,0.07)] transition hover:-translate-y-px hover:shadow-[0_9px_26px_rgba(51,79,118,0.11)] ${showReason ? 'bg-rose-50/45' : meta.card}`}>
+      <div className="grid items-center gap-3 lg:grid-cols-[minmax(11rem,0.9fr)_minmax(18rem,1.8fr)_auto]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="truncate text-base font-black text-slate-950">{row.student_name}</h3>
@@ -233,16 +226,11 @@ function StudentCard({ row, dayLabel, weekId, week, assignmentDate, leadMentors,
           </div>
         </div>
 
-        <div className={`inline-flex w-fit items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-black ${meta.chip}`}>
-          <span className="text-base leading-none">{meta.icon}</span>{meta.label}
-        </div>
-
         <div className="flex shrink-0 flex-wrap justify-start gap-1.5 lg:justify-end">
-          <button className="btn-ghost px-3 py-1.5 text-xs" type="button" onClick={() => setExpanded((value) => !value)}>{expanded ? '접기' : '주간 일정'}</button>
-          {canChangeStatus ? <button className="rounded-xl bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-default disabled:opacity-50" type="button" disabled={row?.status?.status === 'completed'} onClick={() => onCompleted(row)}>✓ 진행</button> : null}
-          {canChangeStatus ? <button className="btn-danger-soft px-3 py-1.5 text-xs" type="button" onClick={() => setShowReason((value) => !value)}>× 미진행</button> : null}
+          <button className="btn-primary px-3 py-1.5 text-xs" type="button" onClick={() => navigate(`/students/${row.student_id}/mentoring?week=${weekId}`)}>멘토링 기록</button>
+          {canChangeStatus ? <button className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition ${row?.status?.status === 'completed' ? 'border-emerald-200 bg-emerald-100 text-emerald-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-emerald-50 hover:text-emerald-700'}`} type="button" onClick={() => onCompleted(row)}>✓ 진행</button> : null}
+          {canChangeStatus ? <button className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition ${row?.status?.status === 'missed' || showReason ? 'border-rose-200 bg-rose-100 text-rose-700' : 'border-slate-200 bg-white text-slate-700 hover:bg-rose-50 hover:text-rose-700'}`} type="button" onClick={() => setShowReason((value) => !value)}>× 미진행</button> : null}
           {canChangeStatus && row?.status?.status === 'missed' ? <button className="rounded-xl bg-violet-50 px-3 py-1.5 text-xs font-bold text-violet-700 transition hover:bg-violet-100" type="button" onClick={() => setShowReassign((value) => !value)}>↻ 재배정</button> : null}
-          <button className="btn-primary px-3 py-1.5 text-xs" type="button" onClick={() => navigate(`/students/${row.student_id}/mentoring?week=${weekId}`)}>기록 작성</button>
         </div>
       </div>
 
@@ -280,7 +268,6 @@ function StudentCard({ row, dayLabel, weekId, week, assignmentDate, leadMentors,
           </div>
         </div>
       ) : null}
-      {expanded ? <WeeklySchedule schedule={row.schedule} today={dayLabel} /> : null}
     </article>
   );
 }

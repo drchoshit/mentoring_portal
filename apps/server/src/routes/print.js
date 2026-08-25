@@ -78,6 +78,25 @@ function renderTasksText(value) {
     .join('\n');
 }
 
+function renderUnifiedWeeklyTasks(primary, fallback, days) {
+  const sources = [primary, fallback];
+  for (const source of sources) {
+    const weekly = source && typeof source === 'object' ? source.Weekly : '';
+    if (String(weekly || '').trim()) return renderTasksText(weekly);
+  }
+
+  const legacyRows = [];
+  for (const day of days) {
+    for (const source of sources) {
+      const value = source && typeof source === 'object' ? source?.[day.key] : '';
+      if (!String(value || '').trim()) continue;
+      legacyRows.push(`${day.label}요일 · ${renderTasksText(value)}`);
+      break;
+    }
+  }
+  return legacyRows.join('\n') || '-';
+}
+
 function fmtDate(d) {
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return String(d || '');
@@ -213,8 +232,6 @@ export default function printRoutes(db) {
     );
     const week = db.prepare('SELECT * FROM weeks WHERE id=?').get(week_id);
     if (!student || !week) return res.status(404).send('Not found');
-    const weekRound = getWeekRound(week);
-    const useNewDailyTaskLayout = weekRound >= 4;
 
     const subjRecords = db.prepare(
       `SELECT r.*, s.name as subject_name
@@ -326,16 +343,12 @@ export default function printRoutes(db) {
       `
       : '';
 
-    const completedWrongAnswerProblems = wrongAnswerProblems.filter(
-      (problem) => String(problem?.completion_status || '').trim() === 'done'
-    );
-
-    const wrongAnswerHtml = printable('e_wrong_answer_distribution') && completedWrongAnswerProblems.length
+    const wrongAnswerHtml = printable('e_wrong_answer_distribution') && wrongAnswerProblems.length
       ? `
         <div class="qa-section">
-          <div class="qa-section-title">완료된 오답·질답 정리</div>
+          <div class="qa-section-title">주간 질답 정리</div>
           <div class="qa-entry-grid">
-          ${completedWrongAnswerProblems.map((problem, idx) => {
+          ${wrongAnswerProblems.map((problem, idx) => {
             const questionText = joinTextParts([
               problem.subject,
               problem.material,
@@ -388,20 +401,13 @@ export default function printRoutes(db) {
       ? `${clinicEntryHtml}${wrongAnswerHtml}${weeklyLeadFeedbackHtml}`
       : `<div class="qa-empty">기록된 주간 질답/클리닉 내용이 없습니다.</div>`;
 
-    const taskFieldKey = useNewDailyTaskLayout ? 'b_daily_tasks_this_week' : 'b_daily_tasks';
-    const taskCardClass = useNewDailyTaskLayout ? 'tasks-this-week-card' : 'tasks-card';
-    const taskTitle = useNewDailyTaskLayout ? '일일 학습 과제(이번주)' : '일일 학습 과제';
-    const taskSource = useNewDailyTaskLayout ? dailyTasksThisWeek : dailyTasks;
+    const unifiedWeeklyTasks = renderUnifiedWeeklyTasks(dailyTasksThisWeek, dailyTasks, days);
+    const canPrintWeeklyTasks = printable('b_daily_tasks_this_week') || printable('b_daily_tasks');
 
     const bottomSectionHtml = `
-      <div class="card ${taskCardClass}">
-        <h3>${taskTitle}</h3>
-        <table class="dense day-table">
-          <thead><tr><th style="width:12mm;">요일</th><th>과제</th></tr></thead>
-          <tbody>
-            ${days.map((d) => `<tr><th>${esc(d.label)}</th><td>${textToHtml(printable(taskFieldKey) ? taskSource?.[d.key] : '')}</td></tr>`).join('')}
-          </tbody>
-        </table>
+      <div class="card tasks-this-week-card">
+        <h3>주간 학습 과제</h3>
+        <div class="weekly-task-body">${textToHtml(canPrintWeeklyTasks ? unifiedWeeklyTasks : '')}</div>
       </div>
 
       <div class="card clinic-summary-card">
@@ -469,6 +475,16 @@ export default function printRoutes(db) {
     .subject-card { background: #fffdf8; border-color: #d6c6af; }
     .tasks-card { background: #f5f9ff; border-color: #9fb8d6; }
     .tasks-this-week-card { background: #eef8f1; border-color: #a8c9ae; }
+    .weekly-task-body {
+      min-height: 31mm;
+      border: 1px solid #b9d5bf;
+      background: rgba(255,255,255,0.72);
+      padding: 1.6mm 1.8mm;
+      font-size: 8.5px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     .daily-feedback-card { background: #f3faf5; border-color: #9fc8ac; }
     .weekly-feedback-card { background: #fff6ed; border-color: #d8bda1; }
 

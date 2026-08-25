@@ -16,12 +16,12 @@ function itemKey(item) {
 function statusView(status) {
   if (status === 'done') return { label: '해결 완료', tone: 'border-emerald-200 bg-emerald-50 text-emerald-700' };
   if (status === 'incomplete') return { label: '미해결', tone: 'border-rose-200 bg-rose-50 text-rose-700' };
-  return { label: '확인 대기', tone: 'border-amber-200 bg-amber-50 text-amber-700' };
+  return { label: '진행 예정', tone: 'border-amber-200 bg-amber-50 text-amber-700' };
 }
 
 function QuestionStatusButtons({ value, onChange }) {
   const options = [
-    ['pending', '확인 대기', 'amber'],
+    ['pending', '진행 예정', 'amber'],
     ['done', '해결 완료', 'emerald'],
     ['incomplete', '미해결', 'rose']
   ];
@@ -199,10 +199,10 @@ export default function QuestionCompletionStatus() {
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[
         ['전체 질문', summary.total, 'bg-violet-50 text-violet-700'], ['해결 완료', summary.done, 'bg-emerald-50 text-emerald-700'],
-        ['확인 대기', summary.pending, 'bg-amber-50 text-amber-700'], ['미해결', summary.incomplete, 'bg-rose-50 text-rose-700']
+        ['진행 예정', summary.pending, 'bg-amber-50 text-amber-700'], ['미해결', summary.incomplete, 'bg-rose-50 text-rose-700']
       ].map(([label, value, tone]) => <div key={label} className={`rounded-2xl p-4 ${tone}`}><div className="text-xs font-bold opacity-75">{label}</div><div className="mt-1 text-2xl font-black">{value}<span className="ml-1 text-xs">개</span></div></div>)}</section>
 
-      <section className="card p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black text-slate-900">질문별 처리 현황</h2><p className="text-xs text-slate-500">문제 이미지는 제외하고 배정과 해결 상태만 간단히 표시합니다.</p></div><div className="flex flex-wrap gap-2"><select className="input" value={mentorFilter} onChange={(event) => setMentorFilter(event.target.value)}><option>전체</option>{clinicMentors.map((name) => <option key={name}>{name}</option>)}</select><select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">전체 상태</option><option value="done">해결 완료</option><option value="pending">확인 대기</option><option value="incomplete">미해결</option></select></div></div>
+      <section className="card p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black text-slate-900">질문별 처리 현황</h2><p className="text-xs text-slate-500">문제 이미지는 제외하고 배정과 해결 상태만 간단히 표시합니다.</p></div><div className="flex flex-wrap gap-2"><select className="input" value={mentorFilter} onChange={(event) => setMentorFilter(event.target.value)}><option>전체</option>{clinicMentors.map((name) => <option key={name}>{name}</option>)}</select><select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">전체 상태</option><option value="done">해결 완료</option><option value="pending">진행 예정</option><option value="incomplete">미해결</option></select></div></div>
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
           {filtered.map((item) => {
             const key = itemKey(item);

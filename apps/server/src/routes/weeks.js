@@ -30,7 +30,7 @@ function cleanupOldAssignmentHistory(db, keepRecentWeeks = ASSIGNMENT_KEEP_RECEN
     cleared_week_records: 0,
     deleted_wrong_answer_images: 0,
     preserved: true,
-    note: '멘토링 기록 보존 정책에 따라 회차 추가 시 과거 오답 배분 기록과 이미지를 삭제하지 않습니다.'
+    note: '멘토링 기록 보존 정책에 따라 회차 추가 시 과거 질답 배분 기록과 이미지를 삭제하지 않습니다.'
   };
 }
 

@@ -796,7 +796,7 @@ function renderMentorBriefingPage({
         }
 
         const html = rows.map((item) => {
-          const title = (item?.external_id ? escapeText(item.external_id) + ' · ' : '') + escapeText(item?.student_name || '-') + ' · 오답 기록 ' + Number(item?.problem_order || 1);
+          const title = (item?.external_id ? escapeText(item.external_id) + ' · ' : '') + escapeText(item?.student_name || '-') + ' · 질답 기록 ' + Number(item?.problem_order || 1);
           const schedule = [
             item?.day_label ? escapeText(item.day_label) + '요일' : '요일 미정',
             item?.session_date_label && item.session_date_label !== '-' ? escapeText(item.session_date_label) : '',

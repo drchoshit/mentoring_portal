@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { API_BASE, api } from '../api.js';
 
@@ -1086,7 +1086,7 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-base font-semibold text-slate-900">문제 이미지 업로드 QR</div>
-            <div className="text-xs text-slate-600">오답 기록 {Number(problemIndex) + 1}에 이미지가 저장됩니다.</div>
+            <div className="text-xs text-slate-600">질답 기록 {Number(problemIndex) + 1}에 이미지가 저장됩니다.</div>
           </div>
           <button className="btn-ghost" type="button" onClick={onClose}>
             닫기
@@ -1569,7 +1569,7 @@ export default function AssignmentStatus() {
         setQuickCollapsedWrongAnswerProblems({});
       }
     } catch (e) {
-      setQuickWrongAnswerError(e?.message || '오답 배분 기록을 불러오지 못했습니다.');
+      setQuickWrongAnswerError(e?.message || '질답 배분 기록을 불러오지 못했습니다.');
       const emptyDraft = normalizeWrongAnswerDraftWithSummary({});
       setQuickWrongAnswerPersistedDraft(emptyDraft);
       setQuickWrongAnswerDraft(emptyDraft);
@@ -1706,9 +1706,9 @@ export default function AssignmentStatus() {
       });
       setQuickWrongAnswerPersistedDraft(payload);
       await loadStatus(weekId);
-      window.alert('오답 배분이 저장되었습니다.');
+      window.alert('질답 배분이 저장되었습니다.');
     } catch (e) {
-      setQuickWrongAnswerError(e?.message || '오답 배분 저장에 실패했습니다.');
+      setQuickWrongAnswerError(e?.message || '질답 배분 저장에 실패했습니다.');
     } finally {
       setQuickWrongAnswerSaving(false);
     }
@@ -1721,7 +1721,7 @@ export default function AssignmentStatus() {
       : [];
     const targetProblem = localProblems[index];
     if (!targetProblem || !isMeaningfulWrongAnswerProblem(targetProblem)) {
-      setQuickWrongAnswerError('제출할 오답 기록을 먼저 입력해 주세요.');
+      setQuickWrongAnswerError('제출할 질답 기록을 먼저 입력해 주세요.');
       return;
     }
     const targetAssignment = normalizeWrongAnswerAssignment(targetProblem.assignment || null);
@@ -1765,9 +1765,9 @@ export default function AssignmentStatus() {
       setQuickWrongAnswerCandidates([]);
       setQuickWrongAnswerSearched(false);
       await loadStatus(weekId);
-      window.alert(`오답 기록 ${Number(index) + 1}이(가) 제출되었습니다.`);
+      window.alert(`질답 기록 ${Number(index) + 1}이(가) 제출되었습니다.`);
     } catch (e) {
-      setQuickWrongAnswerError(e?.message || '오답 기록 제출에 실패했습니다.');
+      setQuickWrongAnswerError(e?.message || '질답 기록 제출에 실패했습니다.');
     } finally {
       setQuickWrongAnswerSaving(false);
     }
@@ -2221,9 +2221,9 @@ export default function AssignmentStatus() {
         <div className="card p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
-              <div className="text-sm font-semibold text-brand-900">오답 배분하기</div>
+              <div className="text-sm font-semibold text-brand-900">질답 배분하기</div>
               <div className="text-xs text-slate-700">
-                질답 배정현황 상단에서 바로 오답 문제를 배정하고 수정할 수 있습니다.
+                질답 배정현황 상단에서 바로 질답 문제를 배정하고 수정할 수 있습니다.
               </div>
               {selectedQuickStudent ? (
                 <div className="mt-1 text-xs text-slate-600">
@@ -2290,7 +2290,7 @@ export default function AssignmentStatus() {
             </div>
           ) : quickWrongAnswerLoading ? (
             <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-sm text-slate-600">
-              오답 배분 정보를 불러오는 중...
+              질답 배분 정보를 불러오는 중...
             </div>
           ) : (
             <div className="mt-4 space-y-3">
@@ -2317,7 +2317,7 @@ export default function AssignmentStatus() {
                     ].join(' ')}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="text-sm font-semibold text-slate-900">오답 기록 {idx + 1}</div>
+                      <div className="text-sm font-semibold text-slate-900">질답 기록 {idx + 1}</div>
                       <div className="flex flex-wrap items-center justify-end gap-2">
                         <button
                           className={[
@@ -2555,7 +2555,7 @@ export default function AssignmentStatus() {
                 onClick={addQuickWrongAnswerProblem}
                 disabled={quickWrongAnswerSaving}
               >
-                + 오답 기록 추가
+                + 질답 기록 추가
               </button>
               {(Array.isArray(quickWrongAnswerDraft?.problems) ? quickWrongAnswerDraft.problems : []).length ? (
                 <div className="text-xs text-slate-600">
@@ -2841,18 +2841,6 @@ export default function AssignmentStatus() {
                 <div className="text-base font-semibold text-slate-900">{mentorGroup.mentor_name}</div>
                 <div className="text-xs text-slate-500 mt-0.5">총 {mentorGroup.items.length}건</div>
               </div>
-              <span
-                className={[
-                  'inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs',
-                  mentorGroup.mentor_role === 'mentor'
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                    : mentorGroup.mentor_role === 'lead'
-                      ? 'border-sky-200 bg-sky-50 text-sky-800'
-                      : 'border-slate-200 bg-slate-50 text-slate-700'
-                ].join(' ')}
-              >
-                {ROLE_LABEL[mentorGroup.mentor_role] || mentorGroup.mentor_role}
-              </span>
             </div>
 
             <div className="mt-3 space-y-2">
@@ -2879,7 +2867,7 @@ export default function AssignmentStatus() {
                       <div>
                         <div className="text-sm font-medium text-slate-900">
                           {item.external_id ? `${item.external_id} · ` : ''}
-                          {item.student_name || '-'}{item.student_grade ? ` · ${item.student_grade}` : ''} · 오답 기록 {problemOrder}
+                          {item.student_name || '-'}{item.student_grade ? ` · ${item.student_grade}` : ''} · 질답 기록 {problemOrder}
                         </div>
                         <div className="text-xs text-slate-600 mt-0.5">예정: {scheduleLabel(item)}</div>
                         {isClinicViewer ? (

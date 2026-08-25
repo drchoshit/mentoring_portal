@@ -1,4 +1,4 @@
-﻿// Mentoring.jsx (FULL REPLACEMENT)
+// Mentoring.jsx (FULL REPLACEMENT)
 // ?�번 반영: (1) 그라?�이???�거 + ?��? ?�색 ?�색 배경
 //          (2) ?�생 ?�보 ?�역 분리 ???�적/?�신 카드 ?�에 가로형 ?�력 �?//          (3) ?�드 모음: ?�드�??��? ?�성/목록 + ?�장/총괄/관리자 ??�� 버튼
 //          (4) 과제?�행???�력 ?�역 ?�이 = ?�옆 textarea 카드 ?�이?� ?�일
@@ -9,6 +9,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, use
 import { useParams, useSearchParams } from 'react-router-dom';
 import { API_BASE, api, getToken } from '../api.js';
 import { useAuth } from '../auth/AuthProvider.jsx';
+import WrongAnswerAssignment from './WrongAnswerAssignment.jsx';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_LABELS = { Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금', Sat: '토', Sun: '일' };
@@ -1533,7 +1534,7 @@ export default function Mentoring() {
     setShowWrongAnswerSection((prev) => {
       const next = !prev;
       if (next && typeof window !== 'undefined' && typeof window.alert === 'function') {
-        window.alert('오답 배분 섹션이 활성화되었습니다.');
+        window.alert('질답 배분 섹션이 활성화되었습니다.');
       }
       return next;
     });
@@ -1730,7 +1731,7 @@ export default function Mentoring() {
     if (!weekRecordId || !canEditA('e_wrong_answer_distribution')) return;
     setBusy(true);
     try {
-      confirmOrThrow('오답 배분 기록을 저장할까요?');
+      confirmOrThrow('질답 배분 기록을 저장할까요?');
       const payload = normalizeWrongAnswerDraftWithSummary(wrongAnswerDistributionDraft);
       await api(`/api/mentoring/week-record/${weekRecordId}`, {
         method: 'PUT',
@@ -1738,10 +1739,10 @@ export default function Mentoring() {
       });
       await loadAll();
       if (typeof window !== 'undefined' && typeof window.alert === 'function') {
-        window.alert('오답 배분이 완료되었습니다.');
+        window.alert('질답 배분이 완료되었습니다.');
       }
     } catch (e) {
-      if (e?.message !== '__CANCEL__') setError(e?.message || '오답 배분 저장에 실패했습니다.');
+      if (e?.message !== '__CANCEL__') setError(e?.message || '질답 배분 저장에 실패했습니다.');
     } finally {
       setBusy(false);
     }
@@ -1760,10 +1761,10 @@ export default function Mentoring() {
       collapseWrongAnswerProblem(index);
       setWrongAnswerSearched(false);
       if (typeof window !== 'undefined' && typeof window.alert === 'function') {
-        window.alert(`오답 기록 ${Number(index) + 1}이(가) 제출되었습니다.`);
+        window.alert(`질답 기록 ${Number(index) + 1}이(가) 제출되었습니다.`);
       }
     } catch (e) {
-      setError(e?.message || '오답 기록 제출에 실패했습니다.');
+      setError(e?.message || '질답 기록 제출에 실패했습니다.');
     } finally {
       setBusy(false);
     }
@@ -2050,9 +2051,6 @@ export default function Mentoring() {
     if (!mentorMode && canEditA('c_lead_weekly_feedback')) patch.c_lead_weekly_feedback = leadWeeklyDraft;
     if (!mentorMode && canEditA('c_director_commentary')) patch.c_director_commentary = directorCommentDraft;
     if (showClinicSection && canEditA('d_clinic_records')) patch.d_clinic_records = clinicEntriesDraft;
-    if (!mentorMode && canEditA('e_wrong_answer_distribution')) {
-      patch.e_wrong_answer_distribution = normalizeWrongAnswerDraftWithSummary(wrongAnswerDistributionDraft);
-    }
     if (Object.keys(patch).length) {
       await api(`/api/mentoring/week-record/${weekRecordId}`, { method: 'PUT', body: patch });
     }
@@ -2123,6 +2121,11 @@ export default function Mentoring() {
               <button className="btn-ghost" type="button" onClick={openPrintPage}>
                 인쇄
               </button>
+              {user?.role !== 'mentor' && canViewA('e_wrong_answer_distribution') ? (
+                <button className="btn-ghost" type="button" onClick={() => setShowWrongAnswerSection((value) => !value)}>
+                  {showWrongAnswerSection ? '질답 등록 닫기' : '질답 등록하기'}
+                </button>
+              ) : null}
               <button className="btn-ghost" onClick={loadAll}>
                 새로고침
               </button>
@@ -2166,10 +2169,14 @@ export default function Mentoring() {
         </GoldCard>
 
         {user?.role !== 'mentor' && canViewA('e_wrong_answer_distribution') && showWrongAnswerSection ? (
+          <WrongAnswerAssignment fixedStudentId={studentId} fixedWeekId={weekId} embedded onSubmitted={loadAll} />
+        ) : null}
+
+        {false && user?.role !== 'mentor' && canViewA('e_wrong_answer_distribution') && showWrongAnswerSection ? (
           <GoldCard className="p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-brand-900">오답 배분하기</div>
+                <div className="text-sm font-semibold text-brand-900">질답 배분하기</div>
                 <div className="text-xs text-slate-700">
                   학생이 어려워하는 문제를 기록하고, 학생 일정과 겹치는 멘토에게 배정합니다.
                 </div>
@@ -2209,7 +2216,7 @@ export default function Mentoring() {
                   ].join(' ')}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-sm font-semibold text-slate-900">오답 기록 {idx + 1}</div>
+                    <div className="text-sm font-semibold text-slate-900">질답 기록 {idx + 1}</div>
                     {canEditA('e_wrong_answer_distribution') && !parentMode ? (
                       <div className="flex flex-wrap items-center justify-end gap-2">
                         <button
@@ -2391,7 +2398,7 @@ export default function Mentoring() {
                   {showMentorPickerForProblem ? (
                     <div className="mt-4">
                       <div className="mb-2 text-xs text-slate-600">
-                        학생 일정과 10분 이상 겹치는 멘토를 최대한 많이 표시합니다. (대상: 오답 기록 {idx + 1})
+                        학생 일정과 10분 이상 겹치는 멘토를 최대한 많이 표시합니다. (대상: 질답 기록 {idx + 1})
                       </div>
                       {wrongAnswerCandidates.length ? (
                         <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white/70">
@@ -2474,7 +2481,7 @@ export default function Mentoring() {
                         <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-3">
                           <div className="text-sm font-semibold text-amber-900">리스트 외 멘토 강제 배정</div>
                           <div className="mt-1 text-xs text-amber-800">
-                            후보 리스트에 없어도 멘토 이름을 직접 입력해 오답 기록 {idx + 1}에 배정할 수 있습니다.
+                            후보 리스트에 없어도 멘토 이름을 직접 입력해 질답 기록 {idx + 1}에 배정할 수 있습니다.
                           </div>
                           <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
                             <div>
@@ -2532,7 +2539,7 @@ export default function Mentoring() {
 
               {canEditA('e_wrong_answer_distribution') && !parentMode ? (
                 <button className="btn-ghost text-brand-800" type="button" onClick={addWrongAnswerProblem}>
-                  + 오답 기록 추가
+                  + 질답 기록 추가
                 </button>
               ) : null}
             </div>
@@ -3126,7 +3133,7 @@ function WrongAnswerImageUploadModal({ loading, error, uploadUrl, problemIndex, 
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-base font-semibold text-slate-900">문제 이미지 업로드 QR</div>
-            <div className="text-xs text-slate-600">오답 기록 {Number(problemIndex) + 1}에 이미지가 저장됩니다.</div>
+            <div className="text-xs text-slate-600">질답 기록 {Number(problemIndex) + 1}에 이미지가 저장됩니다.</div>
           </div>
           <button className="btn-ghost" type="button" onClick={onClose}>
             닫기

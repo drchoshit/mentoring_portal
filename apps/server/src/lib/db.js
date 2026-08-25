@@ -1,4 +1,4 @@
-﻿// apps/server/src/lib/db.js
+// apps/server/src/lib/db.js
 // SQLite DB helper (better-sqlite3)
 
 import fs from 'node:fs';
@@ -1162,7 +1162,7 @@ function ensurePermissionAndConfigTables() {
     { key: 'c_lead_weekly_feedback', label: '주간 총괄멘토 피드백', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
     { key: 'c_director_commentary', label: '원장 코멘터리', view: ['director', 'lead', 'admin'], edit: ['director'], parent: 0 },
     { key: 'd_clinic_records', label: '클리닉 섹션', view: ['director', 'lead', 'mentor', 'admin', 'parent'], edit: ['director', 'lead', 'mentor', 'admin'], parent: 1 },
-    { key: 'e_wrong_answer_distribution', label: '오답 배분하기', view: ['director', 'lead', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
+    { key: 'e_wrong_answer_distribution', label: '질답 배분하기', view: ['director', 'lead', 'admin', 'parent'], edit: ['director', 'lead', 'admin'], parent: 1 },
     { key: 'scores_json', label: '점수/성적', view: ['director', 'lead', 'admin'], edit: ['director'], parent: 0 }
   ];
 
@@ -1210,7 +1210,7 @@ function ensurePermissionAndConfigTables() {
         updated_at = datetime('now')
       WHERE field_key = ?
     `).run(
-      '오답 배분하기',
+      '질답 배분하기',
       JSON.stringify(['director', 'lead', 'admin', 'parent']),
       JSON.stringify(['director', 'lead', 'admin']),
       1,

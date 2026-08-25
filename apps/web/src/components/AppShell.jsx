@@ -36,9 +36,9 @@ export default function AppShell({ children }) {
   const menu = [];
   if (role !== 'parent') {
     menu.push({ to: '/', label: role === 'lead' ? '오늘 멘토링' : role === 'mentor' ? '오늘 질답' : '피드' });
-    menu.push({ to: '/students', label: '학생' });
+    if (role !== 'mentor') menu.push({ to: '/students', label: '학생' });
     if (['director', 'lead', 'admin'].includes(role)) {
-      menu.push({ to: '/wrong-answer-assignment', label: '오답 배정' });
+      menu.push({ to: '/wrong-answer-assignment', label: '질답 배정' });
     }
     if (role !== 'mentor') menu.push({ to: '/assignment-status', label: '질답 배정 현황' });
     if (['director', 'admin'].includes(role)) {
@@ -66,7 +66,7 @@ export default function AppShell({ children }) {
 
           <div className="flex items-center gap-3 text-sm">
             <div className="text-slate-700">
-              {user?.display_name} ({ROLE_LABEL[role] || role})
+              {role === 'mentor' ? '클리닉 멘토' : `${user?.display_name} (${ROLE_LABEL[role] || role})`}
             </div>
             <button className="btn-ghost !border-0" onClick={logout}>
               로그아웃
