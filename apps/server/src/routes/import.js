@@ -399,6 +399,7 @@ function normalizeMentorInfoPayload(payload) {
         mentor_id: mentorId || '',
         name: name || mentorId || '미지정 멘토',
         role: normalizeRole(base.role || base.mentor_role || base.mentorRole || base.type, roleHint),
+        note: '',
         subjects: [],
         schedule: emptyScheduleMap()
       };
@@ -407,6 +408,8 @@ function normalizeMentorInfoPayload(payload) {
 
     if (!cur.mentor_id && mentorId) cur.mentor_id = mentorId;
     if ((!cur.name || cur.name === cur.mentor_id) && name) cur.name = name;
+    const note = String(base.note ?? base.memo ?? base.remark ?? base.remarks ?? '').trim();
+    if (note) cur.note = note;
     if (cur.role !== 'director') {
       const nextRole = normalizeRole(base.role || base.mentor_role || base.mentorRole || base.type, roleHint);
       if (nextRole === 'director' || (nextRole === 'lead' && cur.role !== 'director')) cur.role = nextRole;
@@ -464,6 +467,7 @@ function normalizeMentorInfoPayload(payload) {
       mentor_id: mentor.mentor_id || '',
       name: mentor.name || mentor.mentor_id || '미지정 멘토',
       role: mentor.role || 'mentor',
+      note: String(mentor.note || '').trim(),
       subjects: uniqueStrings(mentor.subjects || []),
       schedule: normalizeSchedule(mentor.schedule)
     }))

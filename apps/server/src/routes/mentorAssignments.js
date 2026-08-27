@@ -86,6 +86,70 @@ function saveAssignments(db, payload) {
   ).run('mentor_assignments', JSON.stringify(payload));
 }
 
+function syncClinicMentorInfo(db, state) {
+  const byDay = state?.clinicMentorsByDay;
+  if (!byDay || typeof byDay !== 'object') return 0;
+
+  const dayAliases = {
+    '월': 'Mon', '화': 'Tue', '수': 'Wed', '목': 'Thu', '금': 'Fri', '토': 'Sat', '일': 'Sun',
+    Mon: 'Mon', Tue: 'Tue', Wed: 'Wed', Thu: 'Thu', Fri: 'Fri', Sat: 'Sat', Sun: 'Sun'
+  };
+  const clinicByName = new Map();
+  for (const [rawDay, rows] of Object.entries(byDay)) {
+    const day = dayAliases[String(rawDay || '').trim()];
+    if (!day || !Array.isArray(rows)) continue;
+    for (const row of rows) {
+      const name = String(row?.name || '').trim();
+      if (!name) continue;
+      let mentor = clinicByName.get(name);
+      if (!mentor) {
+        mentor = {
+          mentor_id: '',
+          name,
+          role: 'mentor',
+          note: '',
+          subjects: [],
+          schedule: { Mon: [], Tue: [], Wed: [], Thu: [], Fri: [], Sat: [], Sun: [] }
+        };
+        clinicByName.set(name, mentor);
+      }
+      const note = String(row?.note || '').trim();
+      if (note) mentor.note = note;
+      const time = String(row?.time || '').trim();
+      if (time && !mentor.schedule[day].some((item) => item.time === time)) {
+        mentor.schedule[day].push({ time, title: '클리닉 멘토 근무', type: 'mentor' });
+      }
+    }
+  }
+  if (!clinicByName.size) return 0;
+
+  ensureAppSettingsTable(db);
+  const existingRow = db.prepare('SELECT value_json FROM app_settings WHERE key=?').get('mentor_info');
+  let existing = {};
+  try { existing = JSON.parse(existingRow?.value_json || '{}'); } catch { existing = {}; }
+  const existingMentors = Array.isArray(existing?.mentors) ? existing.mentors : [];
+  const retained = existingMentors.filter((mentor) => String(mentor?.role || 'mentor') !== 'mentor');
+  for (const mentor of clinicByName.values()) {
+    const previous = existingMentors.find((item) =>
+      String(item?.role || 'mentor') === 'mentor' && String(item?.name || '').trim() === mentor.name
+    );
+    if (previous) {
+      mentor.mentor_id = String(previous.mentor_id || '').trim();
+      mentor.subjects = Array.isArray(previous.subjects) ? previous.subjects : [];
+    }
+  }
+  const normalized = {
+    updatedAt: new Date().toISOString(),
+    mentors: [...retained, ...clinicByName.values()]
+  };
+  db.prepare(`
+    INSERT INTO app_settings (key, value_json, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=datetime('now')
+  `).run('mentor_info', JSON.stringify(normalized));
+  return clinicByName.size;
+}
+
 function parsePayload(payload) {
   if (!payload) return null;
   if (Array.isArray(payload)) return { students: payload };
@@ -890,6 +954,7 @@ async function pullMediWeeklyAssignments(db) {
       throw error;
     }
     const state = snapshot?.state || {};
+    syncClinicMentorInfo(db, state);
     const periodId = firstNonEmptyText(state.selectedPeriod, state.currentPeriodId, state.periods?.[state.periods.length - 1]?.id);
     if (!periodId || !Array.isArray(state.students)) throw new Error('메디위클리의 현재 배정 회차를 찾지 못했습니다.');
 

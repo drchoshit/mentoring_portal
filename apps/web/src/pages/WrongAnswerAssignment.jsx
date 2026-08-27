@@ -180,6 +180,7 @@ function buildMentorCards(mentorInfo, studentSchedule, week) {
       return {
         id: String(mentor?.mentor_id || mentor?.id || mentor?.name || '').trim(),
         name: String(mentor?.name || mentor?.display_name || mentor?.mentor_id || '').trim(),
+        note: String(mentor?.note || '').trim(),
         role: 'mentor', subjects: Array.isArray(mentor?.subjects) ? mentor.subjects : [],
         work, overlaps, total
       };
@@ -735,8 +736,9 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
                     </div>
                     <div className="mt-3 rounded-xl border border-dashed border-slate-200 px-3 py-2 text-xs">
                       {mentor.overlaps.length ? (
-                        <><b className="text-emerald-700">겹치는 시간 {mentor.total}분</b><div className="mt-1 text-slate-600">{mentor.overlaps.slice(0, 2).map((item) => `${item.dayLabel} ${item.date?.label || ''} · 학생 ${item.studentTime} / 멘토 ${item.mentorTime}`).join(' · ')}</div></>
+                        <b className="text-emerald-700">겹치는 시간 {mentor.total}분</b>
                       ) : <span className="font-semibold text-rose-600">학생의 센터 재원 시간과 겹치지 않습니다.</span>}
+                      <div className="mt-1 text-slate-600"><b className="text-slate-700">선택과목</b> · {mentor.note || '미등록'}</div>
                     </div>
                   </button>
                 );
