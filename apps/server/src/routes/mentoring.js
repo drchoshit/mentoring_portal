@@ -3,6 +3,7 @@ import { canEditField, filterObjectByView } from '../lib/permissions.js';
 import { writeAudit } from '../lib/audit.js';
 import { signWrongAnswerUploadToken } from '../lib/problemUploadToken.js';
 import { canEditScoreProfile, canViewScoreProfile, sanitizeStudentForRole } from '../lib/studentProfile.js';
+import { refreshMediWeeklyMentorInfo } from './mentorAssignments.js';
 
 function normalizeMentorIdentity(value) {
   return String(value || '')
@@ -908,7 +909,7 @@ export default function mentoringRoutes(db) {
     });
   });
 
-  router.get('/record', (req, res) => {
+  router.get('/record', async (req, res) => {
     const student_id = Number(req.query.studentId);
     const week_id = Number(req.query.weekId);
     if (!student_id || !week_id) return res.status(400).json({ error: 'Missing studentId/weekId' });
@@ -967,6 +968,13 @@ export default function mentoringRoutes(db) {
       }));
 
     const weekRecord = db.prepare('SELECT * FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
+    if (req.user.role !== 'parent') {
+      try {
+        await refreshMediWeeklyMentorInfo(db);
+      } catch (error) {
+        console.error('[mentoring] clinic mentor info refresh failed:', error);
+      }
+    }
     const mentorInfo = getMentorInfoSetting(db);
     const curriculumUpdate = db.prepare(
       `SELECT MAX(curriculum_updated_at) AS updated_at

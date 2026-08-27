@@ -1039,6 +1039,14 @@ async function pullMediWeeklyAssignments(db) {
   }
 }
 
+export async function refreshMediWeeklyMentorInfo(db) {
+  if (liveSyncPromise) {
+    await liveSyncPromise;
+    return { configured: true, updated: false, error: mediWeeklyLastError };
+  }
+  return pullMediWeeklyAssignments(db);
+}
+
 async function syncLiveSources(db, { force = false } = {}) {
   if (liveSyncPromise) return liveSyncPromise;
   if (force) {
