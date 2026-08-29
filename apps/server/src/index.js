@@ -42,7 +42,7 @@ const PRIMARY_DB_PATH = (() => {
 const BACKUP_DIR = process.env.BACKUP_DIR
   ? (path.isAbsolute(process.env.BACKUP_DIR) ? process.env.BACKUP_DIR : path.resolve(process.cwd(), process.env.BACKUP_DIR))
   : path.join(path.dirname(PRIMARY_DB_PATH), 'backups');
-const BACKUP_KEEP_MAX = Math.max(1, Number(process.env.BACKUP_KEEP_MAX || 15));
+const BACKUP_KEEP_MAX = Math.max(1, Number(process.env.BACKUP_KEEP_MAX || 3));
 const BACKUP_MIN_HEADROOM_BYTES = Math.max(
   32 * 1024 * 1024,
   Number(process.env.BACKUP_MIN_HEADROOM_BYTES || 64 * 1024 * 1024)
@@ -120,9 +120,14 @@ function getStorageHealth() {
   const fileSize = (filePath) => {
     try { return Number(fs.statSync(filePath).size || 0); } catch { return 0; }
   };
+  const pageSize = Number(db.pragma('page_size', { simple: true }) || 0);
+  const pageCount = Number(db.pragma('page_count', { simple: true }) || 0);
+  const freePageCount = Number(db.pragma('freelist_count', { simple: true }) || 0);
   return {
     free_bytes: getDiskFreeBytes(BACKUP_DIR),
     database_bytes: fileSize(DB_PATH),
+    database_page_bytes: pageSize * pageCount,
+    database_reclaimable_bytes: pageSize * freePageCount,
     backup_count: backupFiles.length,
     backup_bytes: backupFiles.reduce((sum, file) => sum + fileSize(path.join(BACKUP_DIR, file)), 0),
     backup_keep_max: BACKUP_KEEP_MAX

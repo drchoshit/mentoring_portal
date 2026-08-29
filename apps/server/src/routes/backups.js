@@ -161,7 +161,7 @@ export default function backupRoutes(db) {
   const FORENSIC_DIR = FORENSIC_DIRS[0];
   const FORENSIC_SCRIPT_PATH = resolveForensicScriptPath();
   const FORENSIC_TIMEOUT_MS = Math.max(15000, Number(process.env.FORENSIC_TIMEOUT_MS || 120000));
-  const BACKUP_KEEP_MAX = Math.max(1, Number(process.env.BACKUP_KEEP_MAX || 15));
+  const BACKUP_KEEP_MAX = Math.max(1, Number(process.env.BACKUP_KEEP_MAX || 3));
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
   if (FORENSIC_DIR && !fs.existsSync(FORENSIC_DIR)) fs.mkdirSync(FORENSIC_DIR, { recursive: true });
 
