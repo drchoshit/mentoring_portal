@@ -193,9 +193,11 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
+let startupProblemImageCleanup = { status: 'pending' };
 app.get('/api/health', (req, res) => res.json({
   ok: true,
-  release: String(process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null
+  release: String(process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
+  problem_image_cleanup: startupProblemImageCleanup
 }));
 app.use('/uploads/problem-images', express.static(PROBLEM_IMAGE_DIR));
 app.use('/api/problem-upload', problemUploadRoutes(db));
@@ -203,6 +205,7 @@ app.use('/api/mentor-briefings', mentorBriefingsRoutes(db));
 
 try {
   const cleanup = cleanupOldProblemImages(db);
+  startupProblemImageCleanup = { status: 'ok', ...cleanup };
   if (cleanup.deleted_wrong_answer_images > 0) {
     console.log(
       `[startup] Removed ${cleanup.deleted_wrong_answer_images} problem image(s) ` +
@@ -210,6 +213,7 @@ try {
     );
   }
 } catch (error) {
+  startupProblemImageCleanup = { status: 'failed' };
   console.error(`[startup] Problem image retention cleanup failed: ${String(error?.message || error)}`);
 }
 
