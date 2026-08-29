@@ -44,6 +44,10 @@ services:
         value: 60000
       - key: LIVE_SYNC_TIMEOUT_MS
         value: 20000
+      - key: PROBLEM_IMAGE_KEEP_RECENT_WEEKS
+        value: 8
+      - key: BACKUP_KEEP_MAX
+        value: 3
     disk:
       name: mentoring-data
       mountPath: /var/data

@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import crypto from 'crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { verifyWrongAnswerUploadToken } from '../lib/problemUploadToken.js';
@@ -13,9 +14,18 @@ const MIN_FREE_BYTES_BEFORE_UPLOAD = Math.max(
   32 * 1024 * 1024,
   Number(process.env.MIN_FREE_BYTES_BEFORE_IMAGE_UPLOAD || 128 * 1024 * 1024)
 );
+const PROBLEM_UPLOAD_TMP_DIR = path.join(os.tmpdir(), 'mentoring-problem-uploads');
+fs.mkdirSync(PROBLEM_UPLOAD_TMP_DIR, { recursive: true });
 
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination(req, file, cb) {
+      cb(null, PROBLEM_UPLOAD_TMP_DIR);
+    },
+    filename(req, file, cb) {
+      cb(null, `problem-${Date.now()}-${crypto.randomBytes(8).toString('hex')}.upload`);
+    }
+  }),
   limits: { fileSize: MAX_FILE_SIZE, files: MAX_IMAGE_COUNT },
   fileFilter(req, file, cb) {
     const mime = String(file?.mimetype || '').toLowerCase();
@@ -23,6 +33,14 @@ const upload = multer({
     cb(null, true);
   }
 });
+
+function cleanupUploadedFiles(files) {
+  for (const file of Array.isArray(files) ? files : []) {
+    const filePath = String(file?.path || '').trim();
+    if (!filePath) continue;
+    try { fs.unlinkSync(filePath); } catch {}
+  }
+}
 
 function ensureWrongAnswerImagesTable(db) {
   db.exec(`
@@ -361,6 +379,9 @@ export default function problemUploadRoutes(db) {
 
   router.post('/mobile/submit', (req, res) => {
     upload.array('images', MAX_IMAGE_COUNT)(req, res, (err) => {
+      const cleanup = () => cleanupUploadedFiles(req.files);
+      res.once('finish', cleanup);
+      res.once('close', cleanup);
       if (err) {
         return res.status(400).json({ error: err?.message || '파일 업로드에 실패했습니다.' });
       }
@@ -416,7 +437,7 @@ export default function problemUploadRoutes(db) {
             String(file.originalname || '').trim(),
             String(file.mimetype || '').trim(),
             Number(file.size || 0),
-            file.buffer
+            fs.readFileSync(file.path)
           );
 
           uploaded.push({

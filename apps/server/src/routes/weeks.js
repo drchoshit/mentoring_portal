@@ -1,38 +1,7 @@
 import express from 'express';
 import { requireRole } from '../lib/auth.js';
 import { writeAudit } from '../lib/audit.js';
-
-const ASSIGNMENT_KEEP_RECENT_WEEKS = Math.max(
-  1,
-  Number(process.env.ASSIGNMENT_KEEP_RECENT_WEEKS || 3)
-);
-
-function cleanupOldAssignmentHistory(db, keepRecentWeeks = ASSIGNMENT_KEEP_RECENT_WEEKS) {
-  const keepCount = Math.max(1, Number(keepRecentWeeks || 3));
-  const keepRows = db
-    .prepare('SELECT id FROM weeks ORDER BY id DESC LIMIT ?')
-    .all(keepCount);
-  const keepIds = keepRows
-    .map((row) => Number(row?.id || 0))
-    .filter((id) => Number.isInteger(id) && id > 0);
-
-  if (!keepIds.length) {
-    return {
-      keep_week_ids: [],
-      cleared_week_records: 0,
-      deleted_wrong_answer_images: 0,
-      preserved: true
-    };
-  }
-
-  return {
-    keep_week_ids: keepIds,
-    cleared_week_records: 0,
-    deleted_wrong_answer_images: 0,
-    preserved: true,
-    note: '멘토링 기록 보존 정책에 따라 회차 추가 시 과거 질답 배분 기록과 이미지를 삭제하지 않습니다.'
-  };
-}
+import { cleanupOldProblemImages } from '../lib/problemImageRetention.js';
 
 export default function weekRoutes(db) {
   const router = express.Router();
@@ -65,7 +34,7 @@ export default function weekRoutes(db) {
           `
         ).run(newWeekId, prevWeek.id);
       }
-      const cleanupResult = cleanupOldAssignmentHistory(db, ASSIGNMENT_KEEP_RECENT_WEEKS);
+      const cleanupResult = cleanupOldProblemImages(db);
       writeAudit(db, {
         user_id: req.user.id,
         action: 'create',

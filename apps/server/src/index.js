@@ -7,6 +7,7 @@ import fs from 'fs';
 import db, { initDb, dbFilePath } from './lib/db.js';
 import { requireAuth, requireStudentSyncAuth } from './lib/auth.js';
 import { createAtomicSqliteBackup } from './lib/safeBackup.js';
+import { cleanupOldProblemImages } from './lib/problemImageRetention.js';
 
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
@@ -196,6 +197,18 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 app.use('/uploads/problem-images', express.static(PROBLEM_IMAGE_DIR));
 app.use('/api/problem-upload', problemUploadRoutes(db));
 app.use('/api/mentor-briefings', mentorBriefingsRoutes(db));
+
+try {
+  const cleanup = cleanupOldProblemImages(db);
+  if (cleanup.deleted_wrong_answer_images > 0) {
+    console.log(
+      `[startup] Removed ${cleanup.deleted_wrong_answer_images} problem image(s) ` +
+      `(${formatBytes(cleanup.deleted_image_bytes)}) outside the latest ${cleanup.keep_recent_weeks} weeks.`
+    );
+  }
+} catch (error) {
+  console.error(`[startup] Problem image retention cleanup failed: ${String(error?.message || error)}`);
+}
 
 app.use('/api/auth', authRoutes(db));
 app.use('/api/users', requireAuth(db), userRoutes(db));
