@@ -115,6 +115,20 @@ function formatBytes(bytes) {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function getStorageHealth() {
+  const backupFiles = listBackupFiles();
+  const fileSize = (filePath) => {
+    try { return Number(fs.statSync(filePath).size || 0); } catch { return 0; }
+  };
+  return {
+    free_bytes: getDiskFreeBytes(BACKUP_DIR),
+    database_bytes: fileSize(DB_PATH),
+    backup_count: backupFiles.length,
+    backup_bytes: backupFiles.reduce((sum, file) => sum + fileSize(path.join(BACKUP_DIR, file)), 0),
+    backup_keep_max: BACKUP_KEEP_MAX
+  };
+}
+
 function resolveBackupSourceCandidates() {
   const candidates = Array.from(new Set([DB_PATH, PRIMARY_DB_PATH].filter(Boolean))).filter((p) => {
     try {
@@ -197,7 +211,8 @@ let startupProblemImageCleanup = { status: 'pending' };
 app.get('/api/health', (req, res) => res.json({
   ok: true,
   release: String(process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
-  problem_image_cleanup: startupProblemImageCleanup
+  problem_image_cleanup: startupProblemImageCleanup,
+  storage: getStorageHealth()
 }));
 app.use('/uploads/problem-images', express.static(PROBLEM_IMAGE_DIR));
 app.use('/api/problem-upload', problemUploadRoutes(db));
