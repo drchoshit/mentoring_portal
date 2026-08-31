@@ -1217,8 +1217,8 @@ export default function AssignmentStatus() {
   });
   const mentorSectionRefs = useRef(new Map());
   const isDirector = viewer?.role === 'director';
-  const canEditAssignment = ['director', 'lead'].includes(String(viewer?.role || '').trim());
-  const canUpdateState = ['director', 'admin', 'mentor'].includes(String(viewer?.role || '').trim());
+  const canEditAssignment = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
+  const canUpdateState = ['director', 'lead', 'admin', 'mentor'].includes(String(viewer?.role || '').trim());
   const canIssueBriefing = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
   const canUseQuickWrongAnswer = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
 
@@ -2896,25 +2896,18 @@ export default function AssignmentStatus() {
                         ) : null}
                         <div className="text-[11px] text-slate-500">배정일시: {fmtDateTime(item.assigned_at)}</div>
                         {canUpdateState ? (
-                          <>
-                            <button
-                              type="button"
-                              className={status === 'done' || isDoneEditing ? 'btn-primary h-8 px-2.5 text-xs' : 'btn-ghost h-8 px-2.5 text-xs'}
-                              disabled={isStateSaving || savingKey === rowKey}
-                              onClick={() => void markProblemDone(item)}
-                            >
-                              완료
-                            </button>
-                          </>
-                        ) : null}
-                        {isDirector ? (
                           <button
                             type="button"
-                            className="btn-ghost h-8 px-2.5 text-xs text-rose-700 border-rose-200 hover:border-rose-300 hover:text-rose-800"
+                            className={[
+                              'inline-flex h-8 min-w-[54px] items-center justify-center rounded-lg border px-3 text-xs font-bold shadow-sm transition',
+                              status === 'done' || isDoneEditing
+                                ? 'border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700'
+                                : 'border-emerald-300 bg-white text-emerald-700 hover:border-emerald-500 hover:bg-emerald-50'
+                            ].join(' ')}
                             disabled={isStateSaving || savingKey === rowKey}
-                            onClick={() => void deleteProblemItem(item)}
+                            onClick={() => void markProblemDone(item)}
                           >
-                            삭제
+                            완료
                           </button>
                         ) : null}
                         {canEditAssignment ? (
@@ -2922,21 +2915,31 @@ export default function AssignmentStatus() {
                             <>
                               <button
                                 type="button"
-                                className="btn-primary h-8 px-2.5 text-xs"
+                                className="inline-flex h-8 min-w-[54px] items-center justify-center rounded-lg border border-blue-700 bg-blue-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-55"
                                 disabled={savingKey === rowKey}
                                 onClick={() => void saveEdit(item)}
                               >
                                 {savingKey === rowKey ? '저장 중...' : '저장'}
                               </button>
-                              <button type="button" className="btn-ghost h-8 px-2.5 text-xs" onClick={cancelEdit}>
+                              <button type="button" className="inline-flex h-8 min-w-[54px] items-center justify-center rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50" onClick={cancelEdit}>
                                 취소
                               </button>
                             </>
                           ) : (
-                            <button type="button" className="btn-ghost h-8 px-2.5 text-xs" onClick={() => beginEdit(item)}>
+                            <button type="button" className="inline-flex h-8 min-w-[54px] items-center justify-center rounded-lg border border-blue-300 bg-white px-3 text-xs font-bold text-blue-700 shadow-sm transition hover:border-blue-500 hover:bg-blue-50" onClick={() => beginEdit(item)}>
                               수정
                             </button>
                           )
+                        ) : null}
+                        {isDirector ? (
+                          <button
+                            type="button"
+                            className="inline-flex h-8 min-w-[54px] items-center justify-center rounded-lg border border-rose-200 bg-white px-3 text-xs font-bold text-rose-700 shadow-sm transition hover:border-rose-400 hover:bg-rose-50"
+                            disabled={isStateSaving || savingKey === rowKey}
+                            onClick={() => void deleteProblemItem(item)}
+                          >
+                            삭제
+                          </button>
                         ) : null}
                       </div>
                     </div>

@@ -1514,13 +1514,13 @@ export default function mentoringRoutes(db) {
       currentProblem.assignment || (problemIndex === 0 ? dist.assignment : null)
     );
     const actorRole = String(req.user.role || '').trim();
-    const canManageAll = actorRole === 'director' || actorRole === 'admin';
+    const canManageAll = actorRole === 'director' || actorRole === 'lead' || actorRole === 'admin';
     const actingMentorName = String(req.body?.acting_mentor_name || '').trim();
     const isSharedClinicAccountAction = actorRole === 'mentor'
       && actingMentorName
       && normalizeMentorIdentity(actingMentorName) === normalizeMentorIdentity(currentAssignment?.mentor_name);
     if (!canManageAll && !isSharedClinicAccountAction) {
-      return res.status(403).json({ error: '배정된 클리닉 멘토 또는 관리자만 처리 상태를 수정할 수 있습니다.' });
+      return res.status(403).json({ error: '배정된 클리닉 멘토 또는 운영 계정만 처리 상태를 수정할 수 있습니다.' });
     }
     const nowIso = new Date().toISOString();
     const updaterRole = String(req.user.role || '').trim();
