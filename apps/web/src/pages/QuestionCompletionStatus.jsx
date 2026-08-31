@@ -116,24 +116,25 @@ export default function QuestionCompletionStatus() {
     setError('');
     setMessage('');
     try {
-      const result = await api(`/api/mentoring/assignment-status/${encodeURIComponent(item.week_record_id)}`, {
+      await api(`/api/mentoring/assignment-status/${encodeURIComponent(item.week_record_id)}`, {
         method: 'PUT',
         body: {
           problem_index: Number(item.problem_index || 0),
           mentor_id: targetMentor,
           mentor_name: targetMentor,
-          mentor_role: 'mentor',
-          move_to_latest_week: true
+          mentor_role: 'mentor'
         }
       });
+      if (item.completion_status !== 'pending') {
+        await api(`/api/mentoring/assignment-status/${encodeURIComponent(item.week_record_id)}/problem-state`, {
+          method: 'PUT',
+          body: { problem_index: Number(item.problem_index || 0), completion_status: 'pending' }
+        });
+      }
       setReassignKey('');
       setTargetMentor('');
-      const movedWeekId = String(result?.target_week_id || weekId);
-      const movedWeek = weeks.find((week) => String(week.id) === movedWeekId);
-      setWeekId(movedWeekId);
-      setSearchParams({ week: movedWeekId }, { replace: true });
-      setMessage(`${item.student_name} 학생의 질문을 ${targetMentor} 멘토의 ${String(movedWeek?.label || '최신 회차').replace(/주차/g, '회차')}로 재배정했습니다.`);
-      await load(movedWeekId, { quiet: true });
+      setMessage(`${item.student_name} 학생의 질문을 ${targetMentor} 멘토에게 재배정했습니다.`);
+      await load(weekId, { quiet: true });
     } catch (err) {
       setError(err?.message || '질문 재배정에 실패했습니다.');
     } finally {
