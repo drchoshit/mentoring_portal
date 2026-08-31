@@ -113,54 +113,6 @@ function normalizeNumberText(value) {
   return String(value || '').replace(/\D/g, '');
 }
 
-function buildDateTimeInputValue(month, day, time) {
-  const m = Number(month);
-  const d = Number(day);
-  const t = String(time || '').trim();
-  if (!Number.isInteger(m) || !Number.isInteger(d)) return '';
-  if (m < 1 || m > 12 || d < 1 || d > 31) return '';
-  if (!/^\d{1,2}:\d{2}$/.test(t)) return '';
-  const currentYear = new Date().getFullYear();
-  return `${currentYear}-${toPadded2(m)}-${toPadded2(d)}T${t}`;
-}
-
-function parseDateTimeInput(value) {
-  const raw = String(value || '').trim();
-  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    !Number.isInteger(hour) ||
-    !Number.isInteger(minute)
-  ) {
-    return null;
-  }
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-  const date = new Date(year, month - 1, day);
-  if (
-    date.getFullYear() !== year ||
-    date.getMonth() !== month - 1 ||
-    date.getDate() !== day
-  ) {
-    return null;
-  }
-  return {
-    year,
-    month,
-    day,
-    time: `${toPadded2(hour)}:${toPadded2(minute)}`,
-    dayLabel: JS_DAY_TO_KO[date.getDay()] || ''
-  };
-}
-
 function scheduleSortValue(item) {
   const month = Number(item?.session_month || 0);
   const day = Number(item?.session_day || 0);
@@ -551,6 +503,44 @@ function normalizeMentorInfo(value) {
       }))
       .filter((mentor) => mentor.name || mentor.mentor_id)
   };
+}
+
+function mentorWorkDayLabels(mentorInfo, mentorName) {
+  const mentorKey = normalizeMentorNameKey(mentorName);
+  if (!mentorKey) return [];
+  const mentor = (Array.isArray(mentorInfo?.mentors) ? mentorInfo.mentors : []).find((item) => (
+    normalizeMentorNameKey(item?.name || item?.mentor_id) === mentorKey
+  ));
+  if (!mentor) return [];
+  return CALENDAR_DAYS
+    .filter((day) => Array.isArray(mentor?.schedule?.[day]) && mentor.schedule[day].length > 0)
+    .map((day) => CALENDAR_DAY_LABELS[day])
+    .filter(Boolean);
+}
+
+function automaticMentorWorkDay(mentorInfo, mentorName, currentDay = '') {
+  const workDays = mentorWorkDayLabels(mentorInfo, mentorName);
+  const normalizedCurrent = String(currentDay || '').trim();
+  if (normalizedCurrent && workDays.includes(normalizedCurrent)) return normalizedCurrent;
+  return workDays[0] || normalizedCurrent;
+}
+
+function datePartsForWeekDay(week, dayLabel) {
+  const start = parseDateOnly(week?.start_date);
+  const end = parseDateOnly(week?.end_date);
+  const targetDay = String(dayLabel || '').trim();
+  if (!start || !end || !targetDay) return null;
+  const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  while (cursor.getTime() <= end.getTime()) {
+    if (JS_DAY_TO_KO[cursor.getDay()] === targetDay) {
+      return {
+        month: String(cursor.getMonth() + 1),
+        day: String(cursor.getDate())
+      };
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return null;
 }
 
 function classifySchedule(item) {
@@ -1182,9 +1172,7 @@ export default function AssignmentStatus() {
     session_day_label: '',
     session_month: '',
     session_day: '',
-    session_start_time: '',
-    session_datetime: '',
-    session_duration_minutes: 20
+    session_start_time: ''
   });
   const [students, setStudents] = useState([]);
   const [quickStudentId, setQuickStudentId] = useState('');
@@ -1307,15 +1295,20 @@ export default function AssignmentStatus() {
     const sessionMonth = String(item.session_month || '').trim();
     const sessionDay = String(item.session_day || '').trim();
     const sessionStartTime = String(item.session_start_time || '').trim();
+    const mentorName = String(item.mentor_name || '').trim();
+    const automaticDay = automaticMentorWorkDay(
+      statusMentorInfo,
+      mentorName,
+      String(item.session_day_label || item.day_label || '').trim()
+    );
+    const automaticDate = datePartsForWeekDay(selectedWeek, automaticDay);
     setEditForm({
-      mentor_name: String(item.mentor_name || '').trim(),
+      mentor_name: mentorName,
       mentor_role: String(item.mentor_role || 'mentor').trim() || 'mentor',
-      session_day_label: String(item.session_day_label || item.day_label || '').trim(),
-      session_month: sessionMonth,
-      session_day: sessionDay,
-      session_start_time: sessionStartTime,
-      session_datetime: buildDateTimeInputValue(sessionMonth, sessionDay, sessionStartTime),
-      session_duration_minutes: Math.max(5, Math.min(240, Number(item.session_duration_minutes || 20) || 20))
+      session_day_label: automaticDay,
+      session_month: automaticDate?.month || sessionMonth,
+      session_day: automaticDate?.day || sessionDay,
+      session_start_time: sessionStartTime
     });
   }
 
@@ -1340,10 +1333,7 @@ export default function AssignmentStatus() {
           session_month: String(editForm.session_month || '').replace(/\D/g, '').slice(0, 2),
           session_day: String(editForm.session_day || '').replace(/\D/g, '').slice(0, 2),
           session_start_time: String(editForm.session_start_time || '').trim(),
-          session_duration_minutes: Math.max(
-            5,
-            Math.min(240, Number(editForm.session_duration_minutes || 20) || 20)
-          )
+          session_duration_minutes: 15
         }
       });
       await loadStatus(weekId);
@@ -2850,6 +2840,9 @@ export default function AssignmentStatus() {
                 const isEditing = canEditAssignment && editingKey === rowKey;
                 const isDoneEditing = doneEditKey === rowKey;
                 const isStateSaving = stateSavingKey === rowKey;
+                const editingMentorWorkDays = isEditing
+                  ? mentorWorkDayLabels(statusMentorInfo, editForm.mentor_name)
+                  : [];
                 const status = normalizeCompletionStatus(item?.completion_status);
                 const completionFeedback = String(item?.completion_feedback || '').trim();
                 const isOverdue = isAssignmentOverdue(item, selectedWeek);
@@ -2946,95 +2939,49 @@ export default function AssignmentStatus() {
 
                     {isEditing ? (
                       <div className="mt-2 grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 md:grid-cols-6">
-                        <div className="md:col-span-2">
+                        <div className="md:col-span-3">
                           <div className="text-[11px] text-slate-500">멘토 이름</div>
-                          <input
+                          <select
                             className="input mt-1 h-8"
                             value={editForm.mentor_name}
-                            onChange={(e) => setEditForm((prev) => ({ ...prev, mentor_name: e.target.value }))}
-                          />
-                        </div>
-                        <div className="md:col-span-2">
-                          <div className="text-[11px] text-slate-500">일정 (날짜/시간)</div>
-                          <input
-                            className="input mt-1 h-8"
-                            type="datetime-local"
-                            value={editForm.session_datetime || ''}
                             onChange={(e) => {
-                              const nextDateTime = String(e.target.value || '');
-                              if (!nextDateTime) {
-                                setEditForm((prev) => ({
-                                  ...prev,
-                                  session_datetime: '',
-                                  session_month: '',
-                                  session_day: '',
-                                  session_start_time: '',
-                                  session_day_label: ''
-                                }));
-                                return;
-                              }
-                              const parsed = parseDateTimeInput(nextDateTime);
-                              if (!parsed) {
-                                setEditForm((prev) => ({
-                                  ...prev,
-                                  session_datetime: nextDateTime
-                                }));
-                                return;
-                              }
+                              const mentorName = String(e.target.value || '').trim();
+                              const mentorOption = mentorOptions.find((option) => (
+                                normalizeMentorNameKey(option.mentor_name) === normalizeMentorNameKey(mentorName)
+                              ));
+                              const automaticDay = automaticMentorWorkDay(statusMentorInfo, mentorName, '');
+                              const automaticDate = datePartsForWeekDay(selectedWeek, automaticDay);
                               setEditForm((prev) => ({
                                 ...prev,
-                                session_datetime: nextDateTime,
-                                session_month: String(parsed.month),
-                                session_day: String(parsed.day),
-                                session_day_label: parsed.dayLabel,
-                                session_start_time: parsed.time
+                                mentor_name: mentorName,
+                                mentor_role: String(mentorOption?.mentor_role || 'mentor').trim() || 'mentor',
+                                session_day_label: automaticDay,
+                                session_month: automaticDate?.month || prev.session_month,
+                                session_day: automaticDate?.day || prev.session_day
                               }));
                             }}
-                          />
-                          <div className="mt-1 text-[11px] text-slate-500">
-                            자동 반영: {editForm.session_day_label || '-'}요일 ·{' '}
-                            {editForm.session_month || '-'}월 {editForm.session_day || '-'}일 ·{' '}
-                            {editForm.session_start_time || '--:--'}
+                          >
+                            {mentorOptions.map((option) => (
+                              <option key={`edit-mentor-${rowKey}-${option.mentor_name}`} value={option.mentor_name}>
+                                {option.mentor_name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="md:col-span-2">
+                          <div className="text-[11px] text-slate-500">출근 요일 (자동)</div>
+                          <div className="mt-1 flex h-8 items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-sm font-bold text-emerald-800">
+                            {editForm.session_day_label ? `${editForm.session_day_label}요일` : '출근 요일 정보 없음'}
                           </div>
+                          {editingMentorWorkDays.length > 1 ? (
+                            <div className="mt-1 text-[11px] text-slate-500">등록 출근일: {editingMentorWorkDays.map((day) => `${day}요일`).join(' · ')}</div>
+                          ) : null}
                         </div>
                         <div>
-                          <div className="text-[11px] text-slate-500">요일 (수동)</div>
-                          <div className="mt-1 space-y-1.5">
-                            <select
-                              className="input h-8 w-full"
-                              value={editForm.session_day_label}
-                              onChange={(e) => setEditForm((prev) => ({ ...prev, session_day_label: e.target.value }))}
-                            >
-                              <option value="">선택</option>
-                              {DAY_OPTIONS.map((day) => (
-                                <option key={`edit-day-${rowKey}-${day}`} value={day}>{day}</option>
-                              ))}
-                            </select>
-                            <div className="flex justify-end">
-                              <button
-                                className="btn-ghost h-7 px-2 text-[11px]"
-                                type="button"
-                                onClick={() => setEditForm((prev) => ({ ...prev, session_day_label: '' }))}
-                              >
-                                미선택
-                              </button>
-                            </div>
+                          <div className="text-[11px] text-slate-500">진행 시간</div>
+                          <div className="mt-1 flex h-8 items-center rounded-lg border border-blue-200 bg-blue-50 px-3 text-sm font-bold text-blue-800">
+                            15분 고정
                           </div>
-                        </div>
-                        <div>
-                          <div className="text-[11px] text-slate-500">진행 시간(분)</div>
-                          <input
-                            className="input mt-1 h-8"
-                            type="number"
-                            min={5}
-                            max={240}
-                            step={5}
-                            value={editForm.session_duration_minutes}
-                            onChange={(e) => setEditForm((prev) => ({
-                              ...prev,
-                              session_duration_minutes: Math.max(5, Math.min(240, Number(e.target.value || 20) || 20))
-                            }))}
-                          />
                         </div>
                       </div>
                     ) : null}
