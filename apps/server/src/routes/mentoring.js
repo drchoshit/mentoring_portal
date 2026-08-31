@@ -679,6 +679,15 @@ function isDateWithinWeek(week, date) {
 }
 
 function resolveAssignmentTargetWeekId(weeks, assignment, fallbackWeek = null) {
+  const explicitWeekId = Number(assignment?.target_week_id || 0);
+  if (
+    Number.isInteger(explicitWeekId) &&
+    explicitWeekId > 0 &&
+    (Array.isArray(weeks) ? weeks : []).some((week) => Number(week?.id || 0) === explicitWeekId)
+  ) {
+    return explicitWeekId;
+  }
+
   const month = Number(assignment?.session_month || 0);
   const day = Number(assignment?.session_day || 0);
   const fallbackWeekId = Number(fallbackWeek?.id || 0) || 0;
@@ -718,6 +727,51 @@ function resolveAssignmentTargetWeekId(weeks, assignment, fallbackWeek = null) {
   }
 
   return fallbackWeekId;
+}
+
+function latestWeekBySchedule(weeks) {
+  return [...(Array.isArray(weeks) ? weeks : [])].sort((a, b) => {
+    const endCmp = String(b?.end_date || '').localeCompare(String(a?.end_date || ''));
+    if (endCmp !== 0) return endCmp;
+    const startCmp = String(b?.start_date || '').localeCompare(String(a?.start_date || ''));
+    if (startCmp !== 0) return startCmp;
+    return Number(b?.id || 0) - Number(a?.id || 0);
+  })[0] || null;
+}
+
+function assignmentDateForWeek(week, assignment) {
+  const start = parseIsoDateValue(week?.start_date);
+  const end = parseIsoDateValue(week?.end_date);
+  if (!start || !end || start.getTime() > end.getTime()) return null;
+
+  let preferredDay = String(assignment?.session_day_label || '').trim();
+  if (!DAY_ORDER_MAP.has(preferredDay)) {
+    const month = Number(assignment?.session_month || 0);
+    const day = Number(assignment?.session_day || 0);
+    if (Number.isInteger(month) && Number.isInteger(day) && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const inferred = new Date(start.getFullYear(), month - 1, day);
+      if (!Number.isNaN(inferred.getTime())) preferredDay = KO_DAY[inferred.getDay()] || '';
+    }
+  }
+
+  const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const last = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  while (cursor.getTime() <= last.getTime()) {
+    if (!preferredDay || KO_DAY[cursor.getDay()] === preferredDay) {
+      return {
+        session_day_label: KO_DAY[cursor.getDay()] || preferredDay,
+        session_month: String(cursor.getMonth() + 1),
+        session_day: String(cursor.getDate())
+      };
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return {
+    session_day_label: KO_DAY[start.getDay()] || '',
+    session_month: String(start.getMonth() + 1),
+    session_day: String(start.getDate())
+  };
 }
 
 function resolveSessionDayLabel(week, assignment) {
@@ -1628,14 +1682,24 @@ export default function mentoringRoutes(db) {
       currentProblem.assignment || (problemIndex === 0 ? dist.assignment : null)
     ) || {};
 
+    const weeks = db
+      .prepare('SELECT id, label, start_date, end_date FROM weeks ORDER BY id')
+      .all();
+    const moveToLatestWeek = req.body?.move_to_latest_week === true;
+    const targetWeek = moveToLatestWeek ? latestWeekBySchedule(weeks) : null;
+    if (moveToLatestWeek && !targetWeek?.id) {
+      return res.status(400).json({ error: 'Latest week not found' });
+    }
+
     const mentorName = String(req.body?.mentor_name ?? currentAssignment.mentor_name ?? '').trim();
     if (!mentorName) return res.status(400).json({ error: 'mentor_name is required' });
 
-    const dayLabelRaw = String(req.body?.session_day_label ?? currentAssignment.session_day_label ?? '').trim();
+    const targetDate = targetWeek ? assignmentDateForWeek(targetWeek, currentAssignment) : null;
+    const dayLabelRaw = String(targetDate?.session_day_label ?? req.body?.session_day_label ?? currentAssignment.session_day_label ?? '').trim();
     const dayLabel = ['월', '화', '수', '목', '금', '토', '일'].includes(dayLabelRaw) ? dayLabelRaw : '';
 
-    const monthRaw = String(req.body?.session_month ?? currentAssignment.session_month ?? '').replace(/\D/g, '').slice(0, 2);
-    const dayRaw = String(req.body?.session_day ?? currentAssignment.session_day ?? '').replace(/\D/g, '').slice(0, 2);
+    const monthRaw = String(targetDate?.session_month ?? req.body?.session_month ?? currentAssignment.session_month ?? '').replace(/\D/g, '').slice(0, 2);
+    const dayRaw = String(targetDate?.session_day ?? req.body?.session_day ?? currentAssignment.session_day ?? '').replace(/\D/g, '').slice(0, 2);
     const startTime = String(req.body?.session_start_time ?? currentAssignment.session_start_time ?? '').trim();
     const duration = Math.max(
       5,
@@ -1643,10 +1707,17 @@ export default function mentoringRoutes(db) {
     );
 
     const mentorChanged = mentorName !== String(currentAssignment.mentor_name || '').trim();
-    const assignedAt = mentorChanged
+    const currentTargetWeekId = resolveAssignmentTargetWeekId(
+      weeks,
+      currentAssignment,
+      weeks.find((week) => Number(week?.id || 0) === Number(weekRecord.week_id || 0)) || null
+    );
+    const targetWeekChanged = Boolean(targetWeek?.id) && Number(targetWeek.id) !== currentTargetWeekId;
+    const assignmentChanged = mentorChanged || targetWeekChanged;
+    const assignedAt = assignmentChanged
       ? new Date().toISOString()
       : String(currentAssignment.assigned_at || '').trim() || new Date().toISOString();
-    const assignedBy = mentorChanged
+    const assignedBy = assignmentChanged
       ? String(req.user.display_name || req.user.username || req.user.role || '').trim()
       : String(currentAssignment.assigned_by || '').trim() || req.user.role;
 
@@ -1660,6 +1731,7 @@ export default function mentoringRoutes(db) {
       session_day: dayRaw,
       session_start_time: startTime,
       session_duration_minutes: duration,
+      target_week_id: targetWeek?.id || currentAssignment.target_week_id || undefined,
       assigned_at: assignedAt,
       assigned_by: assignedBy
     });
@@ -1690,7 +1762,10 @@ export default function mentoringRoutes(db) {
       details: {
         student_id: weekRecord.student_id,
         week_id: weekRecord.week_id,
+        source_week_id: weekRecord.week_id,
+        target_week_id: Number(nextAssignment.target_week_id || 0) || null,
         problem_index: problemIndex,
+        previous_mentor_name: String(currentAssignment.mentor_name || '').trim(),
         mentor_name: mentorName,
         session_day_label: dayLabel,
         session_month: monthRaw,
@@ -1699,7 +1774,13 @@ export default function mentoringRoutes(db) {
       }
     });
 
-    return res.json({ ok: true, assignment: nextAssignment, problem_index: problemIndex });
+    return res.json({
+      ok: true,
+      assignment: nextAssignment,
+      problem_index: problemIndex,
+      target_week_id: Number(nextAssignment.target_week_id || 0) || null,
+      target_week: targetWeek || null
+    });
   });
 
   router.post('/workflow/submit', (req, res) => {
