@@ -9,12 +9,6 @@ function weekLabel(week) {
   return start && end ? `${label} (${start} ~ ${end})` : label;
 }
 
-function statusView(status) {
-  if (status === 'completed') return { label: '완료', tone: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
-  if (status === 'missed') return { label: '미진행', tone: 'bg-rose-50 text-rose-700 border-rose-200' };
-  return { label: '진행 전', tone: 'bg-slate-50 text-slate-600 border-slate-200' };
-}
-
 function LeadStatusButtons({ value, onChange }) {
   const options = [
     ['pending', '진행 전', 'slate'],
@@ -47,6 +41,7 @@ export default function LeadMentoringStatus() {
   const [data, setData] = useState(null);
   const [mentorFilter, setMentorFilter] = useState('전체');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [drafts, setDrafts] = useState({});
   const [statusDrafts, setStatusDrafts] = useState({});
   const [savingKey, setSavingKey] = useState('');
@@ -213,14 +208,20 @@ export default function LeadMentoringStatus() {
     }
   }
 
-  const filteredDays = (data?.days || []).map((day) => ({
-    ...day,
-    assignments: (day.assignments || []).filter((row) => {
-      if (mentorFilter !== '전체' && row.mentor_name !== mentorFilter) return false;
-      const status = String(row?.status?.status || 'pending');
-      return statusFilter === 'all' || status === statusFilter;
-    }).map((row) => ({ ...row, assignment_date: day.date, day_label: day.day_label }))
-  }));
+  const filteredDays = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase('ko-KR');
+    return (data?.days || []).map((day) => ({
+      ...day,
+      assignments: (day.assignments || []).filter((row) => {
+        if (mentorFilter !== '전체' && row.mentor_name !== mentorFilter) return false;
+        const status = String(row?.status?.status || 'pending');
+        if (statusFilter !== 'all' && status !== statusFilter) return false;
+        if (!query) return true;
+        return [row.student_name, row.external_id, row.mentor_name]
+          .some((value) => String(value || '').toLocaleLowerCase('ko-KR').includes(query));
+      }).map((row) => ({ ...row, assignment_date: day.date, day_label: day.day_label }))
+    }));
+  }, [data?.days, mentorFilter, searchQuery, statusFilter]);
 
   return (
     <div className="space-y-6">
@@ -247,29 +248,42 @@ export default function LeadMentoringStatus() {
       </section>
 
       <section className="card p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-black text-slate-900">총괄멘토별 요약</h2><p className="text-xs text-slate-500">회차 전체 실적과 질문 배정 수입니다.</p></div><div className="flex gap-2"><select className="input" value={mentorFilter} onChange={(event) => setMentorFilter(event.target.value)}><option>전체</option>{(data?.lead_mentors || []).map((name) => <option key={name}>{name}</option>)}</select><select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">전체 상태</option><option value="completed">완료</option><option value="pending">진행 전</option><option value="missed">미진행</option></select></div></div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h2 className="font-black text-slate-900">총괄멘토별 요약</h2><p className="text-xs text-slate-500">회차 전체 실적과 질문 배정 수입니다.</p></div>
+          <div className="flex w-full flex-wrap gap-2 lg:w-auto">
+            <label className="relative min-w-[220px] flex-1 lg:flex-none">
+              <span className="sr-only">학생 또는 멘토 검색</span>
+              <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+              <input className="input pl-9 lg:w-64" type="search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="학생 또는 멘토 검색" />
+            </label>
+            <select className="input w-auto min-w-28" aria-label="멘토 필터" value={mentorFilter} onChange={(event) => setMentorFilter(event.target.value)}><option value="전체">전체 멘토</option>{(data?.lead_mentors || []).map((name) => <option key={name}>{name}</option>)}</select>
+            <select className="input w-auto min-w-28" aria-label="상태 필터" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">전체 상태</option><option value="completed">완료</option><option value="pending">진행 전</option><option value="missed">미진행</option></select>
+          </div>
+        </div>
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">{mentorSummary.map((mentor) => <div key={mentor.name} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4"><div className="font-black text-slate-900">{mentor.name}</div><div className="mt-3 grid grid-cols-4 gap-1 text-center text-xs"><div><b className="block text-base text-emerald-700">{mentor.completed}</b>완료</div><div><b className="block text-base text-slate-700">{mentor.pending}</b>대기</div><div><b className="block text-base text-rose-600">{mentor.missed}</b>미진행</div><div><b className="block text-base text-violet-700">{mentor.questions}</b>질문</div></div></div>)}</div>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
         {filteredDays.map((day) => (
           <div key={day.date} className="card p-5">
-            <div className="flex items-center justify-between"><div><h3 className="font-black text-slate-900">{day.day_label}요일</h3><div className="text-xs text-slate-500">{day.date}</div></div><span className="rounded-xl border-2 border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700 shadow-sm">{day.assignments.length}건</span></div>
+            <div className="flex items-center justify-between"><h3 className="flex items-baseline gap-2 font-black text-slate-900"><span>{day.day_label}요일</span><span className="text-xs font-medium text-slate-500">{day.date}</span></h3><span className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700">{day.assignments.length}건</span></div>
             <div className="mt-4 space-y-2.5">
               {day.assignments.map((row) => {
                 const key = rowKey(row);
                 const status = String(row?.status?.status || 'pending');
-                const view = statusView(status);
                 const draft = drafts[key];
                 const statusDraft = statusDrafts[key] || { status, reason: String(row?.status?.reason || '') };
                 return (
                   <article key={key} className="rounded-2xl border border-slate-200 bg-white p-3.5">
-                    <div className="flex flex-wrap items-start justify-between gap-2"><div><div className="font-black text-slate-900">{row.student_name} <span className="text-xs font-medium text-slate-400">{row.external_id}</span></div><div className="mt-1 text-xs text-slate-500">담당 {row.mentor_name}{row.reassigned ? ' · 재배정' : ''} · 질문 {Number(row.question_count || 0)}개</div></div><span className={`rounded-xl border-2 px-3 py-1.5 text-xs font-black shadow-sm ${view.tone}`}>{view.label}</span></div>
+                    <div><div className="font-black text-slate-900">{row.student_name} <span className="text-xs font-medium text-slate-400">{row.external_id}</span></div><div className="mt-1 text-xs text-slate-500">담당 {row.mentor_name}{row.reassigned ? ' · 재배정' : ''} · 질문 {Number(row.question_count || 0)}개</div></div>
                     {status === 'missed' && row.status?.reason ? <div className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{row.status.reason}</div> : null}
                     <div className="mt-3 grid gap-2 sm:grid-cols-[auto_1fr_auto]">
                       <LeadStatusButtons value={statusDraft.status} onChange={(value) => patchStatusDraft(row, { status: value })} />
                       {statusDraft.status === 'missed' ? <input className="input" value={statusDraft.reason} onChange={(event) => patchStatusDraft(row, { reason: event.target.value })} placeholder="미진행 사유" /> : <div />}
-                      <button className="btn-primary min-w-24" type="button" disabled={savingStatusKey === key} onClick={() => saveStatus(row)}>{savingStatusKey === key ? '저장 중...' : '상태 저장'}</button>
+                      <button className="inline-flex items-center justify-center gap-1.5 self-start rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={savingStatusKey === key} onClick={() => saveStatus(row)}>
+                        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" /><path d="M17 21v-8H7v8M7 3v5h8" /></svg>
+                        {savingStatusKey === key ? '저장 중...' : '저장'}
+                      </button>
                     </div>
                     {status === 'missed' ? <div className="mt-3"><button className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700" type="button" onClick={() => toggleDraft(row)}>{draft ? '재배정 닫기' : '다른 총괄멘토에게 재배정'}</button>{draft ? <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto]"><select className="input" value={draft.target_mentor_name} onChange={(event) => patchDraft(row, { target_mentor_name: event.target.value })}>{(data?.lead_mentors || []).map((name) => <option key={name}>{name}</option>)}</select><select className="input" value={draft.target_assignment_date} onChange={(event) => patchDraft(row, { target_assignment_date: event.target.value })}>{dateOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><button className="btn-primary" type="button" disabled={savingKey === key} onClick={() => reassign(row)}>{savingKey === key ? '처리 중...' : '재배정'}</button></div> : null}</div> : null}
                   </article>
