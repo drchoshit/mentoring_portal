@@ -81,6 +81,55 @@ export default function parentRoutes(db) {
     res.json({ items: out });
   });
 
+  // Studycat needs the current assignment before a full mentoring round is
+  // shared with the parent. Keep this deliberately narrower than /overview:
+  // the authenticated parent's own student, round metadata, subject names,
+  // and this week's homework are the only values exposed here.
+  router.get('/assignments', (req, res) => {
+    if (req.user.role !== 'parent') return res.status(403).json({ error: 'Forbidden' });
+    res.set('Cache-Control', 'no-store');
+
+    const studentId = Number(req.user.student_id);
+    if (!studentId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const student = db.prepare('SELECT id FROM students WHERE id=?').get(studentId);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    const weeks = db.prepare(
+      `SELECT id, label, start_date, end_date
+       FROM weeks
+       ORDER BY id DESC`
+    ).all();
+
+    const requestedWeekId = Number(req.query.weekId);
+    const selectedWeek = Number.isInteger(requestedWeekId) && requestedWeekId > 0
+      ? weeks.find((week) => Number(week.id) === requestedWeekId)
+      : weeks[0];
+    if (!selectedWeek) {
+      if (Number.isInteger(requestedWeekId) && requestedWeekId > 0) {
+        return res.status(404).json({ error: 'Week not found' });
+      }
+      return res.json({ student: { id: student.id }, weeks, selected_week_id: null, subject_records: [] });
+    }
+
+    const subjectRecords = db.prepare(
+      `SELECT r.id, s.name AS subject_name, r.a_this_hw
+       FROM subject_records r
+       JOIN mentoring_subjects s ON s.id=r.subject_id
+       WHERE r.student_id=? AND r.week_id=?
+         AND s.student_id=r.student_id
+         AND (s.deleted_from_week_id IS NULL OR s.deleted_from_week_id > ?)
+       ORDER BY s.id`
+    ).all(student.id, selectedWeek.id, selectedWeek.id);
+
+    return res.json({
+      student: { id: student.id },
+      weeks,
+      selected_week_id: selectedWeek.id,
+      subject_records: subjectRecords
+    });
+  });
+
   router.get('/legacy-images', (req, res) => {
     if (req.user.role !== 'parent') return res.status(403).json({ error: 'Forbidden' });
     if (!req.user.student_id) return res.status(401).json({ error: 'Unauthorized' });
