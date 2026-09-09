@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { taskListText } from '../utils/weeklyTasks.js';
 
 function safeJson(v, fallback) {
   try {
@@ -589,6 +590,10 @@ export default function Parent() {
   const weekRecord = useMemo(() => (record?.week_record || {}), [record]);
   const dailyTasks = useMemo(() => safeJson(weekRecord?.b_daily_tasks, {}), [weekRecord]);
   const dailyTasksThisWeek = useMemo(() => safeJson(weekRecord?.b_daily_tasks_this_week, {}), [weekRecord]);
+  const weeklyTaskText = useMemo(
+    () => taskListText(dailyTasks, useNewDailyTaskLayout ? dailyTasksThisWeek : null),
+    [dailyTasks, dailyTasksThisWeek, useNewDailyTaskLayout]
+  );
   const dailyLeadFeedback = useMemo(() => safeJson(weekRecord?.b_lead_daily_feedback, {}), [weekRecord]);
   const leadWeeklyFeedback = useMemo(() => String(weekRecord?.c_lead_weekly_feedback || '').trim(), [weekRecord]);
   const clinicEntries = useMemo(() => parseClinicEntries(weekRecord?.d_clinic_records), [weekRecord]);
@@ -851,14 +856,12 @@ export default function Parent() {
 
       <BlockedSection blocked={isLockedWeek}>
         <div className={sectionCardClass(SECTION_TONES.daily)}>
-          <SectionTitle title="일일 학습 과제" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
+          <SectionTitle title="주간 과제 리스트" right={selectedWeek?.label ? `${toRoundLabel(selectedWeek.label)}` : ''} />
           {recordLoading ? <div className="mt-3 text-sm text-slate-500">기록을 불러오는 중...</div> : record ? (
-            <div className="mt-4 grid grid-cols-1 gap-4">
-              {useNewDailyTaskLayout ? (
-                <DailyTasksWeekPanel title="일일 학습 과제(이번주)" tasksByDay={dailyTasksThisWeek} />
-              ) : (
-                <DailyTasksWeekPanel title="일일 학습 과제" tasksByDay={dailyTasks} />
-              )}
+            <div className="mt-4 rounded-[24px] border border-white/80 bg-white/76 p-4 shadow-sm">
+              {weeklyTaskText.trim() ? (
+                <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-800">{weeklyTaskText}</div>
+              ) : <div className="text-sm text-slate-500">등록된 주간 과제가 없습니다.</div>}
             </div>
           ) : <div className="mt-3 text-sm text-slate-500">공유된 기록이 없습니다.</div>}
         </div>

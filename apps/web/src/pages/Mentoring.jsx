@@ -10,6 +10,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { API_BASE, api, getToken } from '../api.js';
 import { useAuth } from '../auth/AuthProvider.jsx';
 import WrongAnswerAssignment from './WrongAnswerAssignment.jsx';
+import { taskListText } from '../utils/weeklyTasks.js';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_LABELS = { Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금', Sat: '토', Sun: '일' };
@@ -3832,28 +3833,7 @@ function SubjectWideEditor({ record, perms, role, busy, parentMode, draft, onCha
   );
 }
 
-/* 일일 카드 */
-function taskListText(...values) {
-  const preferred = values.length > 1 ? values[1] : null;
-  if (preferred && typeof preferred === 'object' && preferred.Weekly != null) {
-    return String(preferred.Weekly || '');
-  }
-  const lines = [];
-  for (const value of values) {
-    if (!value || typeof value !== 'object') continue;
-    const entries = value.Weekly != null
-      ? [value.Weekly]
-      : DAYS.map((day) => value?.[day]);
-    for (const entry of entries) {
-      for (const line of String(entry || '').split(/\r?\n/)) {
-        const text = line.trim();
-        if (text && !lines.includes(text)) lines.push(text);
-      }
-    }
-  }
-  return lines.join('\n');
-}
-
+/* 주간 과제 카드 */
 function WeeklyTaskListCard({ value, currentValue, visible, editable, onSave, onAutoSave, onChangeValue, busy, perms, currentRole, parentMode }) {
   const merged = useMemo(() => taskListText(value, currentValue), [value, currentValue]);
   const [text, setText] = useState(merged);
