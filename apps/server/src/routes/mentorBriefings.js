@@ -221,6 +221,8 @@ function isDateWithinWeek(week, date) {
 }
 
 function resolveAssignmentTargetWeekId(weeks, assignment, fallbackWeek = null) {
+  const explicitWeekId = Number(assignment?.target_week_id || 0);
+  if ((weeks || []).some((week) => Number(week.id) === explicitWeekId)) return explicitWeekId;
   const month = Number(assignment?.session_month || 0);
   const day = Number(assignment?.session_day || 0);
   const fallbackWeekId = Number(fallbackWeek?.id || 0) || 0;
@@ -340,6 +342,7 @@ function normalizeAssignment(raw) {
   if (!mentorName) return null;
   const startTime = String(raw.session_start_time || raw.session_time || '').trim();
   return {
+    target_week_id: Number(raw.target_week_id || 0) || null,
     mentor_name: mentorName,
     mentor_role: normalizeMentorRole(raw.mentor_role),
     session_day_label: normalizeDayLabel(raw.session_day_label),

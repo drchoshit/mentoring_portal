@@ -346,6 +346,7 @@ function normalizeWrongAnswerAssignment(raw) {
 
   return {
     mentor_id: mentorId,
+    target_week_id: Number(raw.target_week_id || 0) || null,
     mentor_name: mentorName,
     mentor_role: role,
     mentor_subjects: Array.isArray(raw.mentor_subjects)

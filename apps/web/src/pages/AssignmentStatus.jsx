@@ -675,6 +675,7 @@ function normalizeWrongAnswerAssignment(raw) {
 
   return {
     mentor_id: mentorId,
+    target_week_id: Number(raw.target_week_id || 0) || null,
     mentor_name: mentorName,
     mentor_role: role,
     mentor_subjects: Array.isArray(raw.mentor_subjects)
@@ -1323,7 +1324,7 @@ export default function AssignmentStatus() {
     setSavingKey(rowKey);
     setError('');
     try {
-      await api(`/api/mentoring/assignment-status/${encodeURIComponent(String(item.week_record_id))}`, {
+      const result = await api(`/api/mentoring/assignment-status/${encodeURIComponent(String(item.week_record_id))}`, {
         method: 'PUT',
         body: {
           problem_index: Number(item.problem_index || 0),
@@ -1336,7 +1337,16 @@ export default function AssignmentStatus() {
           session_duration_minutes: 15
         }
       });
-      await loadStatus(weekId);
+      const targetWeekId = String(result?.target_week?.id || weekId);
+      if (targetWeekId !== String(weekId)) {
+        if (!weeks.some((week) => String(week.id) === targetWeekId)) {
+          const data = await api('/api/weeks');
+          setWeeks(Array.isArray(data?.weeks) ? data.weeks : []);
+        }
+        setWeekId(targetWeekId);
+        setQueryParams({ week: targetWeekId });
+      }
+      await loadStatus(targetWeekId);
       setEditingKey('');
     } catch (e) {
       setError(e?.message || '배정 수정에 실패했습니다.');
@@ -2942,7 +2952,8 @@ export default function AssignmentStatus() {
                         <div className="md:col-span-3">
                           <div className="text-[11px] text-slate-500">멘토 이름</div>
                           <select
-                            className="input mt-1 h-8"
+                            className="input select-input mt-1"
+                            aria-label="멘토 이름"
                             value={editForm.mentor_name}
                             onChange={(e) => {
                               const mentorName = String(e.target.value || '').trim();
@@ -2950,14 +2961,16 @@ export default function AssignmentStatus() {
                                 normalizeMentorNameKey(option.mentor_name) === normalizeMentorNameKey(mentorName)
                               ));
                               const automaticDay = automaticMentorWorkDay(statusMentorInfo, mentorName, '');
-                              const automaticDate = datePartsForWeekDay(selectedWeek, automaticDay);
+                              const mentorChanged = mentorName !== String(item.mentor_name || '').trim();
+                              const targetWeek = mentorChanged ? weeksDesc[0] : selectedWeek;
+                              const automaticDate = datePartsForWeekDay(targetWeek, automaticDay);
                               setEditForm((prev) => ({
                                 ...prev,
                                 mentor_name: mentorName,
                                 mentor_role: String(mentorOption?.mentor_role || 'mentor').trim() || 'mentor',
                                 session_day_label: automaticDay,
-                                session_month: automaticDate?.month || prev.session_month,
-                                session_day: automaticDate?.day || prev.session_day
+                                session_month: automaticDate?.month || (mentorChanged ? '' : prev.session_month),
+                                session_day: automaticDate?.day || (mentorChanged ? '' : prev.session_day)
                               }));
                             }}
                           >
@@ -2967,10 +2980,13 @@ export default function AssignmentStatus() {
                               </option>
                             ))}
                           </select>
+                          {editForm.mentor_name !== String(item.mentor_name || '').trim() ? (
+                            <div className="mt-1 text-[11px] text-blue-700">저장하면 최신 회차에 진행중 질답으로 재배정됩니다.</div>
+                          ) : null}
                         </div>
                         <div className="md:col-span-2">
                           <div className="text-[11px] text-slate-500">출근 요일 (자동)</div>
-                          <div className="mt-1 flex h-8 items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-sm font-bold text-emerald-800">
+                          <div className="mt-1 flex min-h-10 items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-bold text-emerald-800">
                             {editForm.session_day_label ? `${editForm.session_day_label}요일` : '출근 요일 정보 없음'}
                           </div>
                           {editingMentorWorkDays.length > 1 ? (
@@ -2979,7 +2995,7 @@ export default function AssignmentStatus() {
                         </div>
                         <div>
                           <div className="text-[11px] text-slate-500">진행 시간</div>
-                          <div className="mt-1 flex h-8 items-center rounded-lg border border-blue-200 bg-blue-50 px-3 text-sm font-bold text-blue-800">
+                          <div className="mt-1 flex min-h-10 items-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-bold text-blue-800">
                             15분 고정
                           </div>
                         </div>

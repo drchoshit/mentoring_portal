@@ -679,6 +679,8 @@ function isDateWithinWeek(week, date) {
 }
 
 function resolveAssignmentTargetWeekId(weeks, assignment, fallbackWeek = null) {
+  const explicitWeekId = Number(assignment?.target_week_id || 0);
+  if ((weeks || []).some((week) => Number(week.id) === explicitWeekId)) return explicitWeekId;
   const month = Number(assignment?.session_month || 0);
   const day = Number(assignment?.session_day || 0);
   const fallbackWeekId = Number(fallbackWeek?.id || 0) || 0;
@@ -1643,6 +1645,14 @@ export default function mentoringRoutes(db) {
     );
 
     const mentorChanged = mentorName !== String(currentAssignment.mentor_name || '').trim();
+    const targetWeek = mentorChanged
+      ? db.prepare('SELECT id, start_date, end_date FROM weeks ORDER BY id DESC LIMIT 1').get()
+      : null;
+    const targetDate = parseIsoDateValue(targetWeek?.start_date);
+    if (targetDate && dayLabel) {
+      targetDate.setDate(targetDate.getDate() + (KO_DAY.indexOf(dayLabel) - targetDate.getDay() + 7) % 7);
+    }
+    const hasTargetDate = dayLabel && targetDate && isDateWithinWeek(targetWeek, targetDate);
     const assignedAt = mentorChanged
       ? new Date().toISOString()
       : String(currentAssignment.assigned_at || '').trim() || new Date().toISOString();
@@ -1652,12 +1662,13 @@ export default function mentoringRoutes(db) {
 
     const nextAssignment = normalizeWrongAnswerAssignment({
       ...currentAssignment,
-      mentor_id: String(req.body?.mentor_id ?? currentAssignment.mentor_id ?? mentorName).trim(),
+      mentor_id: String(req.body?.mentor_id ?? (mentorChanged ? mentorName : currentAssignment.mentor_id) ?? mentorName).trim(),
       mentor_name: mentorName,
       mentor_role: String(req.body?.mentor_role ?? currentAssignment.mentor_role ?? 'mentor').trim() || 'mentor',
-      session_day_label: dayLabel,
-      session_month: monthRaw,
-      session_day: dayRaw,
+      target_week_id: targetWeek?.id || currentAssignment.target_week_id || null,
+      session_day_label: mentorChanged && hasTargetDate ? KO_DAY[targetDate.getDay()] : dayLabel,
+      session_month: mentorChanged ? (hasTargetDate ? String(targetDate.getMonth() + 1) : '') : monthRaw,
+      session_day: mentorChanged ? (hasTargetDate ? String(targetDate.getDate()) : '') : dayRaw,
       session_start_time: startTime,
       session_duration_minutes: duration,
       assigned_at: assignedAt,
@@ -1667,7 +1678,14 @@ export default function mentoringRoutes(db) {
 
     problems[problemIndex] = {
       ...currentProblem,
-      assignment: nextAssignment
+      assignment: nextAssignment,
+      ...(mentorChanged ? {
+        completion_status: 'pending',
+        completion_feedback: '',
+        incomplete_reason: '',
+        status_updated_at: assignedAt,
+        status_updated_by: assignedBy
+      } : {})
     };
     const summaryAssignment = pickFirstWrongAnswerAssignment(problems, dist.assignment || nextAssignment);
 
@@ -1691,15 +1709,20 @@ export default function mentoringRoutes(db) {
         student_id: weekRecord.student_id,
         week_id: weekRecord.week_id,
         problem_index: problemIndex,
+        target_week_id: nextAssignment.target_week_id,
+        previous_mentor_name: currentAssignment.mentor_name || '',
+        previous_completion_status: currentProblem.completion_status,
+        previous_completion_feedback: currentProblem.completion_feedback,
+        previous_incomplete_reason: currentProblem.incomplete_reason,
         mentor_name: mentorName,
-        session_day_label: dayLabel,
-        session_month: monthRaw,
-        session_day: dayRaw,
+        session_day_label: nextAssignment.session_day_label,
+        session_month: nextAssignment.session_month,
+        session_day: nextAssignment.session_day,
         session_start_time: startTime
       }
     });
 
-    return res.json({ ok: true, assignment: nextAssignment, problem_index: problemIndex });
+    return res.json({ ok: true, assignment: nextAssignment, problem_index: problemIndex, target_week: targetWeek });
   });
 
   router.post('/workflow/submit', (req, res) => {
