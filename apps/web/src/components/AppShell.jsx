@@ -45,7 +45,7 @@ export default function AppShell({ children }) {
       menu.push({ to: '/question-completion-status', label: '질답 완료 현황' });
       menu.push({ to: '/lead-mentoring-status', label: '총괄멘토링 현황' });
     }
-    if (['director', 'lead', 'admin'].includes(role)) {
+    if (['director', 'admin'].includes(role)) {
       menu.push({ to: '/lead-assignment-board', label: '총괄멘토 배정표' });
     }
     if (role === 'director') menu.push({ to: '/settings', label: '설정' });

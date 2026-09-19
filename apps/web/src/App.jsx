@@ -162,7 +162,7 @@ export default function App() {
       <Route
         path="/lead-assignment-board"
         element={
-          <Guard roles={['director','lead','admin']}>
+          <Guard roles={['director','admin']}>
             <Shell><LeadAssignmentBoard /></Shell>
           </Guard>
         }
