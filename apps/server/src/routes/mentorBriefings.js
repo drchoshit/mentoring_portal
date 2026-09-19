@@ -686,6 +686,16 @@ function renderMentorBriefingPage({
       .images a{display:block;border:1px solid #d6e2f5;background:#fff;border-radius:10px;overflow:hidden;transition:transform .12s ease}
       .images a:hover{transform:translateY(-1px)}
       .images img{display:block;width:100%;aspect-ratio:1/1;object-fit:cover}
+      .gallery{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;padding:12px;border:0;background:#101827;color:#fff}
+      .gallery::backdrop{background:#101827}
+      .gallery[open]{display:flex;flex-direction:column;gap:10px}
+      .gallery-head,.gallery-nav{display:flex;align-items:center;justify-content:space-between;gap:12px}
+      .gallery-caption{font-size:14px;line-height:1.5;flex:1;white-space:pre-line}
+      .gallery-stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:auto;touch-action:pan-y pinch-zoom}
+      .gallery-stage img{display:block;max-width:100%;max-height:100%;object-fit:contain}
+      .gallery-nav{justify-content:center;padding-bottom:env(safe-area-inset-bottom)}
+      .gallery .btn:disabled{opacity:.35}
+      .gallery a{color:#c8dcff}
       .empty{margin-top:14px;padding:14px;border:1px dashed #cfdcf2;border-radius:12px;text-align:center;color:#5a7499}
       @media (max-width:760px){
         .head h1{font-size:24px}
@@ -716,6 +726,11 @@ function renderMentorBriefingPage({
         <div id="list" class="list"></div>
       </div>
     </div>
+    <dialog id="imageGallery" class="gallery" aria-label="문제 사진 보기">
+      <div class="gallery-head"><div id="galleryCaption" class="gallery-caption" aria-live="polite"></div><button id="galleryClose" class="btn" type="button">닫기</button></div>
+      <div id="galleryStage" class="gallery-stage"><img id="galleryImage" alt="문제 사진" /></div>
+      <div class="gallery-nav"><button id="galleryPrev" class="btn" type="button" aria-label="이전 사진">← 이전</button><span id="galleryCounter" aria-live="polite"></span><button id="galleryNext" class="btn" type="button" aria-label="다음 사진">다음 →</button><a id="galleryOriginal" target="_blank" rel="noreferrer">원본</a></div>
+    </dialog>
     <script>
       const token = ${JSON.stringify(String(token || ''))};
       const tokenId = ${JSON.stringify(String(tokenId || ''))};
@@ -727,6 +742,65 @@ function renderMentorBriefingPage({
       const pinBox = document.getElementById('pinBox');
       const pinInput = document.getElementById('pinInput');
       const pinSubmitBtn = document.getElementById('pinSubmitBtn');
+      const gallery = document.getElementById('imageGallery');
+      const galleryImage = document.getElementById('galleryImage');
+      const galleryCaption = document.getElementById('galleryCaption');
+      const galleryCounter = document.getElementById('galleryCounter');
+      const galleryPrev = document.getElementById('galleryPrev');
+      const galleryNext = document.getElementById('galleryNext');
+      const galleryStage = document.getElementById('galleryStage');
+      let galleryImages = [];
+      let galleryIndex = 0;
+      let galleryTrigger = null;
+      let touchStart = null;
+      let previousOverflow = '';
+      function showGalleryImage(index) {
+        if (index < 0 || index >= galleryImages.length) return;
+        galleryIndex = index;
+        const image = galleryImages[index];
+        galleryImage.src = image.url;
+        galleryImage.alt = image.alt;
+        galleryCaption.textContent = image.caption;
+        galleryCounter.textContent = (index + 1) + ' / ' + galleryImages.length;
+        document.getElementById('galleryOriginal').href = image.url;
+        galleryPrev.disabled = index === 0;
+        galleryNext.disabled = index === galleryImages.length - 1;
+      }
+      listEl.addEventListener('click', event => {
+        const link = event.target.closest('[data-gallery-index]');
+        if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        galleryTrigger = link;
+        showGalleryImage(Number(link.dataset.galleryIndex));
+        previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        gallery.showModal();
+      });
+      galleryPrev.addEventListener('click', () => showGalleryImage(galleryIndex - 1));
+      galleryNext.addEventListener('click', () => showGalleryImage(galleryIndex + 1));
+      document.getElementById('galleryClose').addEventListener('click', () => gallery.close());
+      gallery.addEventListener('close', () => {
+        document.body.style.overflow = previousOverflow;
+        galleryTrigger?.focus();
+        touchStart = null;
+      });
+      gallery.addEventListener('keydown', event => {
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          event.preventDefault();
+          showGalleryImage(galleryIndex + (event.key === 'ArrowLeft' ? -1 : 1));
+        }
+      });
+      galleryStage.addEventListener('touchstart', event => {
+        touchStart = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null;
+      }, { passive: true });
+      galleryStage.addEventListener('touchcancel', () => { touchStart = null; });
+      galleryStage.addEventListener('touchend', event => {
+        if (!touchStart || !event.changedTouches.length) return;
+        const dx = event.changedTouches[0].clientX - touchStart.x;
+        const dy = event.changedTouches[0].clientY - touchStart.y;
+        touchStart = null;
+        if (Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy) * 1.5) showGalleryImage(galleryIndex + (dx < 0 ? 1 : -1));
+      }, { passive: true });
 
       function escapeText(value) {
         return String(value || '')
@@ -778,6 +852,8 @@ function renderMentorBriefingPage({
       }
 
       function renderItems(data) {
+        if (gallery.open) gallery.close();
+        galleryImages = [];
         const mentorName = escapeText(data?.mentor_name || '-');
         const weekLabel = escapeText(data?.week?.label || '-');
         const expiresAt = escapeText(fmtDateTime(data?.expires_at));
@@ -814,7 +890,9 @@ function renderMentorBriefingPage({
             const href = escapeText(img?.url || '');
             if (!href) return '';
             const alt = escapeText(img?.filename || ('문제 이미지 ' + (idx + 1)));
-            return '<a href="' + href + '" target="_blank" rel="noreferrer"><img src="' + href + '" alt="' + alt + '" loading="lazy" /></a>';
+            const galleryImageIndex = galleryImages.length;
+            galleryImages.push({ url: img.url, alt: img.filename || '문제 이미지', caption: (item.student_name || '-') + ' · 질답 기록 ' + Number(item.problem_order || 1) + '\\n' + problemLine(item.problem || {}) });
+            return '<a href="' + href + '" data-gallery-index="' + galleryImageIndex + '" target="_blank" rel="noreferrer"><img src="' + href + '" alt="' + alt + '" loading="lazy" /></a>';
           }).join('');
 
           return '<article class="item">' +

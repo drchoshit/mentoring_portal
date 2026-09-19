@@ -1645,18 +1645,58 @@ export default function mentoringRoutes(db) {
     );
 
     const mentorChanged = mentorName !== String(currentAssignment.mentor_name || '').trim();
-    const targetWeek = mentorChanged
+    const explicitWeek = Object.hasOwn(req.body || {}, 'assignment_week_offset');
+    let targetWeek = mentorChanged
       ? db.prepare('SELECT id, start_date, end_date FROM weeks ORDER BY id DESC LIMIT 1').get()
       : null;
+    if (explicitWeek) {
+      const offset = req.body.assignment_week_offset;
+      if (offset !== 0 && offset !== 1) return res.status(400).json({ error: '이번 주 또는 다음 주를 선택해 주세요.' });
+      const baseWeek = db.prepare('SELECT id, label, start_date, end_date FROM weeks WHERE id=?').get(Number(req.body.base_week_id) || 0);
+      if (!baseWeek) return res.status(400).json({ error: '기준 회차를 찾을 수 없습니다.' });
+      targetWeek = baseWeek;
+      if (offset === 1) {
+        const start = parseIsoDateValue(baseWeek.start_date);
+        const end = parseIsoDateValue(baseWeek.end_date);
+        if (!start || !end) return res.status(400).json({ error: '다음 주 배정을 위해 기준 회차의 시작일과 종료일을 등록해 주세요.' });
+        start.setDate(start.getDate() + 7);
+        end.setDate(end.getDate() + 7);
+        const iso = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        const startDate = iso(start);
+        const endDate = iso(end);
+        targetWeek = db.prepare('SELECT id, label, start_date, end_date FROM weeks WHERE start_date <= ? AND end_date >= ? ORDER BY start_date DESC LIMIT 1').get(startDate, startDate);
+        if (!targetWeek) {
+          targetWeek = db.transaction(() => {
+            const round = String(baseWeek.label || '').match(/^(\d+)\s*(회차|주차)$/);
+            let label = round ? `${Number(round[1]) + 1}${round[2]}` : `다음 회차 (${startDate})`;
+            if (db.prepare('SELECT id FROM weeks WHERE label=?').get(label)) label += ` (${startDate})`;
+            const created = db.prepare('INSERT INTO weeks (label, start_date, end_date) VALUES (?, ?, ?)').run(label, startDate, endDate);
+            const id = Number(created.lastInsertRowid);
+            db.prepare(`INSERT INTO subject_records (student_id, week_id, subject_id, a_last_hw, updated_at)
+              SELECT student_id, ?, subject_id, a_this_hw, datetime('now') FROM subject_records
+              WHERE week_id=? AND a_this_hw IS NOT NULL AND TRIM(a_this_hw) != ''
+              ON CONFLICT(student_id, week_id, subject_id) DO NOTHING`).run(id, baseWeek.id);
+            writeAudit(db, { user_id: req.user.id, action: 'create', entity: 'week', entity_id: id, details: { label, source: 'question-reassignment' } });
+            return { id, label, start_date: startDate, end_date: endDate };
+          })();
+        }
+      }
+    }
+    const allWeeks = db.prepare('SELECT id, start_date, end_date FROM weeks ORDER BY id').all();
+    const sourceWeek = allWeeks.find(week => Number(week.id) === Number(weekRecord.week_id));
+    const previousTargetWeekId = resolveAssignmentTargetWeekId(allWeeks, currentAssignment, sourceWeek);
+    const weekChanged = explicitWeek && Number(targetWeek.id) !== previousTargetWeekId;
+    const reassigned = mentorChanged || weekChanged;
+    const recalculateDate = mentorChanged || explicitWeek;
     const targetDate = parseIsoDateValue(targetWeek?.start_date);
     if (targetDate && dayLabel) {
       targetDate.setDate(targetDate.getDate() + (KO_DAY.indexOf(dayLabel) - targetDate.getDay() + 7) % 7);
     }
     const hasTargetDate = dayLabel && targetDate && isDateWithinWeek(targetWeek, targetDate);
-    const assignedAt = mentorChanged
+    const assignedAt = reassigned
       ? new Date().toISOString()
       : String(currentAssignment.assigned_at || '').trim() || new Date().toISOString();
-    const assignedBy = mentorChanged
+    const assignedBy = reassigned
       ? String(req.user.display_name || req.user.username || req.user.role || '').trim()
       : String(currentAssignment.assigned_by || '').trim() || req.user.role;
 
@@ -1666,9 +1706,9 @@ export default function mentoringRoutes(db) {
       mentor_name: mentorName,
       mentor_role: String(req.body?.mentor_role ?? currentAssignment.mentor_role ?? 'mentor').trim() || 'mentor',
       target_week_id: targetWeek?.id || currentAssignment.target_week_id || null,
-      session_day_label: mentorChanged && hasTargetDate ? KO_DAY[targetDate.getDay()] : dayLabel,
-      session_month: mentorChanged ? (hasTargetDate ? String(targetDate.getMonth() + 1) : '') : monthRaw,
-      session_day: mentorChanged ? (hasTargetDate ? String(targetDate.getDate()) : '') : dayRaw,
+      session_day_label: recalculateDate && hasTargetDate ? KO_DAY[targetDate.getDay()] : dayLabel,
+      session_month: recalculateDate ? (hasTargetDate ? String(targetDate.getMonth() + 1) : '') : monthRaw,
+      session_day: recalculateDate ? (hasTargetDate ? String(targetDate.getDate()) : '') : dayRaw,
       session_start_time: startTime,
       session_duration_minutes: duration,
       assigned_at: assignedAt,
@@ -1679,7 +1719,7 @@ export default function mentoringRoutes(db) {
     problems[problemIndex] = {
       ...currentProblem,
       assignment: nextAssignment,
-      ...(mentorChanged ? {
+      ...(reassigned ? {
         completion_status: 'pending',
         completion_feedback: '',
         incomplete_reason: '',
@@ -1710,6 +1750,7 @@ export default function mentoringRoutes(db) {
         week_id: weekRecord.week_id,
         problem_index: problemIndex,
         target_week_id: nextAssignment.target_week_id,
+        previous_target_week_id: previousTargetWeekId,
         previous_mentor_name: currentAssignment.mentor_name || '',
         previous_completion_status: currentProblem.completion_status,
         previous_completion_feedback: currentProblem.completion_feedback,

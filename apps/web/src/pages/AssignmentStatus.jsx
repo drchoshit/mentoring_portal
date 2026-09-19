@@ -1304,6 +1304,7 @@ export default function AssignmentStatus() {
     );
     const automaticDate = datePartsForWeekDay(selectedWeek, automaticDay);
     setEditForm({
+      assignment_week_offset: 0,
       mentor_name: mentorName,
       mentor_role: String(item.mentor_role || 'mentor').trim() || 'mentor',
       session_day_label: automaticDay,
@@ -1318,6 +1319,24 @@ export default function AssignmentStatus() {
     setSavingKey('');
   }
 
+  function editTargetWeek(offset) {
+    if (!offset) return selectedWeek;
+    const start = parseDateOnly(selectedWeek?.start_date);
+    const end = parseDateOnly(selectedWeek?.end_date);
+    if (!start || !end) return null;
+    start.setDate(start.getDate() + 7);
+    end.setDate(end.getDate() + 7);
+    const iso = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    return weeks.find(week => week.start_date <= iso(start) && week.end_date >= iso(start))
+      || { label: '다음 회차', start_date: iso(start), end_date: iso(end) };
+  }
+
+  function changeEditWeek(offset) {
+    const target = editTargetWeek(offset);
+    const date = datePartsForWeekDay(target, editForm.session_day_label);
+    setEditForm(prev => ({ ...prev, assignment_week_offset: offset, session_month: date?.month || '', session_day: date?.day || '' }));
+  }
+
   async function saveEdit(item) {
     const rowKey = assignmentRowKey(item);
     if (!item?.week_record_id || !rowKey) return;
@@ -1327,6 +1346,8 @@ export default function AssignmentStatus() {
       const result = await api(`/api/mentoring/assignment-status/${encodeURIComponent(String(item.week_record_id))}`, {
         method: 'PUT',
         body: {
+          base_week_id: Number(weekId),
+          assignment_week_offset: editForm.assignment_week_offset || 0,
           problem_index: Number(item.problem_index || 0),
           mentor_name: String(editForm.mentor_name || '').trim(),
           mentor_role: String(editForm.mentor_role || '').trim() || 'mentor',
@@ -2949,6 +2970,21 @@ export default function AssignmentStatus() {
 
                     {isEditing ? (
                       <div className="mt-2 grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 md:grid-cols-6">
+                        <div className="md:col-span-6">
+                          <div className="text-[11px] text-slate-500">배정 주차 (현재 선택 회차 기준)</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            {[0, 1].map(offset => (
+                              <button key={offset} type="button" aria-pressed={(editForm.assignment_week_offset || 0) === offset}
+                                disabled={savingKey === rowKey || (offset === 1 && !editTargetWeek(1))}
+                                onClick={() => changeEditWeek(offset)}
+                                className={`rounded-lg border px-3 py-1.5 text-sm font-bold disabled:opacity-40 ${(editForm.assignment_week_offset || 0) === offset ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>
+                                {offset ? '다음 주' : '이번 주'}
+                              </button>
+                            ))}
+                            <span className="text-xs text-slate-600">{fmtWeekLabel(editTargetWeek(editForm.assignment_week_offset || 0))}</span>
+                          </div>
+                          {!editTargetWeek(1) ? <div className="mt-1 text-xs text-amber-700">다음 주 배정을 위해 회차의 시작일과 종료일을 등록해 주세요.</div> : null}
+                        </div>
                         <div className="md:col-span-3">
                           <div className="text-[11px] text-slate-500">멘토 이름</div>
                           <select
@@ -2961,16 +2997,15 @@ export default function AssignmentStatus() {
                                 normalizeMentorNameKey(option.mentor_name) === normalizeMentorNameKey(mentorName)
                               ));
                               const automaticDay = automaticMentorWorkDay(statusMentorInfo, mentorName, '');
-                              const mentorChanged = mentorName !== String(item.mentor_name || '').trim();
-                              const targetWeek = mentorChanged ? weeksDesc[0] : selectedWeek;
+                              const targetWeek = editTargetWeek(editForm.assignment_week_offset || 0);
                               const automaticDate = datePartsForWeekDay(targetWeek, automaticDay);
                               setEditForm((prev) => ({
                                 ...prev,
                                 mentor_name: mentorName,
                                 mentor_role: String(mentorOption?.mentor_role || 'mentor').trim() || 'mentor',
                                 session_day_label: automaticDay,
-                                session_month: automaticDate?.month || (mentorChanged ? '' : prev.session_month),
-                                session_day: automaticDate?.day || (mentorChanged ? '' : prev.session_day)
+                                session_month: automaticDate?.month || '',
+                                session_day: automaticDate?.day || ''
                               }));
                             }}
                           >
@@ -2980,14 +3015,14 @@ export default function AssignmentStatus() {
                               </option>
                             ))}
                           </select>
-                          {editForm.mentor_name !== String(item.mentor_name || '').trim() ? (
-                            <div className="mt-1 text-[11px] text-blue-700">저장하면 최신 회차에 진행중 질답으로 재배정됩니다.</div>
+                          {editForm.mentor_name !== String(item.mentor_name || '').trim() || editForm.assignment_week_offset === 1 ? (
+                            <div className="mt-1 text-[11px] text-blue-700">저장하면 선택한 주차에 진행중 질답으로 재배정됩니다.</div>
                           ) : null}
                         </div>
                         <div className="md:col-span-2">
                           <div className="text-[11px] text-slate-500">출근 요일 (자동)</div>
                           <div className="mt-1 flex min-h-10 items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-bold text-emerald-800">
-                            {editForm.session_day_label ? `${editForm.session_day_label}요일` : '출근 요일 정보 없음'}
+                            {editForm.session_day_label ? `${editForm.session_month && editForm.session_day ? `${editForm.session_month}/${editForm.session_day} · ` : ''}${editForm.session_day_label}요일` : '출근 요일 정보 없음'}
                           </div>
                           {editingMentorWorkDays.length > 1 ? (
                             <div className="mt-1 text-[11px] text-slate-500">등록 출근일: {editingMentorWorkDays.map((day) => `${day}요일`).join(' · ')}</div>
