@@ -1496,8 +1496,8 @@ export default function mentoringRoutes(db) {
       ? requestedProblemIndex
       : 0;
     const action = String(req.body?.action || '').trim().toLowerCase();
-    if (action === 'delete' && req.user.role !== 'director') {
-      return res.status(403).json({ error: 'Only director can delete assignment items' });
+    if (action === 'delete' && !['director', 'admin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Only director or admin can delete assignment items' });
     }
 
     const dist = normalizeWrongAnswerDistribution(safeJson(weekRecord.e_wrong_answer_distribution, {}));

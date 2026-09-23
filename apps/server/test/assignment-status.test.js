@@ -70,12 +70,48 @@ async function fixture(t, { latestStart = '2026-09-14', latestEnd = '2026-09-20'
       method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-test-role': role },
       body: JSON.stringify({ problem_index: 0, mentor_name: '새멘토M', session_day_label: '화', ...body })
     }),
+    deleteProblem: (role) => fetch(`${base}/1/problem-state`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-test-role': role },
+      body: JSON.stringify({ problem_index: 0, action: 'delete', acting_mentor_name: '기존멘토M' })
+    }),
     list: async (week) => {
       const response = await fetch(`${base}?weekId=${week}`);
       assert.equal(response.status, 200);
       return (await response.json()).assignments;
     }
   };
+}
+
+for (const role of ['director', 'admin']) {
+  test(`${role} can soft-delete a question while preserving images and other questions`, async (t) => {
+    const f = await fixture(t);
+    const original = f.read();
+    const originalRows = await f.list(1);
+    const response = await f.deleteProblem(role);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.ok(result.deleted_at);
+    const saved = f.read();
+    assert.equal(saved.problems[0].deleted_at, result.deleted_at);
+    assert.equal(saved.problems[0].deleted_by, role);
+    assert.deepEqual(saved.problems[0].images.map(({ id, url, filename }) => ({ id, url, filename })), original.problems[0].images);
+    const rows = await f.list(1);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].problem_index, 1);
+    assert.deepEqual(rows[0], originalRows.find((row) => row.problem_index === 1));
+    const audit = f.db.prepare('SELECT action, entity FROM audit_logs ORDER BY id DESC LIMIT 1').get();
+    assert.deepEqual(audit, { action: 'delete', entity: 'assignment_problem_state' });
+  });
+}
+
+for (const role of ['lead', 'mentor', 'parent']) {
+  test(`${role} cannot delete questions`, async (t) => {
+    const f = await fixture(t);
+    const original = f.read();
+    assert.equal((await f.deleteProblem(role)).status, 403);
+    assert.deepEqual(f.read(), original);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM audit_logs').get().n, 0);
+  });
 }
 
 test('changing mentor shows only that question in the latest round with its images and a pending status', async (t) => {

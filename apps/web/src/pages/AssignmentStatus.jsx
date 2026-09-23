@@ -1206,6 +1206,7 @@ export default function AssignmentStatus() {
   });
   const mentorSectionRefs = useRef(new Map());
   const isDirector = viewer?.role === 'director';
+  const canDeleteAssignment = ['director', 'admin'].includes(String(viewer?.role || '').trim());
   const canEditAssignment = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
   const canUpdateState = ['director', 'lead', 'admin', 'mentor'].includes(String(viewer?.role || '').trim());
   const canIssueBriefing = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
@@ -2955,7 +2956,7 @@ export default function AssignmentStatus() {
                             </button>
                           )
                         ) : null}
-                        {isDirector ? (
+                        {canDeleteAssignment ? (
                           <button
                             type="button"
                             className="inline-flex h-8 min-w-[54px] items-center justify-center rounded-lg border border-rose-200 bg-white px-3 text-xs font-bold text-rose-700 shadow-sm transition hover:border-rose-400 hover:bg-rose-50"

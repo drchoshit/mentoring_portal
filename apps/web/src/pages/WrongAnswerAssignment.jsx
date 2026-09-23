@@ -355,6 +355,7 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
     problemIndex: 0
   });
   const studentPickerRef = useRef(null);
+  const recordRequestRef = useRef(0);
 
   const selectedWeek = useMemo(() => weeks.find((week) => String(week.id) === String(weekId)) || null, [weeks, weekId]);
   const selectedStudent = useMemo(() => students.find((student) => String(student.id) === String(studentId)) || null, [students, studentId]);
@@ -393,7 +394,7 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
       const nextWeek = weekList.some((week) => String(week.id) === requestedWeekId)
         ? requestedWeekId : String(weekList[weekList.length - 1]?.id || '');
       const nextStudent = studentList.some((student) => String(student.id) === requestedStudentId)
-        ? requestedStudentId : String(studentList[0]?.id || '');
+        ? requestedStudentId : '';
       setWeekId(nextWeek);
       setStudentId(nextStudent);
       if (!embedded) setSearchParams({ week: nextWeek, student: nextStudent }, { replace: true });
@@ -415,10 +416,12 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
 
   async function loadRecord(targetStudentId = studentId, targetWeekId = weekId, { keepDraft = false } = {}) {
     if (!targetStudentId || !targetWeekId) return;
+    const requestId = ++recordRequestRef.current;
     setLoading(true);
     setError('');
     try {
       const result = await api(`/api/mentoring/record?studentId=${encodeURIComponent(targetStudentId)}&weekId=${encodeURIComponent(targetWeekId)}`);
+      if (requestId !== recordRequestRef.current) return;
       const distribution = normalizeDistribution(result?.week_record?.e_wrong_answer_distribution);
       const nextIndex = keepDraft ? targetIndex : firstAvailableProblemIndex(distribution.problems);
       setWeekRecordId(String(result?.week_record?.id || ''));
@@ -434,9 +437,9 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
       }
       await loadLogs(targetWeekId);
     } catch (e) {
-      setError(e?.message || '질답 배정 정보를 불러오지 못했습니다.');
+      if (requestId === recordRequestRef.current) setError(e?.message || '질답 배정 정보를 불러오지 못했습니다.');
     } finally {
-      setLoading(false);
+      if (requestId === recordRequestRef.current) setLoading(false);
     }
   }
 
@@ -446,7 +449,18 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
     if (fixedStudentId) setStudentId(String(fixedStudentId));
   }, [fixedStudentId, fixedWeekId]);
   useEffect(() => {
+    setWeekRecordId('');
+    setStudentSchedule({});
+    setMentorInfo({ mentors: [] });
+    setPersisted(normalizeDistribution({}));
+    resetDraft(0);
+    setImageUploadModal((prev) => ({ ...prev, open: false }));
+    setError('');
+    setMessage('');
+    setLoading(false);
     if (weekId && studentId) void loadRecord(studentId, weekId);
+    else if (weekId) void loadLogs(weekId);
+    return () => { recordRequestRef.current += 1; };
   }, [weekId, studentId]);
   useEffect(() => {
     if (!studentPickerOpen) return undefined;
@@ -573,7 +587,7 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
   }
 
   async function submit() {
-    if (!weekRecordId) return;
+    if (!studentId || !weekRecordId || loading) return;
     if (![draft.subject, draft.material, draft.problem_name, draft.note].some((value) => String(value || '').trim()) && !(draft.images || []).length) {
       setError('과목, 교재명, 문제번호, 전달사항 또는 문제 이미지를 입력해 주세요.');
       return;
@@ -656,7 +670,7 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
                 <span className="truncate">
                   {selectedStudent
                     ? `${selectedStudent.external_id ? `${selectedStudent.external_id} · ` : ''}${selectedStudent.name}`
-                    : '학생을 선택해 주세요'}
+                    : '미선택'}
                 </span>
                 {!fixedStudentId ? <span className="text-xs text-slate-400" aria-hidden="true">▼</span> : null}
               </button>
@@ -671,6 +685,16 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
                     aria-label="학생 이름 또는 아이디 검색"
                   />
                   <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-slate-100 p-1" role="listbox" aria-label="학생 검색 결과">
+                    <button
+                      type="button"
+                      className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition ${!studentId ? 'bg-blue-600 font-bold text-white' : 'text-slate-800 hover:bg-blue-50'}`}
+                      onClick={() => selectStudent('')}
+                      role="option"
+                      aria-selected={!studentId}
+                    >
+                      <span>미선택</span>
+                      {!studentId ? <span className="ml-2 text-xs">선택됨</span> : null}
+                    </button>
                     {filteredStudents.map((student) => {
                       const selected = String(student.id) === String(studentId);
                       return (
@@ -697,6 +721,7 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
             <button
               type="button"
               className="btn border border-blue-600 bg-blue-600 text-white shadow-sm hover:bg-blue-700"
+              disabled={!studentId || !weekRecordId || loading}
               onClick={() => setMentorPickerOpen((open) => !open)}
               aria-expanded={mentorPickerOpen}
             >
@@ -757,7 +782,7 @@ export default function WrongAnswerAssignment({ fixedStudentId = '', fixedWeekId
           <button type="button" className="btn border border-violet-600 bg-violet-600 text-white hover:bg-violet-700" onClick={openImageUpload}>문제 이미지 업로드하기</button>
           <button type="button" className="btn-refresh" onClick={() => loadRecord(studentId, weekId, { keepDraft: true })}>업로드 반영</button>
           <button type="button" className="btn border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100" onClick={clearDraft}>삭제</button>
-          <button type="button" className="btn-primary ml-auto" disabled={saving || !weekRecordId} onClick={submit}>{saving ? '제출 중...' : '완료 및 제출'}</button>
+          <button type="button" className="btn-primary ml-auto" disabled={saving || loading || !studentId || !weekRecordId} onClick={submit}>{saving ? '제출 중...' : '완료 및 제출'}</button>
         </div>
         {(draft.images || []).length ? <div className="mt-4 flex flex-wrap gap-3">{draft.images.map((image, index) => (
           <div key={image.id || image.url || index} className="relative rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
