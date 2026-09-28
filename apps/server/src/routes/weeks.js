@@ -2,6 +2,7 @@ import express from 'express';
 import { requireRole } from '../lib/auth.js';
 import { writeAudit } from '../lib/audit.js';
 import { cleanupOldProblemImages } from '../lib/problemImageRetention.js';
+import { fillMissingCurricula } from '../lib/curriculum.js';
 
 export default function weekRoutes(db) {
   const router = express.Router();
@@ -34,6 +35,17 @@ export default function weekRoutes(db) {
           `
         ).run(newWeekId, prevWeek.id);
       }
+      // Materialize curricula even if nobody opens the previous or new week page.
+      // Print/share/list endpoints must see the same persistent curriculum.
+      db.transaction(() => {
+        const students = db.prepare(`SELECT DISTINCT m.student_id, c.source_week_id
+          FROM mentoring_subjects m LEFT JOIN student_curriculum_sources c ON c.student_id=m.student_id
+          WHERE m.deleted_from_week_id IS NULL OR m.deleted_from_week_id > ?`).all(newWeekId);
+        for (const student of students) {
+          const source = student.source_week_id && student.source_week_id < newWeekId ? student.source_week_id : null;
+          fillMissingCurricula(db, student.student_id, newWeekId, source);
+        }
+      })();
       const cleanupResult = cleanupOldProblemImages(db);
       writeAudit(db, {
         user_id: req.user.id,

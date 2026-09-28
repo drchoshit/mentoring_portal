@@ -1,4 +1,5 @@
 ﻿import express from 'express';
+import { fillMissingCurricula, hasCurriculum } from '../lib/curriculum.js';
 import { canEditField, filterObjectByView } from '../lib/permissions.js';
 import { writeAudit } from '../lib/audit.js';
 import { signWrongAnswerUploadToken } from '../lib/problemUploadToken.js';
@@ -243,53 +244,15 @@ function resolveCurriculumSourceWeekId(db, student_id, week_id) {
   return { preferenceWeekId, effectiveWeekId };
 }
 
-function ensureSubjectRecord(db, student_id, week_id, subject_id, source_week_id = null) {
+function ensureSubjectRecord(db, student_id, week_id, subject_id) {
   const existing = db.prepare('SELECT id FROM subject_records WHERE student_id=? AND week_id=? AND subject_id=?').get(student_id, week_id, subject_id);
   if (existing) return existing.id;
-  const sourceWeekId = toPositiveInt(source_week_id);
-  let seedCurriculum = null;
-  if (sourceWeekId && sourceWeekId !== Number(week_id)) {
-    const source = db
-      .prepare('SELECT a_curriculum FROM subject_records WHERE student_id=? AND week_id=? AND subject_id=?')
-      .get(student_id, sourceWeekId, subject_id);
-    if (source?.a_curriculum != null) seedCurriculum = String(source.a_curriculum);
-  }
-  const info = db.prepare('INSERT INTO subject_records (student_id, week_id, subject_id, a_curriculum) VALUES (?,?,?,?)')
-    .run(student_id, week_id, subject_id, seedCurriculum);
-  return info.lastInsertRowid;
+  return db.prepare('INSERT INTO subject_records (student_id, week_id, subject_id) VALUES (?,?,?)')
+    .run(student_id, week_id, subject_id).lastInsertRowid;
 }
 
 function hydrateCurriculumFromSourceIfEmpty(db, student_id, week_id, source_week_id) {
-  const sourceWeekId = toPositiveInt(source_week_id);
-  if (!sourceWeekId || sourceWeekId === Number(week_id)) return;
-
-  db.prepare(
-    `
-    UPDATE subject_records
-    SET
-      a_curriculum = (
-        SELECT src.a_curriculum
-        FROM subject_records src
-        WHERE src.student_id = subject_records.student_id
-          AND src.subject_id = subject_records.subject_id
-          AND src.week_id = ?
-        LIMIT 1
-      ),
-      updated_at = datetime('now')
-    WHERE student_id = ?
-      AND week_id = ?
-      AND (a_curriculum IS NULL OR TRIM(a_curriculum) = '')
-      AND EXISTS (
-        SELECT 1
-        FROM subject_records src
-        WHERE src.student_id = subject_records.student_id
-          AND src.subject_id = subject_records.subject_id
-          AND src.week_id = ?
-          AND src.a_curriculum IS NOT NULL
-          AND TRIM(src.a_curriculum) != ''
-      )
-    `
-  ).run(sourceWeekId, student_id, week_id, sourceWeekId);
+  return fillMissingCurricula(db, student_id, week_id, source_week_id);
 }
 
 function hydrateLastHomeworkFromPreviousWeekIfEmpty(db, student_id, week_id, previous_week_id) {
@@ -325,31 +288,8 @@ function hydrateLastHomeworkFromPreviousWeekIfEmpty(db, student_id, week_id, pre
   ).run(prevWeekId, student_id, week_id, prevWeekId);
 }
 
-function applyCurriculumSourceToWeek(db, student_id, week_id, source_week_id, updated_by) {
-  const sourceWeekId = toPositiveInt(source_week_id);
-  if (!sourceWeekId || sourceWeekId === Number(week_id)) return 0;
-
-  const info = db.prepare(
-    `
-    INSERT INTO subject_records (student_id, week_id, subject_id, a_curriculum, curriculum_updated_at, updated_at, updated_by)
-    SELECT student_id, ?, subject_id, a_curriculum, datetime('now'), datetime('now'), ?
-    FROM subject_records
-    WHERE student_id = ?
-      AND week_id = ?
-      AND a_curriculum IS NOT NULL
-      AND TRIM(a_curriculum) != ''
-    ON CONFLICT(student_id, week_id, subject_id)
-    DO UPDATE SET
-      a_curriculum = excluded.a_curriculum,
-      curriculum_updated_at = datetime('now'),
-      updated_at = datetime('now'),
-      updated_by = excluded.updated_by
-    WHERE subject_records.a_curriculum IS NULL
-      OR TRIM(subject_records.a_curriculum) = ''
-    `
-  ).run(week_id, updated_by ?? null, student_id, sourceWeekId);
-
-  return Number(info?.changes || 0);
+function applyCurriculumSourceToWeek(db, student_id, week_id, source_week_id) {
+  return fillMissingCurricula(db, student_id, week_id, source_week_id);
 }
 
 function assertParentOwnsStudent(req, student_id) {
@@ -1040,6 +980,25 @@ export default function mentoringRoutes(db) {
     });
   });
 
+  // Administrative diagnosis must not invoke the record page's lazy data hydration.
+  router.get('/curriculum-snapshot', (req, res) => {
+    if (!['director', 'admin'].includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
+    const ids = [...new Set(String(req.query.studentIds || '').split(',').map(toPositiveInt).filter(Boolean))];
+    if (!ids.length || ids.length > 20) return res.status(400).json({ error: '1 to 20 student IDs required' });
+    const placeholders = ids.map(() => '?').join(',');
+    const snapshot = db.transaction(() => ({
+      students: db.prepare(`SELECT id,name FROM students WHERE id IN (${placeholders})`).all(...ids),
+      weeks: db.prepare('SELECT * FROM weeks ORDER BY id').all(),
+      subjects: db.prepare(`SELECT * FROM mentoring_subjects WHERE student_id IN (${placeholders})`).all(...ids),
+      sources: db.prepare(`SELECT * FROM student_curriculum_sources WHERE student_id IN (${placeholders})`).all(...ids),
+      subject_records: db.prepare(`SELECT * FROM subject_records WHERE student_id IN (${placeholders}) ORDER BY id`).all(...ids),
+      week_records: db.prepare(`SELECT * FROM week_records WHERE student_id IN (${placeholders}) ORDER BY id`).all(...ids),
+      audit_logs: db.prepare(`SELECT a.* FROM audit_logs a JOIN subject_records r ON r.id=a.entity_id
+        WHERE a.entity='subject_record' AND r.student_id IN (${placeholders}) ORDER BY a.id`).all(...ids)
+    }))();
+    res.json(snapshot);
+  });
+
   router.put('/curriculum-source', (req, res) => {
     const student_id = toPositiveInt(req.body?.student_id ?? req.body?.studentId);
     const week_id = toPositiveInt(req.body?.week_id ?? req.body?.weekId);
@@ -1138,20 +1097,38 @@ export default function mentoringRoutes(db) {
       return String(value);
     };
     const values = allowed.map((k) => serializeFieldValue(updates[k]));
-    db.prepare(`UPDATE subject_records SET ${setSql}, updated_at=datetime('now'), updated_by=? WHERE id=?`)
-      .run(...values, req.user.id, id);
-
-    writeAudit(db, {
-      user_id: req.user.id,
-      action: 'update',
-      entity: 'subject_record',
-      entity_id: id,
-      details: {
-        fields: allowed,
-        before: Object.fromEntries(allowed.map((key) => [key, row[key] ?? null])),
-        after: Object.fromEntries(allowed.map((key, index) => [key, values[index] ?? null]))
+    const result = db.transaction(() => {
+      const current = db.prepare('SELECT * FROM subject_records WHERE id=?').get(id);
+      if ((req.body.student_id != null && Number(req.body.student_id) !== current.student_id)
+        || (req.body.week_id != null && Number(req.body.week_id) !== current.week_id)) {
+        return { status: 409, code: 'RECORD_SCOPE_MISMATCH', error: '학생 또는 회차가 변경되었습니다. 저장할 기록을 다시 확인해 주세요.' };
       }
-    });
+      if (allowed.includes('a_curriculum')) {
+        const next = values[allowed.indexOf('a_curriculum')];
+        if (hasCurriculum(current.a_curriculum) && !hasCurriculum(next)) {
+          return { status: 409, code: 'CURRICULUM_CLEAR_BLOCKED', error: '저장된 학습 커리큘럼을 빈 내용으로 지울 수 없습니다. 기존 기록은 보존되었습니다.' };
+        }
+        if (String(next ?? '') !== String(current.a_curriculum ?? '')) {
+          if (!Object.hasOwn(req.body, 'expected_curriculum')
+            || String(req.body.expected_curriculum ?? '') !== String(current.a_curriculum ?? '')) {
+            return { status: 409, code: 'CURRICULUM_CONFLICT', error: '학습 커리큘럼이 다른 화면에서 변경되었거나 화면이 오래되었습니다. 입력 내용을 복사해 보관한 뒤 새로고침하여 최신 기록과 비교해 주세요. 기존 기록은 덮어쓰지 않았습니다.' };
+          }
+        }
+      }
+      db.prepare(`UPDATE subject_records SET ${setSql}, updated_at=datetime('now'), updated_by=? WHERE id=?`)
+        .run(...values, req.user.id, id);
+      writeAudit(db, {
+        user_id: req.user.id, action: 'update', entity: 'subject_record', entity_id: id,
+        details: {
+          student_id: current.student_id, week_id: current.week_id, subject_id: current.subject_id,
+          fields: allowed,
+          before: Object.fromEntries(allowed.map((key) => [key, current[key] ?? null])),
+          after: Object.fromEntries(allowed.map((key, index) => [key, values[index] ?? null]))
+        }
+      });
+      return null;
+    })();
+    if (result) return res.status(result.status).json(result);
     res.json({ ok: true, updated_fields: allowed });
   });
 

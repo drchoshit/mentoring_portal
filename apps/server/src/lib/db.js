@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
+import { ensureCurriculumHistory } from './curriculum.js';
 
 const ADMIN_PASSWORD_HASH_20260725 = '$2b$12$xn6.BF4Homhq3e4g48Og1ubq75l3ZJlBPANoccjoBE6z8/MTgUxg2';
 const ADMIN_PASSWORD_ROTATION_KEY_20260725 = 'migration:admin_password_rotation_20260725';
@@ -1548,6 +1549,7 @@ function migrateAdminPasswordRotation20260725() {
 
 export function initDb() {
   bootstrap();
+  ensureCurriculumHistory(db);
   const backfilled = backfillRound4LastWeekTasksFromRound3ThisWeek();
   if (backfilled > 0) {
     // eslint-disable-next-line no-console

@@ -11,6 +11,7 @@ import { API_BASE, api, getToken } from '../api.js';
 import { useAuth } from '../auth/AuthProvider.jsx';
 import WrongAnswerAssignment from './WrongAnswerAssignment.jsx';
 import { taskListText } from '../utils/weeklyTasks.js';
+import { reconcileSubjectDrafts, createSubjectSaveQueue } from '../utils/subjectDrafts.js';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_LABELS = { Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금', Sat: '토', Sun: '일' };
@@ -1010,6 +1011,13 @@ export default function Mentoring() {
   // 과목 ?�력 보존/?�동?�?�용 draft
   const [subjectDrafts, setSubjectDrafts] = useState({});
   const draftScopeRef = useRef('');
+  const subjectBaselinesRef = useRef({});
+  const subjectDraftsRef = useRef({});
+  subjectDraftsRef.current = subjectDrafts;
+  const subjectSaveQueueRef = useRef(createSubjectSaveQueue());
+  const recordRequestRef = useRef(0);
+  const activeStudentRef = useRef(studentId);
+  activeStudentRef.current = studentId;
   const profileRef = useRef(null);
   const curriculumNoticeStudentRef = useRef('');
 
@@ -1039,6 +1047,7 @@ export default function Mentoring() {
   }
 
   async function loadAll() {
+    const requestId = ++recordRequestRef.current;
     setError('');
     try {
       const w = await api('/api/weeks');
@@ -1066,6 +1075,7 @@ export default function Mentoring() {
         const r = await api(
           `/api/mentoring/record?studentId=${encodeURIComponent(studentId)}&weekId=${encodeURIComponent(effectiveWeek)}`
         );
+        if (requestId !== recordRequestRef.current || String(activeStudentRef.current) !== String(studentId)) return;
         setRec(r);
       }
 
@@ -1093,41 +1103,29 @@ export default function Mentoring() {
     setShowCurriculumUpdateNotice(Boolean(rec?.curriculum_updated_recently));
   }, [rec?.student?.id, rec?.curriculum_updated_at, rec?.curriculum_updated_recently, studentId]);
 
-  // subjectDrafts 초기??병합: 회차 ?�는 ?�생??바뀌면 reset, 같�? 범위�??�규 과목�?추�?
   useEffect(() => {
-    if (!rec?.subject_records) return;
-    const scopeKey = `${studentId}:${weekId || ''}`;
-    const records = rec.subject_records || [];
-
-    const build = () => {
-      const next = {};
-      for (const r of records) {
-        const id = String(r.id);
-        next[id] = {};
-        for (const k of SUBJECT_FIELD_KEYS) next[id][k] = r?.[k] ?? '';
-      }
-      return next;
-    };
-
-    if (draftScopeRef.current !== scopeKey) {
-      draftScopeRef.current = scopeKey;
-      setSubjectDrafts(build());
-      return;
-    }
-
-    // 같�? 범위�? ?�는 과목�?채�?
-    setSubjectDrafts((prev) => {
-      const next = { ...(prev || {}) };
-      for (const r of records) {
-        const id = String(r.id);
-        if (!next[id]) {
-          next[id] = {};
-          for (const k of SUBJECT_FIELD_KEYS) next[id][k] = r?.[k] ?? '';
-        }
-      }
-      return next;
-    });
+    if (!rec?.subject_records || String(rec.student?.id) !== String(studentId)
+      || String(rec.week?.id) !== String(weekId)) return;
+    const scopeKey = String(studentId) + ':' + String(weekId);
+    const sameScope = draftScopeRef.current === scopeKey;
+    const merged = reconcileSubjectDrafts(rec.subject_records,
+      sameScope ? subjectDraftsRef.current : {},
+      sameScope ? subjectBaselinesRef.current : {}, SUBJECT_FIELD_KEYS);
+    draftScopeRef.current = scopeKey;
+    subjectBaselinesRef.current = merged.baselines;
+    subjectDraftsRef.current = merged.drafts;
+    setSubjectDrafts(merged.drafts);
   }, [rec?.subject_records, studentId, weekId]);
+
+  useEffect(() => {
+    const warnUnsaved = (event) => {
+      const dirty = Object.entries(subjectDraftsRef.current).some(([id, draft]) =>
+        SUBJECT_FIELD_KEYS.some((key) => String(draft[key] ?? '') !== String(subjectBaselinesRef.current[id]?.[key] ?? '')));
+      if (dirty) { event.preventDefault(); event.returnValue = ''; }
+    };
+    window.addEventListener('beforeunload', warnUnsaved);
+    return () => window.removeEventListener('beforeunload', warnUnsaved);
+  }, []);
 
   useEffect(() => {
     const preferenceWeekId = rec?.curriculum_source_preference_week_id;
@@ -1138,12 +1136,16 @@ export default function Mentoring() {
   }, [rec?.curriculum_source_preference_week_id, rec?.curriculum_source_week_id, weekId]);
 
   async function changeWeek(id) {
+    try { await saveAllSubjectsCore({ confirm: false }); }
+    catch (e) { setError(e.message); return; }
+    const requestId = ++recordRequestRef.current;
     setWeekId(id);
     setQueryParams({ week: id });
     try {
       const r = await api(
         `/api/mentoring/record?studentId=${encodeURIComponent(studentId)}&weekId=${encodeURIComponent(id)}`
       );
+      if (requestId !== recordRequestRef.current || String(activeStudentRef.current) !== String(studentId)) return;
       setRec(r);
 
       await loadStudentFeeds();
@@ -1918,7 +1920,8 @@ export default function Mentoring() {
   }
 
   // 과목 기록
-  const subjectRecords = rec?.subject_records || [];
+  const subjectRecords = String(rec?.student?.id) === String(studentId)
+    && String(rec?.week?.id) === String(weekId) ? rec?.subject_records || [] : [];
 
   function hasOwnField(obj, key) {
     return Object.prototype.hasOwnProperty.call(obj || {}, key);
@@ -1942,7 +1945,7 @@ export default function Mentoring() {
     for (const k of editableKeys) {
       if (!hasOwnField(draft, k)) continue;
       const nextValue = subjectTextValue(draft[k]);
-      const prevValue = subjectTextValue(record?.[k]);
+      const prevValue = subjectTextValue(subjectBaselinesRef.current[sid]?.[k] ?? record?.[k]);
       if (nextValue !== prevValue) body[k] = nextValue;
     }
 
@@ -1960,17 +1963,29 @@ export default function Mentoring() {
     });
   }
 
-  async function autoSaveOneSubject(subjectRecordId, draftOverride = null, onlyKeys = SUBJECT_FIELD_KEYS) {
+  async function persistSubject(subjectRecordId, draftOverride, onlyKeys) {
     const sid = String(subjectRecordId);
-    if (!sid) return;
-    const body = buildSubjectRecordPatch(sid, draftOverride, onlyKeys);
-    if (!Object.keys(body).length) return;
+    const snapshot = { ...(draftOverride || subjectDraftsRef.current[sid] || {}) };
+    const scope = draftScopeRef.current;
+    return subjectSaveQueueRef.current(sid, async () => {
+      const body = buildSubjectRecordPatch(sid, snapshot, onlyKeys);
+      if (!Object.keys(body).length) return;
+      const baseline = subjectBaselinesRef.current[sid];
+      if (!baseline || draftScopeRef.current !== scope) throw new Error('저장할 학생 또는 회차가 변경되었습니다. 입력 내용을 보관한 뒤 기록을 다시 확인해 주세요.');
+      const payload = { ...body, student_id: baseline.student_id, week_id: baseline.week_id };
+      if (hasOwnField(body, 'a_curriculum')) payload.expected_curriculum = baseline.a_curriculum ?? '';
+      await api('/api/mentoring/subject-record/' + sid, { method: 'PUT', body: payload });
+      if (draftScopeRef.current === scope) {
+        subjectBaselinesRef.current[sid] = { ...subjectBaselinesRef.current[sid], ...body };
+      }
+    });
+  }
 
+  async function autoSaveOneSubject(subjectRecordId, draftOverride = null, onlyKeys = SUBJECT_FIELD_KEYS) {
     try {
-      await api(`/api/mentoring/subject-record/${sid}`, { method: 'PUT', body });
+      await persistSubject(subjectRecordId, draftOverride, onlyKeys);
     } catch (e) {
-      // 저장 실패 시 draft 유지
-      setError(e?.message || '과목 기록 저장에 실패했습니다.');
+      setError(e.message);
     }
   }
 
@@ -1982,9 +1997,7 @@ export default function Mentoring() {
 
     for (const r of subjectRecords) {
       const sid = String(r.id);
-      const body = buildSubjectRecordPatch(sid, subjectDrafts?.[sid] || {}, editableKeys);
-      if (!Object.keys(body).length) continue;
-      await api(`/api/mentoring/subject-record/${sid}`, { method: 'PUT', body });
+      await persistSubject(sid, subjectDraftsRef.current[sid], editableKeys);
     }
   }
 
@@ -2009,9 +2022,7 @@ export default function Mentoring() {
 
       for (const r of subjectRecords) {
         const sid = String(r.id);
-        const body = buildSubjectRecordPatch(sid, subjectDrafts?.[sid] || {}, ['a_curriculum']);
-        if (!Object.keys(body).length) continue;
-        await api(`/api/mentoring/subject-record/${sid}`, { method: 'PUT', body });
+        await persistSubject(sid, subjectDraftsRef.current[sid], ['a_curriculum']);
       }
 
       await loadAll();
@@ -2736,7 +2747,7 @@ export default function Mentoring() {
                 parentMode={parentMode}
                 draft={subjectDrafts?.[String(r.id)] || {}}
                 onChangeDraft={(patch) => updateSubjectDraft(r.id, patch)}
-                onAutoSave={(draftSnapshot) => autoSaveOneSubject(r.id, draftSnapshot)}
+                onAutoSave={(draftSnapshot, keys) => autoSaveOneSubject(r.id, draftSnapshot, keys)}
                 onDelete={() => deleteSubject(r.subject_id || r.id, r.subject_name)}
               />
             ))}
@@ -3575,7 +3586,7 @@ function CurriculumStrip({
                       onAutoSave?.(r.id, {
                         ...(drafts?.[sid] || {}),
                         [fieldKey]: e.currentTarget.value
-                      });
+                      }, [fieldKey]);
                     }
                   }}
                   disabled={!editable || busy}
@@ -3721,9 +3732,9 @@ function SubjectWideEditor({ record, perms, role, busy, parentMode, draft, onCha
     onChangeDraft({ [key]: value });
   }
 
-  function handleAutoSave() {
+  function handleAutoSave(key) {
     dirtyRef.current = false;
-    onAutoSave?.(localDraft);
+    onAutoSave?.(localDraft, [key]);
   }
 
   function FieldHeader({ field }) {
@@ -3786,7 +3797,7 @@ function SubjectWideEditor({ record, perms, role, busy, parentMode, draft, onCha
                 percentOptions={percentOptions}
                 onChangeValue={(val) => updateLocalField(lastHw.k, val)}
                 onBlur={() => {
-                  if (lastHw.editable) handleAutoSave();
+                  if (lastHw.editable) handleAutoSave(lastHw.k);
                 }}
               />
               {!lastHw.editable ? <div className="mt-2 text-xs text-slate-700">읽기 전용</div> : null}
@@ -3805,7 +3816,7 @@ function SubjectWideEditor({ record, perms, role, busy, parentMode, draft, onCha
                 showProgress={false}
                 onChangeValue={(val) => updateLocalField(thisHw.k, val)}
                 onBlur={() => {
-                  if (thisHw.editable) handleAutoSave();
+                  if (thisHw.editable) handleAutoSave(thisHw.k);
                 }}
               />
               {!thisHw.editable ? <div className="mt-2 text-xs text-slate-700">읽기 전용</div> : null}
@@ -3821,7 +3832,7 @@ function SubjectWideEditor({ record, perms, role, busy, parentMode, draft, onCha
               minHeight={COMMENT_TEXTAREA_MIN_HEIGHT}
               disabled={!comment.editable}
               onBlur={() => {
-                if (comment.editable) handleAutoSave();
+                if (comment.editable) handleAutoSave(comment.k);
               }}
               onValueChange={(val) => updateLocalField(comment.k, val)}
             />
