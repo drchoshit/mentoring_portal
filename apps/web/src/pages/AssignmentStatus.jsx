@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { API_BASE, api } from '../api.js';
 import { groupAssignmentsByWeek } from '../utils/assignmentWeekGroups.js';
+import { preferredWeekId, recentWeekOptions, weekOptionLabel } from '../utils/weekOptions.js';
 
 const DAY_ORDER = ['월', '화', '수', '목', '금', '토', '일', '-'];
 const DAY_OPTIONS = ['월', '화', '수', '목', '금', '토', '일'];
@@ -1269,12 +1270,9 @@ export default function AssignmentStatus() {
       );
       setWeeks(orderedWeeks);
 
-      const hasWeek = weekId && orderedWeeks.some((x) => String(x.id) === String(weekId));
-      const effectiveWeekId = hasWeek
-        ? String(weekId)
-        : (orderedWeeks[orderedWeeks.length - 1]?.id ? String(orderedWeeks[orderedWeeks.length - 1].id) : '');
+      const effectiveWeekId = preferredWeekId(orderedWeeks, weekId);
 
-      if (!hasWeek && effectiveWeekId) {
+      if (effectiveWeekId !== String(weekId) && effectiveWeekId) {
         setWeekId(effectiveWeekId);
         setQueryParams({ week: effectiveWeekId });
       }
@@ -1848,7 +1846,7 @@ export default function AssignmentStatus() {
     [weeks, weekId]
   );
   const weeksDesc = useMemo(
-    () => [...(weeks || [])].sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0)),
+    () => recentWeekOptions(weeks),
     [weeks]
   );
   const sortedRows = useMemo(() => {
@@ -2618,7 +2616,7 @@ export default function AssignmentStatus() {
                 >
                   {weeksDesc.map((w) => (
                     <option key={w.id} value={w.id}>
-                      {fmtWeekLabel(w)}
+                      {weekOptionLabel(w, fmtWeekLabel(w))}
                     </option>
                   ))}
                 </select>
