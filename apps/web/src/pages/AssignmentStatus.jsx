@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { API_BASE, api } from '../api.js';
+import { groupAssignmentsByWeek } from '../utils/assignmentWeekGroups.js';
 
 const DAY_ORDER = ['월', '화', '수', '목', '금', '토', '일', '-'];
 const DAY_OPTIONS = ['월', '화', '수', '목', '금', '토', '일'];
@@ -2596,7 +2597,7 @@ export default function AssignmentStatus() {
               <div>
                 <div className="text-lg font-semibold text-brand-800">질답 배정현황</div>
                 <div className="text-sm text-slate-600">
-                  멘토 별로 묶은 질문 목록을 등록순(오래된 순)으로 확인합니다.
+                  멘토별 질문을 예정일 기준으로 구분하고, 각 구역 안에서는 등록순(오래된 순)으로 확인합니다.
                 </div>
                 {viewer?.display_name ? (
                   <div className="mt-1 text-xs text-slate-500">
@@ -2628,6 +2629,7 @@ export default function AssignmentStatus() {
             </div>
             <div className="mt-2 text-xs text-slate-500">
               {weekLabel ? `기준 회차: ${weekLabel}` : '회차를 선택해 주세요.'}
+              {' · 주간 구분: 오늘 기준 월~일 (한국 시간)'}
             </div>
             {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
 
@@ -2865,8 +2867,19 @@ export default function AssignmentStatus() {
               </div>
             </div>
 
-            <div className="mt-3 space-y-2">
-              {mentorGroup.items.map((item) => {
+            <div className="mt-3 space-y-4">
+              {groupAssignmentsByWeek(mentorGroup.items, selectedWeek).map((weekGroup) => (
+                <section key={weekGroup.key} aria-label={`${mentorGroup.mentor_name} ${weekGroup.label}`}>
+                  <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+                    <h3 className={['rounded-full border px-2.5 py-1 font-semibold', weekGroup.tone || 'border-slate-200 bg-slate-50 text-slate-600'].join(' ')}>
+                      {weekGroup.label}
+                    </h3>
+                    {weekGroup.range ? <span className="text-slate-500">{weekGroup.range}</span> : null}
+                    <span className="text-slate-500">{weekGroup.items.length}건</span>
+                    <span className="h-px min-w-4 flex-1 bg-slate-200" aria-hidden="true" />
+                  </div>
+                  <div className="space-y-2">
+              {weekGroup.items.map((item) => {
                 const problems = Array.isArray(item.problem_items) ? item.problem_items : [];
                 const rowKey = assignmentRowKey(item);
                 const isEditing = canEditAssignment && editingKey === rowKey;
@@ -3143,6 +3156,9 @@ export default function AssignmentStatus() {
                   </div>
                 );
               })}
+                  </div>
+                </section>
+              ))}
             </div>
               </div>
             ))
