@@ -1628,16 +1628,16 @@ export default function mentoringRoutes(db) {
       : null;
     if (explicitWeek) {
       const offset = req.body.assignment_week_offset;
-      if (offset !== 0 && offset !== 1) return res.status(400).json({ error: '이번 주 또는 다음 주를 선택해 주세요.' });
+      if (![-1, 0, 1].includes(offset)) return res.status(400).json({ error: '지난 주, 이번 주 또는 다음 주를 선택해 주세요.' });
       const baseWeek = db.prepare('SELECT id, label, start_date, end_date FROM weeks WHERE id=?').get(Number(req.body.base_week_id) || 0);
       if (!baseWeek) return res.status(400).json({ error: '기준 회차를 찾을 수 없습니다.' });
       targetWeek = baseWeek;
-      if (offset === 1) {
+      if (offset !== 0) {
         const start = parseIsoDateValue(baseWeek.start_date);
         const end = parseIsoDateValue(baseWeek.end_date);
-        if (!start || !end) return res.status(400).json({ error: '다음 주 배정을 위해 기준 회차의 시작일과 종료일을 등록해 주세요.' });
-        start.setDate(start.getDate() + 7);
-        end.setDate(end.getDate() + 7);
+        if (!start || !end) return res.status(400).json({ error: '지난 주·다음 주 배정을 위해 기준 회차의 시작일과 종료일을 등록해 주세요.' });
+        start.setDate(start.getDate() + offset * 7);
+        end.setDate(end.getDate() + offset * 7);
         const iso = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
         const startDate = iso(start);
         const endDate = iso(end);
@@ -1645,11 +1645,11 @@ export default function mentoringRoutes(db) {
         if (!targetWeek) {
           targetWeek = db.transaction(() => {
             const round = String(baseWeek.label || '').match(/^(\d+)\s*(회차|주차)$/);
-            let label = round ? `${Number(round[1]) + 1}${round[2]}` : `다음 회차 (${startDate})`;
+            let label = round ? `${Number(round[1]) + offset}${round[2]}` : `${offset === -1 ? '지난' : '다음'} 회차 (${startDate})`;
             if (db.prepare('SELECT id FROM weeks WHERE label=?').get(label)) label += ` (${startDate})`;
             const created = db.prepare('INSERT INTO weeks (label, start_date, end_date) VALUES (?, ?, ?)').run(label, startDate, endDate);
             const id = Number(created.lastInsertRowid);
-            db.prepare(`INSERT INTO subject_records (student_id, week_id, subject_id, a_last_hw, updated_at)
+            if (offset === 1) db.prepare(`INSERT INTO subject_records (student_id, week_id, subject_id, a_last_hw, updated_at)
               SELECT student_id, ?, subject_id, a_this_hw, datetime('now') FROM subject_records
               WHERE week_id=? AND a_this_hw IS NOT NULL AND TRIM(a_this_hw) != ''
               ON CONFLICT(student_id, week_id, subject_id) DO NOTHING`).run(id, baseWeek.id);

@@ -1324,11 +1324,11 @@ export default function AssignmentStatus() {
     const start = parseDateOnly(selectedWeek?.start_date);
     const end = parseDateOnly(selectedWeek?.end_date);
     if (!start || !end) return null;
-    start.setDate(start.getDate() + 7);
-    end.setDate(end.getDate() + 7);
+    start.setDate(start.getDate() + offset * 7);
+    end.setDate(end.getDate() + offset * 7);
     const iso = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     return weeks.find(week => week.start_date <= iso(start) && week.end_date >= iso(start))
-      || { label: '다음 회차', start_date: iso(start), end_date: iso(end) };
+      || { label: offset === -1 ? '지난 회차' : '다음 회차', start_date: iso(start), end_date: iso(end) };
   }
 
   function changeEditWeek(offset) {
@@ -2985,17 +2985,17 @@ export default function AssignmentStatus() {
                         <div className="md:col-span-6">
                           <div className="text-[11px] text-slate-500">배정 주차 (현재 선택 회차 기준)</div>
                           <div className="mt-1 flex flex-wrap items-center gap-2">
-                            {[0, 1].map(offset => (
+                            {[-1, 0, 1].map(offset => (
                               <button key={offset} type="button" aria-pressed={(editForm.assignment_week_offset || 0) === offset}
-                                disabled={savingKey === rowKey || (offset === 1 && !editTargetWeek(1))}
+                                disabled={savingKey === rowKey || (offset !== 0 && !editTargetWeek(offset))}
                                 onClick={() => changeEditWeek(offset)}
                                 className={`rounded-lg border px-3 py-1.5 text-sm font-bold disabled:opacity-40 ${(editForm.assignment_week_offset || 0) === offset ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>
-                                {offset ? '다음 주' : '이번 주'}
+                                {offset === -1 ? '지난 주' : offset === 1 ? '다음 주' : '이번 주'}
                               </button>
                             ))}
                             <span className="text-xs text-slate-600">{fmtWeekLabel(editTargetWeek(editForm.assignment_week_offset || 0))}</span>
                           </div>
-                          {!editTargetWeek(1) ? <div className="mt-1 text-xs text-amber-700">다음 주 배정을 위해 회차의 시작일과 종료일을 등록해 주세요.</div> : null}
+                          {!editTargetWeek(1) ? <div className="mt-1 text-xs text-amber-700">지난 주·다음 주 배정을 위해 회차의 시작일과 종료일을 등록해 주세요.</div> : null}
                         </div>
                         <div className="md:col-span-3">
                           <div className="text-[11px] text-slate-500">멘토 이름</div>
@@ -3027,7 +3027,7 @@ export default function AssignmentStatus() {
                               </option>
                             ))}
                           </select>
-                          {editForm.mentor_name !== String(item.mentor_name || '').trim() || editForm.assignment_week_offset === 1 ? (
+                          {editForm.mentor_name !== String(item.mentor_name || '').trim() || Boolean(editForm.assignment_week_offset) ? (
                             <div className="mt-1 text-[11px] text-blue-700">저장하면 선택한 주차에 진행중 질답으로 재배정됩니다.</div>
                           ) : null}
                         </div>

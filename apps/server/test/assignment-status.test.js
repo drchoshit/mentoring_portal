@@ -307,3 +307,27 @@ test('briefing gallery supports arrows, swipes, question boundaries and focus re
   assert.equal(element('galleryPrev').disabled, true);
   assert.equal(element('galleryNext').disabled, true);
 });
+
+ test('previous week reuses the existing round and recalculates the assignment date', async t => {
+  const f = await fixture(t);
+  const response = await f.update({ base_week_id: 2, assignment_week_offset: -1 });
+  assert.equal(response.status, 200);
+  const saved = await response.json();
+  assert.equal(saved.target_week.id, 1);
+  assert.equal(saved.assignment.session_day, '8');
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM weeks').get().n, 2);
+});
+ test('previous week is created once across a year boundary', async t => {
+  const f = await fixture(t, { latestStart: '2027-01-04', latestEnd: '2027-01-10' });
+  const response = await f.update({ base_week_id: 2, assignment_week_offset: -1 });
+  assert.equal(response.status, 200);
+  const saved = await response.json();
+  assert.equal(saved.target_week.start_date, '2026-12-28');
+  assert.equal(saved.target_week.end_date, '2027-01-03');
+  assert.equal(saved.assignment.session_month, '12');
+  assert.equal(saved.assignment.session_day, '29');
+  const other = await f.update({ problem_index: 1, base_week_id: 2, assignment_week_offset: -1 });
+  assert.equal(other.status, 200);
+  assert.equal((await other.json()).target_week.id, saved.target_week.id);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM weeks').get().n, 3);
+});
