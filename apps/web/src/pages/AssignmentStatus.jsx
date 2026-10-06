@@ -1160,6 +1160,8 @@ export default function AssignmentStatus() {
   const [stateSavingKey, setStateSavingKey] = useState('');
   const [doneEditKey, setDoneEditKey] = useState('');
   const [completionFeedbackDraft, setCompletionFeedbackDraft] = useState('');
+  const [noteEditKey, setNoteEditKey] = useState('');
+  const [noteDraft, setNoteDraft] = useState('');
   const [briefingMentor, setBriefingMentor] = useState('');
   const [briefingPhone, setBriefingPhone] = useState('');
   const [briefingBusy, setBriefingBusy] = useState(false);
@@ -1211,6 +1213,7 @@ export default function AssignmentStatus() {
   const canDeleteAssignment = ['director', 'admin'].includes(String(viewer?.role || '').trim());
   const canEditAssignment = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
   const canUpdateState = ['director', 'lead', 'admin', 'mentor'].includes(String(viewer?.role || '').trim());
+  const canEditNote = ['director', 'admin'].includes(String(viewer?.role || '').trim());
   const canIssueBriefing = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
   const canUseQuickWrongAnswer = ['director', 'lead', 'admin'].includes(String(viewer?.role || '').trim());
 
@@ -1380,6 +1383,7 @@ export default function AssignmentStatus() {
     const rowKey = assignmentRowKey(item);
     if (!rowKey) return;
     setEditingKey('');
+    setNoteEditKey('');
     setDoneEditKey(rowKey);
     setCompletionFeedbackDraft(String(item?.completion_feedback || ''));
   }
@@ -1832,6 +1836,14 @@ export default function AssignmentStatus() {
       completion_feedback: feedback
     });
     if (ok) closeDoneEditor();
+  }
+
+  async function saveProblemNote(item) {
+    const ok = await updateProblemState(item, { action: 'edit-note', note: noteDraft });
+    if (ok) {
+      setNoteEditKey('');
+      setNoteDraft('');
+    }
   }
 
   async function deleteProblemItem(item) {
@@ -2943,7 +2955,7 @@ export default function AssignmentStatus() {
                             disabled={isStateSaving || savingKey === rowKey}
                             onClick={() => void markProblemDone(item)}
                           >
-                            완료
+                            {status === 'done' ? '피드백 수정' : '완료'}
                           </button>
                         ) : null}
                         {canEditAssignment ? (
@@ -3110,12 +3122,30 @@ export default function AssignmentStatus() {
                             return (
                               <div key={`${item.week_record_id}-${item.student_id}-problem-${idx}`} className="text-xs text-slate-700">
                                 <div>{idx + 1}. {formatProblemLine(problem)}</div>
-                                {String(problem?.note || '').trim() ? (
+                                {String(problem?.note || '').trim() || canEditNote ? (
                                   <div className="mt-1 rounded-md border border-sky-100 bg-sky-50/70 px-2 py-1.5">
-                                    <div className="text-[11px] font-medium text-sky-800">전달사항</div>
-                                    <div className="mt-0.5 whitespace-pre-wrap text-[11px] text-sky-900">
-                                      {String(problem.note || '').trim()}
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="text-[11px] font-medium text-sky-800">전달사항</div>
+                                      {canEditNote && noteEditKey !== rowKey ? (
+                                        <button type="button" className="btn-ghost h-7 px-2 text-xs" disabled={isStateSaving} onClick={() => {
+                                          closeDoneEditor();
+                                          setEditingKey('');
+                                          setNoteEditKey(rowKey);
+                                          setNoteDraft(String(problem.note || ''));
+                                        }}>수정</button>
+                                      ) : null}
                                     </div>
+                                    {canEditNote && noteEditKey === rowKey ? (
+                                      <>
+                                        <textarea aria-label="전달사항" rows={3} className="textarea mt-1" value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} disabled={isStateSaving} />
+                                        <div className="mt-2 flex justify-end gap-2">
+                                          <button type="button" className="btn-primary h-8 px-2.5 text-xs" disabled={isStateSaving} onClick={() => void saveProblemNote(item)}>{isStateSaving ? '저장 중...' : '저장'}</button>
+                                          <button type="button" className="btn-ghost h-8 px-2.5 text-xs" disabled={isStateSaving} onClick={() => { setNoteEditKey(''); setNoteDraft(''); }}>취소</button>
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <div className="mt-0.5 whitespace-pre-wrap text-[11px] text-sky-900">{String(problem.note || '').trim() || '등록된 전달사항이 없습니다.'}</div>
+                                    )}
                                   </div>
                                 ) : null}
                                 {images.length ? (

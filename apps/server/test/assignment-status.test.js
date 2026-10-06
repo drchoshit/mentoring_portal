@@ -49,6 +49,10 @@ async function fixture(t, { latestStart = '2026-09-14', latestEnd = '2026-09-20'
   const read = () => JSON.parse(db.prepare('SELECT e_wrong_answer_distribution FROM week_records WHERE id=1').get().e_wrong_answer_distribution);
   return {
     db, read,
+    updateState: (body, role = 'director') => fetch(`${base}/1/problem-state`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-test-role': role },
+      body: JSON.stringify({ problem_index: 0, ...body })
+    }),
     view: async () => (await fetch(`http://127.0.0.1:${server.address().port}/api/mentor-briefings/view?token=test`)).text(),
     briefing: async (weekId = 2, mentorName = '새멘토M') => {
       const briefingBase = `http://127.0.0.1:${server.address().port}/api/mentor-briefings`;
@@ -80,6 +84,51 @@ async function fixture(t, { latestStart = '2026-09-14', latestEnd = '2026-09-20'
       return (await response.json()).assignments;
     }
   };
+}
+
+function assertPreserved(actual, expected) {
+  if (expected && typeof expected === 'object') {
+    if (Array.isArray(expected)) assert.equal(actual.length, expected.length);
+    for (const key of Object.keys(expected)) assertPreserved(actual[key], expected[key]);
+  } else {
+    assert.deepEqual(actual, expected);
+  }
+}
+
+test('director can edit and clear notes without changing completion or other problem data', async (t) => {
+  const f = await fixture(t);
+  const original = f.read();
+  for (const note of ['수정한 전달사항\n다음 주 진행', '']) {
+    const response = await f.updateState({ action: 'edit-note', note });
+    assert.equal(response.status, 200);
+    const saved = f.read();
+    assertPreserved(saved.problems[0], { ...original.problems[0], note });
+    for (const key of ['completion_status', 'completion_feedback', 'images', 'assignment']) {
+      assertPreserved(saved.problems[0][key], original.problems[0][key]);
+    }
+    assertPreserved(saved.problems[1], original.problems[1]);
+    assert.equal((await f.list(1))[0].problem_items[0].note, note);
+  }
+});
+
+test('director can revise completion feedback', async (t) => {
+  const f = await fixture(t);
+  const original = f.read();
+  const response = await f.updateState({ completion_status: 'done', completion_feedback: '수정한 완료 피드백' });
+  assert.equal(response.status, 200);
+  assert.equal(f.read().problems[0].completion_feedback, '수정한 완료 피드백');
+  assert.equal(f.read().problems[0].note, original.problems[0].note);
+  assertPreserved(f.read().problems[1], original.problems[1]);
+});
+
+for (const role of ['lead', 'mentor', 'parent']) {
+  test(`${role} cannot edit director notes`, async (t) => {
+    const f = await fixture(t);
+    const original = f.read();
+    const response = await f.updateState({ action: 'edit-note', note: '권한 없음' }, role);
+    assert.equal(response.status, 403);
+    assert.deepEqual(f.read(), original);
+  });
 }
 
 for (const role of ['director', 'admin']) {

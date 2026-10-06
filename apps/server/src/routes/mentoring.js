@@ -1473,6 +1473,9 @@ export default function mentoringRoutes(db) {
       ? requestedProblemIndex
       : 0;
     const action = String(req.body?.action || '').trim().toLowerCase();
+    if (action === 'edit-note' && !['director', 'admin'].includes(req.user.role)) {
+      return res.status(403).json({ error: '원장 또는 관리자만 전달사항을 수정할 수 있습니다.' });
+    }
     if (action === 'delete' && !['director', 'admin'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Only director or admin can delete assignment items' });
     }
@@ -1514,6 +1517,11 @@ export default function mentoringRoutes(db) {
         status_updated_at: nowIso,
         status_updated_by: updaterName
       };
+    } else if (action === 'edit-note') {
+      if (typeof req.body?.note !== 'string') {
+        return res.status(400).json({ error: '전달사항을 입력해 주세요.' });
+      }
+      nextProblem = { ...currentProblem, note: req.body.note.replace(/\r\n/g, '\n').trim() };
     } else {
       const statusRaw = String(req.body?.completion_status || '').trim();
       const completionStatus = statusRaw === 'done' || statusRaw === 'incomplete' ? statusRaw : 'pending';
