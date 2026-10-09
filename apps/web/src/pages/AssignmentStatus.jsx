@@ -1804,7 +1804,7 @@ export default function AssignmentStatus() {
     setStateSavingKey(rowKey);
     setError('');
     try {
-      await api(`/api/mentoring/assignment-status/${encodeURIComponent(String(item.week_record_id))}/problem-state`, {
+      const saved = await api(`/api/mentoring/assignment-status/${encodeURIComponent(String(item.week_record_id))}/problem-state`, {
         method: 'PUT',
         body: {
           problem_index: Number(item.problem_index || 0),
@@ -1814,7 +1814,21 @@ export default function AssignmentStatus() {
           ...payload
         }
       });
-      await loadStatus(weekId);
+      // Render the persisted response directly so a failed follow-up GET cannot
+      // hide feedback that was successfully saved.
+      if (!saved?.ok) throw new Error('저장 결과를 확인하지 못했습니다. 다시 시도해 주세요.');
+      setRows((previous) => previous.flatMap((row) => {
+        if (assignmentRowKey(row) !== rowKey) return [row];
+        if (payload.action === 'delete') return [];
+        if (payload.action === 'edit-note') {
+          return [{ ...row, problem_items: (row.problem_items || []).map((problem) => ({
+            ...problem, note: String(payload.note || '').replace(/\r\n/g, '\n').trim()
+          })) }];
+        }
+        return [{ ...row, completion_status: saved.completion_status,
+          completion_feedback: saved.completion_feedback,
+          incomplete_reason: saved.incomplete_reason, deleted_at: saved.deleted_at }];
+      }));
       return true;
     } catch (e) {
       setError(e?.message || '상태 저장에 실패했습니다.');

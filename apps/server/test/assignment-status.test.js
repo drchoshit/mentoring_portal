@@ -121,6 +121,29 @@ test('director can revise completion feedback', async (t) => {
   assertPreserved(f.read().problems[1], original.problems[1]);
 });
 
+for (const role of ['lead', 'director', 'admin', 'mentor']) {
+  for (const problemIndex of [0, 1]) {
+    test(`${role} saves completion feedback on question ${problemIndex + 1} with existing notes`, async (t) => {
+      const f = await fixture(t);
+      const original = f.read();
+      const response = await f.updateState({
+        problem_index: problemIndex, acting_mentor_name: '기존멘토M',
+        completion_status: 'done', completion_feedback: '새 완료 코멘트\n이해도 확인'
+      }, role);
+      assert.equal(response.status, 200);
+      const result = await response.json();
+      assert.equal(result.completion_feedback, '새 완료 코멘트\n이해도 확인');
+      const saved = f.read();
+      assert.equal(saved.problems[problemIndex].completion_feedback, result.completion_feedback);
+      assert.equal(saved.problems[problemIndex].note, original.problems[problemIndex].note);
+      assertPreserved(saved.problems[1 - problemIndex], original.problems[1 - problemIndex]);
+      const listed = (await f.list(1)).find((row) => row.problem_index === problemIndex);
+      assert.equal(listed.completion_feedback, result.completion_feedback);
+      assert.equal(listed.problem_items[0].note, original.problems[problemIndex].note);
+    });
+  }
+}
+
 for (const role of ['lead', 'mentor', 'parent']) {
   test(`${role} cannot edit director notes`, async (t) => {
     const f = await fixture(t);
