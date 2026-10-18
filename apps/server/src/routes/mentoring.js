@@ -6,21 +6,6 @@ import { signWrongAnswerUploadToken } from '../lib/problemUploadToken.js';
 import { canEditScoreProfile, canViewScoreProfile, sanitizeStudentForRole } from '../lib/studentProfile.js';
 import { refreshMediWeeklyMentorInfo } from './mentorAssignments.js';
 
-function normalizeMentorIdentity(value) {
-  return String(value || '')
-    .trim()
-    .replace(/\(나\)$/u, '')
-    .replace(/\s+/g, '')
-    .toLowerCase()
-    .replace(/([가-힣])m$/u, '$1');
-}
-
-function isAssignedMentor(user, mentorName) {
-  const viewer = normalizeMentorIdentity(user?.display_name || user?.username || '');
-  const assigned = normalizeMentorIdentity(mentorName);
-  return Boolean(viewer && assigned && viewer === assigned);
-}
-
 function ensureWeekRecord(db, student_id, week_id) {
   const existing = db.prepare('SELECT id FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
   if (existing) return existing.id;
@@ -1492,17 +1477,13 @@ export default function mentoringRoutes(db) {
       problems[problemIndex],
       problemIndex === 0 ? dist.assignment : null
     );
-    const currentAssignment = normalizeWrongAnswerAssignment(
-      currentProblem.assignment || (problemIndex === 0 ? dist.assignment : null)
-    );
     const actorRole = String(req.user.role || '').trim();
     const canManageAll = actorRole === 'director' || actorRole === 'lead' || actorRole === 'admin';
-    const actingMentorName = String(req.body?.acting_mentor_name || '').trim();
-    const isSharedClinicAccountAction = actorRole === 'mentor'
-      && actingMentorName
-      && normalizeMentorIdentity(actingMentorName) === normalizeMentorIdentity(currentAssignment?.mentor_name);
-    if (!canManageAll && !isSharedClinicAccountAction) {
-      return res.status(403).json({ error: '배정된 클리닉 멘토 또는 운영 계정만 처리 상태를 수정할 수 있습니다.' });
+    // Clinic accounts may record feedback regardless of the assigned mentor name.
+    const actingMentorName = String(req.body?.acting_mentor_name || '').trim()
+      || String(req.user.display_name || req.user.username || actorRole).trim();
+    if (!canManageAll && actorRole !== 'mentor') {
+      return res.status(403).json({ error: '클리닉 멘토 또는 운영 계정만 처리 상태를 수정할 수 있습니다.' });
     }
     const nowIso = new Date().toISOString();
     const updaterRole = String(req.user.role || '').trim();

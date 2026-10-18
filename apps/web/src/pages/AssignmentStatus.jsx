@@ -1809,7 +1809,7 @@ export default function AssignmentStatus() {
         body: {
           problem_index: Number(item.problem_index || 0),
           acting_mentor_name: String(viewer?.role || '').trim() === 'mentor'
-            ? String(selectedClinicMentor || item?.mentor_name || '').trim()
+            ? String(item?.mentor_name || selectedClinicMentor || '').trim()
             : '',
           ...payload
         }
@@ -3088,6 +3088,7 @@ export default function AssignmentStatus() {
                           onChange={(e) => setCompletionFeedbackDraft(e.target.value)}
                           placeholder="예: 핵심 개념은 이해했고, 같은 유형 1문제는 스스로 해결 가능하다고 확인했습니다."
                           disabled={isStateSaving}
+                          maxLength={1000}
                         />
                         <div className="mt-2 flex justify-end gap-2">
                           <button
@@ -3096,7 +3097,7 @@ export default function AssignmentStatus() {
                             disabled={isStateSaving}
                             onClick={() => void saveProblemDone(item)}
                           >
-                            저장
+                            {isStateSaving ? '저장 중...' : '저장'}
                           </button>
                           <button
                             type="button"
@@ -3107,6 +3108,7 @@ export default function AssignmentStatus() {
                             취소
                           </button>
                         </div>
+                        {error ? <div role="alert" className="mt-2 text-xs text-red-700">{error}</div> : null}
                       </div>
                     ) : status === 'done' && completionFeedback ? (
                       <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-2.5 py-2">

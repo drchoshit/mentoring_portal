@@ -7,7 +7,7 @@ import express from 'express';
 import Database from 'better-sqlite3';
 import mentoringRoutes from '../src/routes/mentoring.js';
 import mentorBriefingsRoutes from '../src/routes/mentorBriefings.js';
-import { signToken } from '../src/lib/auth.js';
+import { requireAuth, signToken } from '../src/lib/auth.js';
 
 async function fixture(t, { latestStart = '2026-09-14', latestEnd = '2026-09-20' } = {}) {
   const db = new Database(':memory:');
@@ -33,8 +33,9 @@ async function fixture(t, { latestStart = '2026-09-14', latestEnd = '2026-09-20'
     .run(JSON.stringify({ assignment, problems: [problem, { ...problem, problem_name: '23' }] }));
   const app = express();
   app.use(express.json());
+  app.use('/authenticated/mentoring', requireAuth(db), mentoringRoutes(db));
   app.use((req, _res, next) => {
-    req.user = { id: 1, role: req.headers['x-test-role'] || 'director', display_name: '원장' };
+    req.user = { id: 1, role: req.headers['x-test-role'] || 'director', display_name: db.prepare('SELECT display_name FROM users WHERE id=1').get().display_name || '원장' };
     next();
   });
   app.use('/api/mentoring', mentoringRoutes(db));
@@ -49,6 +50,14 @@ async function fixture(t, { latestStart = '2026-09-14', latestEnd = '2026-09-20'
   const read = () => JSON.parse(db.prepare('SELECT e_wrong_answer_distribution FROM week_records WHERE id=1').get().e_wrong_answer_distribution);
   return {
     db, read,
+    authenticatedUpdateState: async (body, role) => {
+      db.prepare('UPDATE users SET role=?, display_name=? WHERE id=1').run(role, '클리닉 공용 계정');
+      return fetch(`http://127.0.0.1:${server.address().port}/authenticated/mentoring/assignment-status/1/problem-state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${signToken({ id: 1, role })}` },
+        body: JSON.stringify(body)
+      });
+    },
     updateState: (body, role = 'director') => fetch(`${base}/1/problem-state`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-test-role': role },
       body: JSON.stringify({ problem_index: 0, ...body })
@@ -110,6 +119,51 @@ test('director can edit and clear notes without changing completion or other pro
     assert.equal((await f.list(1))[0].problem_items[0].note, note);
   }
 });
+
+for (const role of ['mentor', 'lead', 'director', 'admin']) {
+  test(`${role} saves feedback through real authentication and persists it after reload`, async t => {
+    const f = await fixture(t);
+    for (const problemIndex of [0, 1]) {
+      const response = await f.authenticatedUpdateState({
+        problem_index: problemIndex,
+        acting_mentor_name: '기존멘토M',
+        completion_status: 'done',
+        completion_feedback: `${role} 완료 피드백 ${problemIndex}`
+      }, role);
+      assert.equal(response.status, 200, await response.text());
+      const saved = (await f.list(1)).find(row => row.problem_index === problemIndex);
+      assert.equal(saved.completion_status, 'done');
+      assert.equal(saved.completion_feedback, `${role} 완료 피드백 ${problemIndex}`);
+    }
+  });
+}
+
+test('assigned mentor can save feedback using login identity without a selected mentor name', async (t) => {
+  const f = await fixture(t);
+  f.db.prepare("UPDATE users SET display_name=? WHERE id=1").run('기존멘토M');
+  const response = await f.updateState({ completion_status: 'done', completion_feedback: '본인 피드백' }, 'mentor');
+  assert.equal(response.status, 200);
+  assert.equal(f.read().problems[0].completion_feedback, '본인 피드백');
+  assert.equal(f.read().problems[0].status_updated_by, '기존멘토M');
+});
+
+for (const actingMentorName of ['', '다른 멘토']) {
+  test(`clinic account saves feedback with unmatched or missing name: ${actingMentorName}`, async t => {
+    const f = await fixture(t);
+    const original = f.read();
+    for (const problemIndex of [0, 1]) {
+      const response = await f.authenticatedUpdateState({
+        problem_index: problemIndex, acting_mentor_name: actingMentorName,
+        completion_status: 'done', completion_feedback: '클리닉 완료 피드백'
+      }, 'mentor');
+      assert.equal(response.status, 200);
+      const saved = (await f.list(1)).find(row => row.problem_index === problemIndex);
+      assert.equal(saved.completion_feedback, '클리닉 완료 피드백');
+      assert.equal(f.read().problems[problemIndex].status_updated_by, actingMentorName || '클리닉 공용 계정');
+      assertPreserved(f.read().problems[problemIndex].assignment, original.problems[problemIndex].assignment);
+    }
+  });
+}
 
 test('director can revise completion feedback', async (t) => {
   const f = await fixture(t);
