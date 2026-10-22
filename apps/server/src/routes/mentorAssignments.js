@@ -67,7 +67,9 @@ function loadAssignments(db) {
   const row = db.prepare('SELECT value_json FROM app_settings WHERE key=?').get('mentor_assignments');
   if (!row?.value_json) return null;
   try {
-    return JSON.parse(row.value_json);
+    const source = JSON.parse(row.value_json);
+    const overrides = db.prepare('SELECT value_json FROM app_settings WHERE key=?').get('lead_mentor_overrides');
+    return { ...source, lead_mentor_overrides: safeJson(overrides?.value_json, {}) };
   } catch {
     return null;
   }
@@ -273,6 +275,10 @@ function periodMatchesWeek(value, weekStart, weekEnd) {
 }
 
 function assignmentsForWeek(source, week, todayDate) {
+  const applyOverrides = (rows) => rows.map((row) => {
+    const mentor = source?.lead_mentor_overrides?.[String(week.id)]?.[String(row.student_id)];
+    return mentor ? { ...row, lead_mentor: mentor } : row;
+  });
   const start = String(week?.start_date || '').slice(0, 10);
   const end = String(week?.end_date || '').slice(0, 10);
   const byPeriod = source?.assignments_by_period && typeof source.assignments_by_period === 'object'
@@ -280,13 +286,13 @@ function assignmentsForWeek(source, week, todayDate) {
     : {};
   for (const [periodId, assignments] of Object.entries(byPeriod)) {
     if (periodMatchesWeek(periodId, start, end) && Array.isArray(assignments) && assignments.length) {
-      return assignments;
+      return applyOverrides(assignments);
     }
   }
   if (periodMatchesWeek(source?.periodId, start, end) && Array.isArray(source?.assignments)) {
-    return source.assignments;
+    return applyOverrides(source.assignments);
   }
-  if (todayDate >= start && todayDate <= end && Array.isArray(source?.assignments)) return source.assignments;
+  if (todayDate >= start && todayDate <= end && Array.isArray(source?.assignments)) return applyOverrides(source.assignments);
   return [];
 }
 
@@ -1555,7 +1561,33 @@ export default function mentorAssignmentsRoutes(db) {
     return res.json({ data: stored, missing });
   });
 
-  router.get('/lead-board', requireRole('director', 'admin', 'lead'), (req, res) => {
+  router.put('/lead-board/mentor', requireRole('director', 'admin'), (req, res) => {
+    const weekId = parsePositiveInt(req.body?.week_id);
+    const studentId = parsePositiveInt(req.body?.student_id);
+    const mentorName = String(req.body?.mentor_name || '').trim();
+    const week = db.prepare('SELECT * FROM weeks WHERE id=?').get(weekId);
+    if (!week) return res.status(404).json({ error: '회차를 찾지 못했습니다.' });
+    const source = loadAssignments(db) || {};
+    if (!assignmentsForWeek(source, week, koreanDateParts().date).some((row) => Number(row.student_id) === studentId)) {
+      return res.status(404).json({ error: '선택한 회차의 기본 배정 학생을 찾지 못했습니다.' });
+    }
+    if (!(loadMentorInfoSetting(db).mentors || []).some((mentor) => mentor.role === 'lead' && mentor.name === mentorName)) {
+      return res.status(400).json({ error: '등록된 총괄멘토를 선택해 주세요.' });
+    }
+    const overrides = source.lead_mentor_overrides || {};
+    overrides[weekId] = { ...(overrides[weekId] || {}), [studentId]: mentorName };
+    db.transaction(() => {
+      db.prepare(`INSERT INTO app_settings (key, value_json, updated_at) VALUES (?, ?, datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at`)
+        .run('lead_mentor_overrides', JSON.stringify(overrides));
+      writeAudit(db, { user_id: req.user.id, action: 'update', entity: 'lead_mentor_assignment',
+        details: { week_id: weekId, student_id: studentId, mentor_name: mentorName } });
+    })();
+    return res.json({ ok: true });
+  });
+
+  router.get('/lead-board', requireRole('director', 'admin', 'lead'), async (req, res) => {
+    await syncLiveSources(db);
     const weekId = resolveWeekId(db, req.query.weekId || req.query.week_id);
     if (!weekId) return res.status(404).json({ error: 'Week not found' });
 
@@ -1618,6 +1650,13 @@ export default function mentorAssignmentsRoutes(db) {
         student_name: student.name || ''
       };
     });
+    ensureLeadMentoringReassignmentTable(db);
+    const reassignments = db.prepare('SELECT * FROM lead_mentoring_reassignments WHERE week_id=? ORDER BY created_at').all(weekId)
+      .map((item) => {
+        const student = studentMap.get(Number(item.student_id)) || {};
+        const date = weekDateEntries(boardWeek).find((entry) => entry.date === item.target_assignment_date);
+        return { ...item, target_day_label: date?.day_label || '', external_id: student.external_id || '', student_name: student.name || '' };
+      });
     const mentorInfo = loadMentorInfoSetting(db);
     const leadMentorNameSet = new Set();
     for (const mentor of mentorInfo.mentors || []) {
@@ -1625,7 +1664,7 @@ export default function mentorAssignmentsRoutes(db) {
       const name = String(mentor?.name || '').trim();
       if (name) leadMentorNameSet.add(name);
     }
-    for (const item of forcedAssignments) {
+    for (const item of [...forcedAssignments, ...reassignments]) {
       const name = String(item?.target_mentor_name || '').trim();
       if (name) leadMentorNameSet.add(name);
     }
@@ -1652,7 +1691,8 @@ export default function mentorAssignmentsRoutes(db) {
       ),
       assignments,
       missing_marks: missingMarks,
-      forced_assignments: forcedAssignments
+      forced_assignments: forcedAssignments,
+      reassignments
     });
   });
 

@@ -186,7 +186,7 @@ function buildMentoringTimeline(boardRows, mentorDetails, studentSchedules, miss
           attendance_label: rangesLabel(attendance),
           eligible,
           fixed_index: fixedIndex,
-          missing: !entry.forced && missingMap.has(buildMissingKey(entry.student_id, mentorName, day))
+          missing: !entry.forced && !entry.reassigned && missingMap.has(buildMissingKey(entry.student_id, mentorName, day))
         };
       });
 
@@ -248,6 +248,10 @@ export default function LeadAssignmentBoard() {
   const [assignments, setAssignments] = useState([]);
   const [missingMarks, setMissingMarks] = useState([]);
   const [forcedAssignments, setForcedAssignments] = useState([]);
+  const [reassignments, setReassignments] = useState([]);
+  const [mentorDrafts, setMentorDrafts] = useState({});
+  const [studentQuery, setStudentQuery] = useState('');
+  const [notice, setNotice] = useState('');
   const [formByMissingId, setFormByMissingId] = useState({});
   const [busy, setBusy] = useState(false);
   const [savingKey, setSavingKey] = useState('');
@@ -263,6 +267,9 @@ export default function LeadAssignmentBoard() {
   }
 
   async function loadBoard(targetWeekId) {
+    setNotice('');
+    setMentorDrafts({});
+    setReassignments([]);
     if (!targetWeekId) {
       setLeadMentorRoster([]);
       setLeadMentorDetails([]);
@@ -286,6 +293,8 @@ export default function LeadAssignmentBoard() {
       setAssignments(Array.isArray(board?.assignments) ? board.assignments : []);
       setMissingMarks(Array.isArray(board?.missing_marks) ? board.missing_marks : []);
       setForcedAssignments(Array.isArray(board?.forced_assignments) ? board.forced_assignments : []);
+      setReassignments(Array.isArray(board?.reassignments) ? board.reassignments : []);
+      return true;
     } catch (e) {
       setError(e?.message || '총괄멘토 배정표를 불러오지 못했습니다.');
       setLeadMentorRoster([]);
@@ -294,6 +303,7 @@ export default function LeadAssignmentBoard() {
       setAssignments([]);
       setMissingMarks([]);
       setForcedAssignments([]);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -399,13 +409,18 @@ export default function LeadAssignmentBoard() {
       }
     }
 
-    for (const item of forcedAssignments || []) {
+    for (const item of [...(forcedAssignments || []), ...reassignments]) {
       const mentorName = String(item?.target_mentor_name || '').trim() || (leadMentorSet.size ? unassignedLeadName : unknownLeadName);
       const target = ensureRow(mentorName);
       if (!target) continue;
       const day = normalizeDayLabel(item?.target_day_label) || '';
       const studentId = Number(item?.student_id || 0);
       const baseStudent = studentMap.get(studentId) || {};
+      const existing = target.by_day[day].find((entry) => entry.student_id === studentId);
+      if (existing) {
+        if (reassignments.includes(item)) existing.reassigned = true;
+        continue;
+      }
       target.by_day[day].push({
         student_id: studentId,
         external_id: String(item?.external_id || baseStudent.external_id || '').trim(),
@@ -413,6 +428,7 @@ export default function LeadAssignmentBoard() {
         mentor_name: mentorName,
         day_label: day,
         forced: true,
+        reassigned: reassignments.includes(item),
         target_time: String(item?.target_time || '').trim()
       });
     }
@@ -437,7 +453,26 @@ export default function LeadAssignmentBoard() {
         if (b.mentor_name === unassignedLeadName && a.mentor_name !== unassignedLeadName) return 1;
         return String(a.mentor_name || '').localeCompare(String(b.mentor_name || ''));
       });
-  }, [leadMentorRoster, leadMentorSet, leadMentorOrder, assignments, forcedAssignments, studentMap]);
+  }, [leadMentorRoster, leadMentorSet, leadMentorOrder, assignments, forcedAssignments, reassignments, studentMap]);
+
+  async function changeMentor(student) {
+    const mentorName = mentorDrafts[student.student_id];
+    if (!mentorName || savingKey) return;
+    setSavingKey(`mentor-${student.student_id}`);
+    setError('');
+    setNotice('');
+    try {
+      await api('/api/mentor-assignments/lead-board/mentor', { method: 'PUT', body: {
+        week_id: Number(weekId), student_id: student.student_id, mentor_name: mentorName
+      } });
+      const refreshed = await loadBoard(weekId);
+      setNotice(refreshed
+        ? `${student.name || student.external_id} 학생의 기본 담당 총괄멘토를 변경했습니다.`
+        : '담당 변경은 저장됐습니다. 목록을 불러오지 못했으니 새로고침해 주세요.');
+    } catch (err) {
+      setError(err?.message || '총괄멘토 변경에 실패했습니다.');
+    } finally { setSavingKey(''); }
+  }
 
   const mentorNames = useMemo(() => {
     const set = new Set();
@@ -558,6 +593,7 @@ export default function LeadAssignmentBoard() {
           <div className="flex items-center gap-2">
             <select
               className="input select-input w-44"
+              disabled={busy || Boolean(savingKey)}
               value={weekId}
               onChange={(e) => {
                 const next = String(e.target.value || '');
@@ -577,7 +613,27 @@ export default function LeadAssignmentBoard() {
           {selectedWeekObj ? `기준 회차: ${toRoundLabel(selectedWeekObj.label)}` : '회차를 선택해 주세요.'}
         </div>
         {error ? <div className="mt-2 text-sm text-rose-600">{error}</div> : null}
+        {notice ? <div role="status" className="mt-2 text-sm text-emerald-700">{notice}</div> : null}
       </div>
+
+      {canEdit ? <section className="card p-5">
+        <h2 className="font-black text-slate-900">멘티별 담당 총괄멘토 변경</h2>
+        <p className="mt-1 text-sm text-slate-600">선택한 회차의 기본 담당을 변경합니다. 요일은 유지되며, 기존 진행 기록과 개별 재배정 내역은 보존됩니다.</p>
+        <input className="input mt-3" type="search" aria-label="담당 변경할 멘티 검색" placeholder="이름 또는 아이디 검색" value={studentQuery} onChange={(event) => setStudentQuery(event.target.value)} />
+        <div className="mt-3 max-h-96 space-y-2 overflow-auto">
+          {Array.from(new Map(assignments.map((student) => [student.student_id, student])).values())
+            .filter((student) => `${student.name} ${student.external_id}`.toLocaleLowerCase().includes(studentQuery.trim().toLocaleLowerCase()))
+            .map((student) => <div key={student.student_id} className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 p-3">
+              <div className="min-w-40 flex-1"><b>{student.name}</b> <span className="text-xs text-slate-500">{student.external_id}</span><div className="text-xs text-slate-500">현재 담당: {student.lead_mentor || '미배정'} · {(student.scheduledDays || []).join(', ')}</div></div>
+              <select className="input w-auto" aria-label={`${student.name} 담당 총괄멘토`} disabled={busy || Boolean(savingKey)} value={mentorDrafts[student.student_id] || student.lead_mentor || ''} onChange={(event) => setMentorDrafts((prev) => ({ ...prev, [student.student_id]: event.target.value }))}>
+                <option value={student.lead_mentor || ''}>{student.lead_mentor || '총괄멘토 선택'}</option>
+                {leadMentorRoster.filter((name) => name !== student.lead_mentor).map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+              <button className="btn-primary" type="button" disabled={busy || Boolean(savingKey) || !mentorDrafts[student.student_id] || mentorDrafts[student.student_id] === student.lead_mentor} onClick={() => changeMentor(student)}>변경 저장</button>
+            </div>)}
+          {!assignments.length ? <p className="text-sm text-slate-500">선택한 회차에 기본 배정된 멘티가 없습니다.</p> : null}
+        </div>
+      </section> : null}
 
       <section className="card overflow-hidden border border-blue-100 bg-gradient-to-br from-white via-blue-50/30 to-emerald-50/35 shadow-[0_22px_55px_-38px_rgba(37,99,235,0.5)]">
         <div className="border-b border-blue-100/80 bg-white/85 px-5 py-4">
@@ -627,7 +683,7 @@ export default function LeadAssignmentBoard() {
                               <span className={slot.student ? 'font-bold text-blue-700' : 'font-semibold'}>{minutesToTime(slot.start)}~{minutesToTime(slot.end)}</span>
                               <span>
                                 {slot.student ? (
-                                  <><b className="text-slate-900">{slot.student.student_name || slot.student.external_id || '학생'}</b>{slot.student.attendance_label ? <span className="ml-1 text-[11px] text-slate-500">({slot.student.attendance_label})</span> : null}</>
+                                  <><b className="text-slate-900">{slot.student.student_name || slot.student.external_id || '학생'}</b>{slot.student.reassigned ? <span className="ml-1 text-violet-600">재배정</span> : null}{slot.student.attendance_label ? <span className="ml-1 text-[11px] text-slate-500">({slot.student.attendance_label})</span> : null}</>
                                 ) : '빈 슬롯'}
                               </span>
                             </div>
