@@ -250,6 +250,7 @@ export default function LeadAssignmentBoard() {
   const [forcedAssignments, setForcedAssignments] = useState([]);
   const [reassignments, setReassignments] = useState([]);
   const [mentorDrafts, setMentorDrafts] = useState({});
+  const [dayDrafts, setDayDrafts] = useState({});
   const [studentQuery, setStudentQuery] = useState('');
   const [notice, setNotice] = useState('');
   const [formByMissingId, setFormByMissingId] = useState({});
@@ -456,14 +457,14 @@ export default function LeadAssignmentBoard() {
   }, [leadMentorRoster, leadMentorSet, leadMentorOrder, assignments, forcedAssignments, reassignments, studentMap]);
 
   async function changeMentor(student) {
-    const mentorName = mentorDrafts[student.student_id];
+    const mentorName = mentorDrafts[student.student_id] || student.lead_mentor;
     if (!mentorName || savingKey) return;
     setSavingKey(`mentor-${student.student_id}`);
     setError('');
     setNotice('');
     try {
       await api('/api/mentor-assignments/lead-board/mentor', { method: 'PUT', body: {
-        week_id: Number(weekId), student_id: student.student_id, mentor_name: mentorName
+        week_id: Number(weekId), student_id: student.student_id, mentor_name: mentorName, scheduledDays: dayDrafts[student.student_id] || student.scheduledDays
       } });
       const refreshed = await loadBoard(weekId);
       setNotice(refreshed
@@ -597,6 +598,8 @@ export default function LeadAssignmentBoard() {
               value={weekId}
               onChange={(e) => {
                 const next = String(e.target.value || '');
+                setMentorDrafts({});
+                setDayDrafts({});
                 setWeekId(next);
                 setQueryParams({ week: next });
                 void loadBoard(next);
@@ -618,7 +621,7 @@ export default function LeadAssignmentBoard() {
 
       {canEdit ? <section className="card p-5">
         <h2 className="font-black text-slate-900">멘티별 담당 총괄멘토 변경</h2>
-        <p className="mt-1 text-sm text-slate-600">선택한 회차의 기본 담당을 변경합니다. 요일은 유지되며, 기존 진행 기록과 개별 재배정 내역은 보존됩니다.</p>
+        <p className="mt-1 text-sm text-slate-600">선택한 회차의 담당 멘토와 요일을 변경합니다. 기존 진행 기록과 개별 재배정 내역은 보존됩니다.</p>
         <input className="input mt-3" type="search" aria-label="담당 변경할 멘티 검색" placeholder="이름 또는 아이디 검색" value={studentQuery} onChange={(event) => setStudentQuery(event.target.value)} />
         <div className="mt-3 max-h-96 space-y-2 overflow-auto">
           {Array.from(new Map(assignments.map((student) => [student.student_id, student])).values())
@@ -629,7 +632,11 @@ export default function LeadAssignmentBoard() {
                 <option value={student.lead_mentor || ''}>{student.lead_mentor || '총괄멘토 선택'}</option>
                 {leadMentorRoster.filter((name) => name !== student.lead_mentor).map((name) => <option key={name} value={name}>{name}</option>)}
               </select>
-              <button className="btn-primary" type="button" disabled={busy || Boolean(savingKey) || !mentorDrafts[student.student_id] || mentorDrafts[student.student_id] === student.lead_mentor} onClick={() => changeMentor(student)}>변경 저장</button>
+              <div className="flex flex-wrap gap-2">{DAY_COLUMNS.map((day) => {
+                const selected = dayDrafts[student.student_id] || student.scheduledDays || [];
+                return <label key={day} className="text-sm"><input type="checkbox" disabled={busy || Boolean(savingKey)} checked={selected.includes(day)} onChange={(event) => setDayDrafts((prev) => ({ ...prev, [student.student_id]: event.target.checked ? [...selected, day] : selected.filter((value) => value !== day) }))} /> {day}</label>;
+              })}</div>
+              <button className="btn-primary" type="button" disabled={busy || Boolean(savingKey) || !(dayDrafts[student.student_id] || student.scheduledDays || []).length || (!dayDrafts[student.student_id] && (!mentorDrafts[student.student_id] || mentorDrafts[student.student_id] === student.lead_mentor))} onClick={() => changeMentor(student)}>변경 저장</button>
             </div>)}
           {!assignments.length ? <p className="text-sm text-slate-500">선택한 회차에 기본 배정된 멘티가 없습니다.</p> : null}
         </div>

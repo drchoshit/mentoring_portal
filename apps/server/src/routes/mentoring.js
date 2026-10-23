@@ -4,7 +4,7 @@ import { canEditField, filterObjectByView } from '../lib/permissions.js';
 import { writeAudit } from '../lib/audit.js';
 import { signWrongAnswerUploadToken } from '../lib/problemUploadToken.js';
 import { canEditScoreProfile, canViewScoreProfile, sanitizeStudentForRole } from '../lib/studentProfile.js';
-import { refreshMediWeeklyMentorInfo } from './mentorAssignments.js';
+import { refreshMediWeeklyMentorInfo, resolveLeadSubmission } from './mentorAssignments.js';
 
 function ensureWeekRecord(db, student_id, week_id) {
   const existing = db.prepare('SELECT id FROM week_records WHERE student_id=? AND week_id=?').get(student_id, week_id);
@@ -2161,7 +2161,7 @@ export default function mentoringRoutes(db) {
       timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short'
     }).formatToParts(new Date());
     const datePart = (type) => dateParts.find((item) => item.type === type)?.value || '';
-    const assignmentDate = `${datePart('year')}-${datePart('month')}-${datePart('day')}`;
+    let assignmentDate = `${datePart('year')}-${datePart('month')}-${datePart('day')}`;
     const assignmentDay = ({ Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금', Sat: '토', Sun: '일' })[datePart('weekday')] || '';
     let mentorName = String(req.user.display_name || req.user.username || '').trim();
     try {
@@ -2177,6 +2177,12 @@ export default function mentoringRoutes(db) {
       );
       mentorName = String(forced?.target_mentor_name || matched?.lead_mentor || matched?.leadMentor || mentorName).trim() || mentorName;
     } catch {}
+    const resolvedAssignment = resolveLeadSubmission(db, week_id, student_id,
+      String(req.body?.assignment_date || assignmentDate), String(req.user.display_name || req.user.username || ''));
+    if (resolvedAssignment) {
+      assignmentDate = resolvedAssignment.assignment_date;
+      mentorName = resolvedAssignment.mentor_name;
+    }
     db.prepare(`
       INSERT INTO lead_mentoring_status
         (assignment_date, student_id, week_id, mentor_name, status, reason, updated_by, updated_at)

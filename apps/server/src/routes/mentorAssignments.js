@@ -277,7 +277,9 @@ function periodMatchesWeek(value, weekStart, weekEnd) {
 function assignmentsForWeek(source, week, todayDate) {
   const applyOverrides = (rows) => rows.map((row) => {
     const mentor = source?.lead_mentor_overrides?.[String(week.id)]?.[String(row.student_id)];
-    return mentor ? { ...row, lead_mentor: mentor } : row;
+    return mentor ? { ...row, ...(typeof mentor === 'string'
+      ? { lead_mentor: mentor }
+      : { lead_mentor: mentor.mentor_name, scheduledDays: mentor.scheduledDays ?? row.scheduledDays }) } : row;
   });
   const start = String(week?.start_date || '').slice(0, 10);
   const end = String(week?.end_date || '').slice(0, 10);
@@ -419,7 +421,39 @@ function buildLeadRowsForDay(db, { week, assignmentDate, dayLabel, currentDate, 
     FROM lead_mentoring_status WHERE assignment_date=? AND week_id=?
   `).all(assignmentDate, week.id);
   const statusMap = new Map(statuses.map((item) => [`${item.student_id}:${item.mentor_name}`, item]));
-  return rows.map((row) => ({ ...row, status: statusMap.get(`${row.student_id}:${row.mentor_name}`) || null }));
+  return rows.map((row) => {
+    let status = statusMap.get(`${row.student_id}:${row.mentor_name}`) || null;
+    // Older submissions used the submission date instead of the assignment date.
+    // Only associate these records when the scheduled occurrence is unambiguous.
+    if (!status && !row.forced && !row.reassigned) {
+      const dates = weekDateEntries(week).filter((entry) => weekAssignments.some((raw) =>
+        Number(raw.student_id) === row.student_id
+        && firstNonEmptyText(raw.lead_mentor, raw.leadMentor, raw.mentor) === row.mentor_name
+        && normalizeDays(raw.scheduledDays).map(normalizeDayLabel).includes(entry.day_label)));
+      if (dates.length === 1) {
+        status = db.prepare(`SELECT * FROM lead_mentoring_status
+          WHERE week_id=? AND student_id=? AND mentor_name=?
+          ORDER BY updated_at DESC, id DESC LIMIT 1`).get(week.id, row.student_id, row.mentor_name) || null;
+      }
+    }
+    return { ...row, status };
+  });
+}
+
+export function resolveLeadSubmission(db, weekId, studentId, requestedDate, mentorName) {
+  ensureLeadMentoringStatusTable(db);
+  const week = db.prepare('SELECT * FROM weeks WHERE id=?').get(Number(weekId));
+  const student = db.prepare('SELECT * FROM students WHERE id=?').get(Number(studentId));
+  if (!week || !student) return null;
+  const source = loadAssignments(db) || {};
+  const rows = weekDateEntries(week).flatMap((entry) => buildLeadRowsForDay(db, {
+    week, assignmentDate: entry.date, dayLabel: entry.day_label, currentDate: koreanDateParts().date,
+    source, students: new Map([[Number(studentId), student]]), questionCounts: new Map()
+  }).map((row) => ({ ...row, assignment_date: entry.date })));
+  const own = rows.filter((row) => mentorNameKey(row.mentor_name) === mentorNameKey(mentorName));
+  const candidates = own.length ? own : rows;
+  return candidates.find((row) => row.assignment_date === requestedDate)
+    || (candidates.length === 1 ? candidates[0] : null);
 }
 
 function mentorNameKey(value) {
@@ -1134,7 +1168,15 @@ export default function mentorAssignmentsRoutes(db) {
     const uniqueAssignmentKeys = new Set();
     for (const row of weekRows) {
       const assignmentKey = `${row.student_id}:${mentorNameKey(row.mentor_name)}`;
-      if (uniqueAssignmentKeys.has(assignmentKey)) continue;
+      if (uniqueAssignmentKeys.has(assignmentKey)) {
+        const index = uniqueWeekRows.findIndex((item) =>
+          `${item.student_id}:${mentorNameKey(item.mentor_name)}` === assignmentKey);
+        const previous = uniqueWeekRows[index];
+        if (row.status && (!previous.status || String(row.status.updated_at) > String(previous.status.updated_at))) {
+          uniqueWeekRows[index] = row;
+        }
+        continue;
+      }
       uniqueAssignmentKeys.add(assignmentKey);
       uniqueWeekRows.push(row);
     }
@@ -1367,7 +1409,7 @@ export default function mentorAssignmentsRoutes(db) {
     return res.json({ ok: true, status, reason: status === 'missed' ? reason : '' });
   });
 
-  router.post('/lead-today/missed', requireRole('admin', 'lead'), (req, res) => {
+  router.post('/lead-today/missed', requireRole('director', 'admin', 'lead'), (req, res) => {
     ensureLeadMentoringStatusTable(db);
     const studentId = parsePositiveInt(req.body?.student_id);
     const weekId = parsePositiveInt(req.body?.week_id);
@@ -1387,7 +1429,7 @@ export default function mentorAssignmentsRoutes(db) {
     return res.json({ ok: true });
   });
 
-  router.post('/lead-today/completed', requireRole('admin', 'lead'), (req, res) => {
+  router.post('/lead-today/completed', requireRole('director', 'admin', 'lead'), (req, res) => {
     ensureLeadMentoringStatusTable(db);
     const studentId = parsePositiveInt(req.body?.student_id);
     const weekId = parsePositiveInt(req.body?.week_id);
@@ -1575,13 +1617,21 @@ export default function mentorAssignmentsRoutes(db) {
       return res.status(400).json({ error: '등록된 총괄멘토를 선택해 주세요.' });
     }
     const overrides = source.lead_mentor_overrides || {};
-    overrides[weekId] = { ...(overrides[weekId] || {}), [studentId]: mentorName };
+    const days = req.body?.scheduledDays;
+    if (days !== undefined && (!Array.isArray(days) || !days.length || days.some((day) => !DAY_LABELS.includes(day)))) {
+      return res.status(400).json({ error: '배정 요일을 하나 이상 선택해 주세요.' });
+    }
+    const previous = overrides[weekId]?.[studentId];
+    overrides[weekId] = { ...(overrides[weekId] || {}), [studentId]: {
+      mentor_name: mentorName,
+      scheduledDays: days ? [...new Set(days)] : (typeof previous === 'object' ? previous?.scheduledDays : undefined)
+    } };
     db.transaction(() => {
       db.prepare(`INSERT INTO app_settings (key, value_json, updated_at) VALUES (?, ?, datetime('now'))
         ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at`)
         .run('lead_mentor_overrides', JSON.stringify(overrides));
       writeAudit(db, { user_id: req.user.id, action: 'update', entity: 'lead_mentor_assignment',
-        details: { week_id: weekId, student_id: studentId, mentor_name: mentorName } });
+        details: { week_id: weekId, student_id: studentId, mentor_name: mentorName, scheduledDays: days, previous_override: previous } });
     })();
     return res.json({ ok: true });
   });

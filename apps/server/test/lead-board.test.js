@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { once } from 'node:events';
 import express from 'express';
 import Database from 'better-sqlite3';
-import routes from '../src/routes/mentorAssignments.js';
+import routes, { resolveLeadSubmission } from '../src/routes/mentorAssignments.js';
 import { requireAuth, signToken } from '../src/lib/auth.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -63,7 +63,9 @@ for (const account of [{ username: 'staff1', role: 'admin' }, { username: 'admin
     const source = { assignments_by_period: { '2026-10-19~2026-10-25': [row], '2026-10-26~2026-11-01': [row] } };
     const setting = (key, value) => db.prepare('INSERT OR REPLACE INTO app_settings (key, value_json) VALUES (?, ?)').run(key, JSON.stringify(value));
     setting('mentor_assignments', source);
-    setting('mentor_info', { mentors: ['기존M', '변경M'].map((name) => ({ name, role: 'lead' })) });
+    setting('mentor_info', { mentors: ['기존M', '변경M'].map((name) => ({
+      name, role: 'lead', schedule: { Thu: [{ time: '18:00~19:00' }] }
+    })) });
     const token = signToken({ id: 1, ...account });
     const app = express();
     app.use(express.json());
@@ -92,6 +94,21 @@ for (const account of [{ username: 'staff1', role: 'admin' }, { username: 'admin
     setting('mentor_assignments', source);
     assert.equal((await request('/lead-board?weekId=1')).assignments[0].lead_mentor, '변경M');
     assert.equal((await request('/lead-board?weekId=2')).assignments[0].lead_mentor, '기존M');
+    // Next week can be edited independently, even outside the mentor's workdays.
+    await request('/lead-board/mentor', 'PUT', {
+      week_id: 2, student_id: 1, mentor_name: '변경M', scheduledDays: ['화']
+    });
+    setting('mentor_assignments', source);
+    db.close();
+    db = new Database(filename);
+    const nextWeekBoard = (await request('/lead-board?weekId=2')).assignments[0];
+    assert.equal(nextWeekBoard.lead_mentor, '변경M');
+    assert.deepEqual(nextWeekBoard.scheduledDays, ['화']);
+    const nextWeekStatus = (await request('/lead-week-status?weekId=2')).assignments;
+    assert.equal(nextWeekStatus.length, 1);
+    assert.equal(nextWeekStatus[0].assignment_date, '2026-10-27');
+    assert.equal(nextWeekStatus[0].mentor_name, '변경M');
+    assert.deepEqual((await request('/lead-board?weekId=1')).assignments[0].scheduledDays, ['목']);
     const weekly = await request('/lead-week-status?weekId=1');
     assert.equal(weekly.assignments[0].mentor_name, '변경M');
     assert.equal((await request('/lead-today?weekId=1')).assignments[0].mentor_name, '변경M');
@@ -110,5 +127,36 @@ for (const account of [{ username: 'staff1', role: 'admin' }, { username: 'admin
     const completed = await request('/lead-week-status?weekId=1');
     assert.equal(completed.days.find((day) => day.date === '2026-10-23').assignments[0].status.status, 'completed');
     assert.equal(completed.days.find((day) => day.date === '2026-10-22').assignments[0].status.status, 'missed');
+  });
+}
+
+for (const role of ['admin', 'director']) {
+  test(role + ': day override survives sync and preserves historical status', async (t) => {
+    const db = new Database(':memory:');
+    db.exec(readFileSync(new URL('../src/lib/schema.sql', import.meta.url), 'utf8'));
+    db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (1, 'user', 'unused', ?)").run(role);
+    db.exec("INSERT INTO students (id, name) VALUES (1, 'Student'); INSERT INTO weeks (id,label,start_date,end_date) VALUES (1,'Week','2026-10-19','2026-10-25'); CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT)");
+    const setting = (key,value) => db.prepare('INSERT OR REPLACE INTO app_settings (key,value_json) VALUES (?,?)').run(key,JSON.stringify(value));
+    const source={periodId:'2026-10-19~2026-10-25',assignments:[{student_id:1,lead_mentor:'Old',scheduledDays:['목']}]};
+    setting('mentor_assignments',source);
+    setting('mentor_info',{mentors:[{name:'Old',role:'lead'},{name:'New',role:'lead'}]});
+    const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={id:1,role};next();});app.use('/api',routes(db));
+    const server=app.listen(0,'127.0.0.1');await once(server,'listening');
+    t.after(async()=>{await new Promise(resolve=>server.close(resolve));db.close();});
+    const request=async(url,method='GET',body)=>{const r=await fetch('http://127.0.0.1:'+server.address().port+'/api'+url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});assert.equal(r.status,200,await r.clone().text());return r.json();};
+    await request('/lead-today/status','PUT',{week_id:1,student_id:1,mentor_name:'Old',assignment_date:'2026-10-23',status:'completed'});
+    assert.equal((await request('/lead-week-status?weekId=1')).assignments[0].status.status,'completed');
+    assert.equal(resolveLeadSubmission(db,1,1,'2026-10-23','Old').assignment_date,'2026-10-22');
+    const history=db.prepare('SELECT * FROM lead_mentoring_status').all();
+    await request('/lead-board/mentor','PUT',{week_id:1,student_id:1,mentor_name:'New',scheduledDays:['화']});
+    setting('mentor_assignments',source);
+    const rows=(await request('/lead-week-status?weekId=1')).assignments;
+    assert.equal(rows.length,1);assert.equal(rows[0].assignment_date,'2026-10-20');assert.equal(rows[0].mentor_name,'New');
+    assert.deepEqual(db.prepare('SELECT * FROM lead_mentoring_status').all(),history);
+    assert.equal(resolveLeadSubmission(db,1,1,'2026-10-23','New').assignment_date,'2026-10-20');
+    await request('/lead-today/completed','POST',{week_id:1,student_id:1,mentor_name:'New',assignment_date:'2026-10-20'});
+    assert.equal((await request('/lead-week-status?weekId=1')).assignments[0].status.status,'completed');
+    assert.equal((await request('/lead-today?weekId=1')).assignments[0].status.status,'completed');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM lead_mentoring_status').get().n,2);
   });
 }

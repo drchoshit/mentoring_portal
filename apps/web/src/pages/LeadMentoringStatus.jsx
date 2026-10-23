@@ -178,9 +178,9 @@ export default function LeadMentoringStatus() {
     }));
   }
 
-  async function saveStatus(row) {
+  async function saveStatus(row, selectedStatus) {
     const key = rowKey(row);
-    const draft = statusDrafts[key] || { status: String(row?.status?.status || 'pending'), reason: String(row?.status?.reason || '') };
+    const draft = { ...(statusDrafts[key] || { status: String(row?.status?.status || 'pending'), reason: String(row?.status?.reason || '') }), ...(selectedStatus ? { status: selectedStatus } : {}) };
     if (draft.status === 'missed' && !String(draft.reason || '').trim()) {
       setError('미진행 상태는 사유를 입력해야 저장할 수 있습니다.');
       return;
@@ -278,9 +278,9 @@ export default function LeadMentoringStatus() {
                     <div><div className="font-black text-slate-900">{row.student_name} <span className="text-xs font-medium text-slate-400">{row.external_id}</span></div><div className="mt-1 text-xs text-slate-500">담당 {row.mentor_name}{row.reassigned ? ' · 재배정' : ''} · 질문 {Number(row.question_count || 0)}개</div></div>
                     {status === 'missed' && row.status?.reason ? <div className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{row.status.reason}</div> : null}
                     <div className="mt-3 grid gap-2 sm:grid-cols-[auto_1fr_auto]">
-                      <LeadStatusButtons value={statusDraft.status} onChange={(value) => patchStatusDraft(row, { status: value })} />
+                      <LeadStatusButtons value={statusDraft.status} onChange={(value) => { if (savingStatusKey) return; patchStatusDraft(row, { status: value }); if (value !== 'missed') void saveStatus(row, value); }} />
                       {statusDraft.status === 'missed' ? <input className="input" value={statusDraft.reason} onChange={(event) => patchStatusDraft(row, { reason: event.target.value })} placeholder="미진행 사유" /> : <div />}
-                      <button className="inline-flex items-center justify-center gap-1.5 self-start rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={savingStatusKey === key} onClick={() => saveStatus(row)}>
+                      <button className="inline-flex items-center justify-center gap-1.5 self-start rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={Boolean(savingStatusKey)} onClick={() => saveStatus(row)}>
                         <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" /><path d="M17 21v-8H7v8M7 3v5h8" /></svg>
                         {savingStatusKey === key ? '저장 중...' : '저장'}
                       </button>
