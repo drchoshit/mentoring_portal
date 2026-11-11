@@ -6,6 +6,7 @@ import { requireRole } from '../lib/auth.js';
 import { writeAudit } from '../lib/audit.js';
 import { dbFilePath } from '../lib/db.js';
 import { mergeProfileForRole, sanitizeStudentForRole } from '../lib/studentProfile.js';
+import { assertStudentDeletionAllowed } from '../lib/studentDeletion.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -393,6 +394,7 @@ export default function studentRoutes(db) {
 
     try {
       const tx = db.transaction(() => {
+        assertStudentDeletionAllowed(db, id);
         // 1) 연결/로그인 발급 테이블들 정리
         if (tableExists(db, 'parent_links')) {
           db.prepare('DELETE FROM parent_links WHERE student_id=?').run(id);
@@ -433,20 +435,23 @@ export default function studentRoutes(db) {
 
         // 4) 마지막에 학생 삭제
         db.prepare('DELETE FROM students WHERE id=?').run(id);
+        writeAudit(db, {
+          user_id: req.user.id,
+          action: 'delete',
+          entity: 'student',
+          entity_id: id,
+          details: { name: existing.name, external_id: existing.external_id,
+            source: req.user.username === 'student-sync' ? 'student-sync' : 'user' }
+        });
       });
 
-      tx();
-
-      writeAudit(db, {
-        user_id: req.user.id,
-        action: 'delete',
-        entity: 'student',
-        entity_id: id,
-        details: { name: existing.name, external_id: existing.external_id }
-      });
+      tx.immediate();
 
       return res.json({ ok: true });
     } catch (e) {
+      if (e.code === 'STUDENT_HAS_LEARNING_RECORDS') {
+        return res.status(409).json({ error: e.message, code: e.code, preserved: true });
+      }
       console.error('Delete student failed:', e);
       return res.status(500).json({ error: e?.message || 'Delete failed' });
     }

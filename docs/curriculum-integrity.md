@@ -6,6 +6,8 @@ Updates to `a_curriculum` require `expected_curriculum`, containing the original
 
 The browser serializes saves per record, advances its comparison base after successful saves, saves only the blurred field, and refreshes clean fields without discarding dirty drafts. Curriculum changes and their audit records commit together. Database triggers retain before/after values in `curriculum_history`, including when a source row is deleted. This history has no cascading foreign keys and is not pruned by rotating SQLite backup retention.
 
+Student deletion, including requests authenticated by the student synchronization key, returns HTTP 409 (`STUDENT_HAS_LEARNING_RECORDS`) when learning records or preserved curriculum history exist. The student and all related records remain unchanged. Roster imports with `deleteMissing` likewise retain those students and report them in `protectedMissing` and `preservedMissing`. Re-importing the same external student code updates the existing student instead of creating a disconnected identity. Only students without learning records can be deleted; their deletion and audit entry commit together.
+
 ## Read-only diagnosis
 
 Authenticated directors and administrators may call:

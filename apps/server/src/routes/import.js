@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import { requireRole } from '../lib/auth.js';
 import { writeAudit } from '../lib/audit.js';
+import { studentHasLearningRecords } from '../lib/studentDeletion.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -54,6 +55,7 @@ function deleteStudentCascade(db, studentId) {
   if (!id) return;
 
   const tx = db.transaction(() => {
+    if (studentHasLearningRecords(db, id)) return false;
     if (tableExists(db, 'parent_links')) {
       db.prepare('DELETE FROM parent_links WHERE student_id=?').run(id);
     }
@@ -87,9 +89,10 @@ function deleteStudentCascade(db, studentId) {
     }
 
     db.prepare('DELETE FROM students WHERE id=?').run(id);
+    return true;
   });
 
-  tx();
+  return tx.immediate();
 }
 
 const KO_TO_EN_DAY = {
@@ -509,6 +512,7 @@ export default function importRoutes(db) {
     let updated = 0;
     let deleted = 0;
     let preservedMissing = 0;
+    let protectedMissing = 0;
     const incomingIds = new Set();
     const deleteMissing = ['1', 'true', 'yes', 'on'].includes(
       String(req.query.deleteMissing ?? req.query.delete_missing ?? req.body?.deleteMissing ?? req.body?.delete_missing ?? '')
@@ -543,8 +547,12 @@ export default function importRoutes(db) {
       for (const r of rows) {
         const ext = String(r.external_id || '').trim();
         if (!ext || incomingIds.has(ext)) continue;
-        deleteStudentCascade(db, r.id);
-        deleted += 1;
+        if (deleteStudentCascade(db, r.id)) {
+          deleted += 1;
+        } else {
+          preservedMissing += 1;
+          protectedMissing += 1;
+        }
       }
     } else if (incomingIds.size) {
       const rows = db.prepare('SELECT external_id FROM students WHERE external_id IS NOT NULL AND external_id != ?').all('');
@@ -558,10 +566,10 @@ export default function importRoutes(db) {
       user_id: req.user.id,
       action: 'import',
       entity: 'students',
-      details: { created, updated, deleted, preservedMissing, deleteMissing }
+      details: { created, updated, deleted, preservedMissing, protectedMissing, deleteMissing }
     });
 
-    return res.json({ created, updated, deleted, preservedMissing, deleteMissing });
+    return res.json({ created, updated, deleted, preservedMissing, protectedMissing, deleteMissing });
   });
 
   // 기존: 벌점 import
